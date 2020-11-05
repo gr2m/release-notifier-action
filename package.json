@@ -1,0 +1,47 @@
+{
+  "name": "release-notifier-action",
+  "private": true,
+  "version": "1.0.0",
+  "description": "GitHub Action to notify repositories about the repository's releases using a GitHub App",
+  "main": "index.js",
+  "scripts": {
+    "build": "ncc build index.js -o dist",
+    "test": "tap --100 test/*/test.js"
+  },
+  "repository": "https://github.com/gr2m/release-notifier-action",
+  "keywords": [
+    "github-action"
+  ],
+  "author": "Gregor Martynus (https://twitter.com/gr2m)",
+  "license": "MIT",
+  "dependencies": {
+    "@actions/core": "^1.2.6",
+    "@octokit/app": "^10.0.0-beta.1"
+  },
+  "release": {
+    "branches": [
+      "main"
+    ],
+    "plugins": [
+      "@semantic-release/commit-analyzer",
+      "@semantic-release/release-notes-generator",
+      [
+        "@semantic-release/git",
+        {
+          "assets": [
+            "dist/index.js"
+          ],
+          "message": "build(release): compiled action for ${nextRelease.version}\n\n[skip ci]"
+        }
+      ],
+      "@semantic-release/github"
+    ]
+  },
+  "devDependencies": {
+    "@semantic-release/git": "^9.0.0",
+    "@vercel/ncc": "^0.25.0",
+    "nock": "^13.0.4",
+    "semantic-release": "^17.2.2",
+    "tap": "^14.10.8"
+  }
+}
