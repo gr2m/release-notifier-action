@@ -1,5 +1,3 @@
-# WORK IN PROGRESS [#1](https://github.com/gr2m/release-notifier-action/settings/secrets/pull/1)
-
 # release-notifier-action
 
 > GitHub Action to notify repositories about the repository's releases using a GitHub App
