@@ -1,14 +1,25 @@
 on: [push]
 name: Test
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-node@v1
+      - run: npm ci
+      - run: npm test
   readmeExample:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-node@v1
+      - run: npm ci
+      - run: npm run build
       - uses: ./
         with:
-          appId: $${{ secrets.APP_ID }}
-          privateKey: $${{ secrets.APP_PRIVATE_KEY }}
-          dispatchEventType: release-notifier-release
+          app_id: ${{ secrets.APP_ID }}
+          private_key: ${{ secrets.APP_PRIVATE_KEY }}
+          dispatch_event_type: release-notifier-release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TEST_GITHUB_EVENT_PATH: ${{ github.workspace }}/test/new-release/event.json
       - run: "echo latest release: ${{ steps.get_latest_release.outputs.data }}"
