@@ -1,0 +1,14 @@
+on: [push]
+name: Test
+jobs:
+  readmeExample:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./
+        with:
+          appId: $${{ secrets.APP_ID }}
+          privateKey: $${{ secrets.APP_PRIVATE_KEY }}
+          dispatchEventType: release-notifier-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: "echo latest release: ${{ steps.get_latest_release.outputs.data }}"
