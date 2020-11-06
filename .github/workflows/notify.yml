@@ -1,7 +1,8 @@
 name: Notify
 on:
   release:
-    - published
+    types:
+      - published
 
 jobs:
   notify:
