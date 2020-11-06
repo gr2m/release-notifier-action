@@ -26,6 +26,26 @@ Once you are done, generate & download a private key. In your repository, create
 
 ```yml
 name: Notify
+on:
+  release:
+    types:
+      - published
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: gr2m/release-notifier-action@v1
+        with:
+          app_id: ${{ secrets.APP_ID }}
+          private_key: ${{ secrets.APP_PRIVATE_KEY }}
+          dispatch_event_type: my-project-release
+```
+
+If you want to notify users for all [release activity types](https://docs.github.com/en/free-pro-team@latest/actions/reference/events-that-trigger-workflows#release), you can do
+
+```yml
+name: Notify
 on: release
 
 jobs:
