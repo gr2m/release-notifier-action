@@ -1,0 +1,18 @@
+name: GitHub Release Notifier
+description: "Notify repositories about releases using a GitHub App"
+branding:
+  icon: "rss"
+  color: purple
+inputs:
+  app_id:
+    description: "Your GitHub App's App ID"
+    required: true
+  private_key:
+    description: "Your GitHub Private Key"
+    required: true
+  dispatch_event_type:
+    description: "The name of the repository dispatch event, see https://git.io/JTpRo"
+    required: true
+runs:
+  using: "node12"
+  main: "dist/index.js"
