@@ -1,11 +1,10 @@
 name: Echo
-on:
-  repository_dispatch:
-    types: [release-notifier-release]
+on: repository_dispatch
 
 jobs:
   published:
     runs-on: ubuntu-latest
     if: github.event.client_payload.action == 'published'
     steps:
-      - run: "echo: 'new release: ${{ github.event.release.tag_name }}'"
+      - run: "echo: 'event type: ${{ github.event.action }}'"
+      - run: "echo: 'new release: ${{ github.event.client_payload.release.tag_name }}'"
