@@ -1,5 +1,7 @@
 name: Notify
-on: release
+on:
+  release:
+    - published
 
 jobs:
   notify:
