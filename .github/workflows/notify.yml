@@ -1,4 +1,4 @@
-Name: Notify
+name: Notify
 on: release
 
 jobs:

@@ -25,7 +25,7 @@ Once you are done, generate & download a private key. In your repository, create
 ## Usage
 
 ```yml
-Name: Notify
+name: Notify
 on: release
 
 jobs:
