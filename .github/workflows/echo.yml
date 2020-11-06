@@ -1,4 +1,4 @@
-name: Update OpenAPI
+name: Echo
 on:
   repository_dispatch:
     types: [release-notifier-release]
