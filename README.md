@@ -34,11 +34,9 @@ jobs:
     steps:
       - uses: gr2m/release-notifier-action@v1
         with:
-          appId: $${{ secrets.APP_ID }}
-          privateKey: $${{ secrets.APP_PRIVATE_KEY }}
-          dispatchEventType: my-project-release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          app_id: ${{ secrets.APP_ID }}
+          private_key: ${{ secrets.APP_PRIVATE_KEY }}
+          dispatch_event_type: my-project-release
 ```
 
 ## How it works
