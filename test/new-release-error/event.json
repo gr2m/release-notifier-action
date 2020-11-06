@@ -1,6 +1,6 @@
 {
   "action": "published",
   "release": {
-    "ok": true
+    "tag_name": "1.0.0"
   }
 }
