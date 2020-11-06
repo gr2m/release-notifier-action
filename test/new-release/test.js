@@ -82,17 +82,17 @@ nock("https://api.github.com:443")
   ])
   .post("/repos/gr2m/release-notifier-action/dispatches", {
     event_type: "test-release",
-    client_payload: { action: "published", release: { ok: true } },
+    client_payload: { action: "published", release: { tag_name: "1.0.0" } },
   })
   .reply(204)
   .post("/repos/gr2m/release-notifier-action-private/dispatches", {
     event_type: "test-release",
-    client_payload: { action: "published", release: { ok: true } },
+    client_payload: { action: "published", release: { tag_name: "1.0.0" } },
   })
   .reply(204)
   .post("/repos/gr2m/release-notifier-action-error/dispatches", {
     event_type: "test-release",
-    client_payload: { action: "published", release: { ok: true } },
+    client_payload: { action: "published", release: { tag_name: "1.0.0" } },
   })
   .reply(500);
 
