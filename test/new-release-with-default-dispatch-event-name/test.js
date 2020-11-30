@@ -1,3 +1,7 @@
+/**
+ * This test checks the happy path of pull request adding a new *.tweet file
+ */
+
 const tap = require("tap");
 const nock = require("nock");
 
@@ -36,7 +40,6 @@ ZcJjRIt8w8g/s4X6MhKasBYm9s3owALzCuJjGzUKcDHiO2DKu1xXAb0SzRcTzUCn
 9/49J6WTD++EajN7FhktUSYxukdWaCocAQJTDNYP0K88G4rtC2IYy5JFn9SWz5oh
 x//0u+zd/R/QRUzLOw4N72/Hu+UG6MNt5iDZFCtapRaKt6OvSBwy8w==
 -----END RSA PRIVATE KEY-----`;
-process.env.INPUT_DISPATCH_EVENT_TYPE = "test-release";
 
 // set other env variables so action-toolkit is happy
 process.env.GITHUB_REF = "";
@@ -63,36 +66,12 @@ nock("https://api.github.com:443")
       html_url: "https://github.com/gr2m/release-notifier-action",
       private: false,
     },
-    {
-      owner: { login: "gr2m" },
-      name: "release-notifier-action-private",
-      html_url: "https://github.com/gr2m/release-notifier-action-private",
-      private: true,
-    },
-    {
-      owner: { login: "gr2m" },
-      name: "release-notifier-action-error",
-      html_url: "https://github.com/gr2m/release-notifier-action-error",
-      private: false,
-    },
   ])
   .post("/repos/gr2m/release-notifier-action/dispatches", {
-    event_type: "test-release",
+    event_type: "gr2m/release-notifier-action release",
     client_payload: { action: "published", release: { tag_name: "1.0.0" } },
   })
-  .reply(204)
-  .post("/repos/gr2m/release-notifier-action-private/dispatches", {
-    event_type: "test-release",
-    client_payload: { action: "published", release: { tag_name: "1.0.0" } },
-  })
-  .reply(204)
-  .post("/repos/gr2m/release-notifier-action-error/dispatches", {
-    event_type: "test-release",
-    client_payload: { action: "published", release: { tag_name: "1.0.0" } },
-  })
-  .reply(500);
-
-console.log("Note: 1 Dispatch error is expected");
+  .reply(204);
 
 require("../../");
 
