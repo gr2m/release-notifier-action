@@ -19,7 +19,6 @@ jobs:
         with:
           app_id: ${{ secrets.APP_ID }}
           private_key: ${{ secrets.APP_PRIVATE_KEY }}
-          dispatch_event_type: release-notifier-release-test
         env:
           TEST_GITHUB_EVENT_PATH: ${{ github.workspace }}/test/new-release/event.json
       - run: "echo latest release: ${{ steps.get_latest_release.outputs.data }}"

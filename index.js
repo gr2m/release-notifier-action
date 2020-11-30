@@ -14,7 +14,9 @@ async function main() {
       appId: +core.getInput("app_id"),
       privateKey: core.getInput("private_key"),
     });
-    const eventType = core.getInput("dispatch_event_type");
+    const eventType =
+      core.getInput("dispatch_event_type") ||
+      `${process.env.GITHUB_REPOSITORY.toLowerCase()} release`;
 
     await app.eachRepository(async ({ octokit, repository }) => {
       const owner = repository.owner.login;

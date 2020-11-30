@@ -11,8 +11,8 @@ inputs:
     description: "Your GitHub Private Key"
     required: true
   dispatch_event_type:
-    description: "The name of the repository dispatch event, see https://git.io/JTpRo"
-    required: true
+    description: "The name of the repository dispatch event, see https://git.io/JTpRo. Defaults to '[owner]/[repo] release', e.g. 'gr2m/release-notifier-action release'"
+    required: false
 runs:
   using: "node12"
   main: "dist/index.js"

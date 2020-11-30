@@ -10,6 +10,7 @@ nock.disableNetConnect();
 // SETUP
 process.env.GITHUB_ACTION = "twitter-together";
 process.env.GITHUB_EVENT_PATH = require.resolve("./event.json");
+process.env.GITHUB_REPOSITORY = "gr2m/Release-Notifier-Action";
 
 process.env.INPUT_APP_ID = 1;
 process.env.INPUT_PRIVATE_KEY = `-----BEGIN RSA PRIVATE KEY-----
@@ -46,7 +47,6 @@ process.env.GITHUB_REF = "";
 process.env.GITHUB_WORKSPACE = "";
 process.env.GITHUB_WORKFLOW = "";
 process.env.GITHUB_ACTOR = "";
-process.env.GITHUB_REPOSITORY = "";
 process.env.GITHUB_SHA = "";
 
 nock("https://api.github.com:443").get("/app/installations").reply(500);
