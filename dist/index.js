@@ -21,7 +21,9 @@ async function main() {
       appId: +core.getInput("app_id"),
       privateKey: core.getInput("private_key"),
     });
-    const eventType = core.getInput("dispatch_event_type");
+    const eventType =
+      core.getInput("dispatch_event_type") ||
+      `${process.env.GITHUB_REPOSITORY.toLowerCase()} release`;
 
     await app.eachRepository(async ({ octokit, repository }) => {
       const owner = repository.owner.login;
@@ -640,7 +642,7 @@ function _objectSpread2(target) {
   return target;
 }
 
-const VERSION = "10.0.0-beta.1";
+const VERSION = "10.0.0";
 
 function webhooks(appOctokit, options) {
   return new webhooks$1.Webhooks({
