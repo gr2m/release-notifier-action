@@ -25,13 +25,18 @@ async function main() {
       core.getInput("dispatch_event_type") ||
       `${process.env.GITHUB_REPOSITORY.toLowerCase()} release`;
 
+    core.info(`ℹ️  Repository dispatch event type: "${eventType}"`);
+    core.debug(
+      `ℹ️  event client payload: ${inspect(eventPayload, { depth: Infinity })}`
+    );
+
     await app.eachRepository(async ({ octokit, repository }) => {
       const owner = repository.owner.login;
-      if (repository.private) {
-        core.debug(`ℹ️  Dispatching event for ${owner}/[private repository]`);
-      } else {
-        core.debug(`ℹ️  Dispatching event for ${repository.html_url} ...`);
-      }
+      const repoUrl = repository.private
+        ? `${owner}/[private]`
+        : repository.html_url;
+
+      core.debug(`ℹ️  Dispatching event for ${repoUrl} (id: ${repository.id})`);
       try {
         await octokit.request("POST /repos/{owner}/{repo}/dispatches", {
           owner,
@@ -39,8 +44,9 @@ async function main() {
           event_type: eventType,
           client_payload: eventPayload,
         });
+
         core.info(
-          `✅  Event dispatched successfully for ${repository.html_url}`
+          `✅  Event dispatched successfully for ${repoUrl} (id: ${repository.id})`
         );
       } catch (error) {
         core.warning(
