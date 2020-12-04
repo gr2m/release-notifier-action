@@ -648,7 +648,7 @@ function _objectSpread2(target) {
   return target;
 }
 
-const VERSION = "10.0.0";
+const VERSION = "10.0.2";
 
 function webhooks(appOctokit, options) {
   return new webhooks$1.Webhooks({
@@ -915,7 +915,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
 
 var universalUserAgent = __webpack_require__(5030);
-var request = __webpack_require__(6234);
+var request = __webpack_require__(7052);
 var deprecation = __webpack_require__(8932);
 var universalGithubAppJwt = __webpack_require__(4419);
 var LRU = _interopDefault(__webpack_require__(7129));
@@ -1165,7 +1165,7 @@ async function getInstallationAuthentication(state, options, customRequest) {
       // @ts-ignore
       single_file: singleFileName
     }
-  } = await request("POST /app/installations/:installation_id/access_tokens", {
+  } = await request("POST /app/installations/{installation_id}/access_tokens", {
     installation_id: installationId,
     repository_ids: options.repositoryIds,
     permissions: options.permissions,
@@ -1249,17 +1249,17 @@ async function auth(state, options) {
   return getOAuthAuthentication(state, options);
 }
 
-const PATHS = ["/app", "/app/installations", "/app/installations/:installation_id", "/app/installations/:installation_id/access_tokens", "/marketplace_listing/accounts/:account_id", "/marketplace_listing/plan", "/marketplace_listing/plans/:plan_id/accounts", "/marketplace_listing/stubbed/accounts/:account_id", "/marketplace_listing/stubbed/plan", "/marketplace_listing/stubbed/plans/:plan_id/accounts", "/orgs/:org/installation", "/repos/:owner/:repo/installation", "/users/:username/installation"]; // CREDIT: Simon Grondin (https://github.com/SGrondin)
+const PATHS = ["/app", "/app/installations", "/app/installations/{installation_id}", "/app/installations/{installation_id}/access_tokens", "/marketplace_listing/accounts/{account_id}", "/marketplace_listing/plan", "/marketplace_listing/plans/{plan_id}/accounts", "/marketplace_listing/stubbed/accounts/{account_id}", "/marketplace_listing/stubbed/plan", "/marketplace_listing/stubbed/plans/{plan_id}/accounts", "/orgs/{org}/installation", "/repos/{owner}/{repo}/installation", "/users/{username}/installation"]; // CREDIT: Simon Grondin (https://github.com/SGrondin)
 // https://github.com/octokit/plugin-throttling.js/blob/45c5d7f13b8af448a9dbca468d9c9150a73b3948/lib/route-matcher.js
 
 function routeMatcher(paths) {
   // EXAMPLE. For the following paths:
 
   /* [
-      "/orgs/:org/invitations",
-      "/repos/:owner/:repo/collaborators/:username"
+      "/orgs/{org}/invitations",
+      "/repos/{owner}/{repo}/collaborators/{username}"
   ] */
-  const regexes = paths.map(p => p.split("/").map(c => c.startsWith(":") ? "(?:.+?)" : c).join("/")); // 'regexes' would contain:
+  const regexes = paths.map(p => p.split("/").map(c => c.startsWith("{") ? "(?:.+?)" : c).join("/")); // 'regexes' would contain:
 
   /* [
       '/orgs/(?:.+?)/invitations',
@@ -1369,7 +1369,7 @@ async function sendRequestWithRetries(state, request, options, createdAt, retrie
   }
 }
 
-const VERSION = "2.10.1";
+const VERSION = "2.10.4";
 
 const createAppAuth = function createAppAuth(options) {
   const log = Object.assign({
@@ -1400,6 +1400,162 @@ const createAppAuth = function createAppAuth(options) {
 };
 
 exports.createAppAuth = createAppAuth;
+//# sourceMappingURL=index.js.map
+
+
+/***/ }),
+
+/***/ 7052:
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+
+function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
+
+var endpoint = __webpack_require__(9440);
+var universalUserAgent = __webpack_require__(5030);
+var isPlainObject = __webpack_require__(3287);
+var nodeFetch = _interopDefault(__webpack_require__(467));
+var requestError = __webpack_require__(537);
+
+const VERSION = "5.4.12";
+
+function getBufferResponse(response) {
+  return response.arrayBuffer();
+}
+
+function fetchWrapper(requestOptions) {
+  if (isPlainObject.isPlainObject(requestOptions.body) || Array.isArray(requestOptions.body)) {
+    requestOptions.body = JSON.stringify(requestOptions.body);
+  }
+
+  let headers = {};
+  let status;
+  let url;
+  const fetch = requestOptions.request && requestOptions.request.fetch || nodeFetch;
+  return fetch(requestOptions.url, Object.assign({
+    method: requestOptions.method,
+    body: requestOptions.body,
+    headers: requestOptions.headers,
+    redirect: requestOptions.redirect
+  }, requestOptions.request)).then(response => {
+    url = response.url;
+    status = response.status;
+
+    for (const keyAndValue of response.headers) {
+      headers[keyAndValue[0]] = keyAndValue[1];
+    }
+
+    if (status === 204 || status === 205) {
+      return;
+    } // GitHub API returns 200 for HEAD requests
+
+
+    if (requestOptions.method === "HEAD") {
+      if (status < 400) {
+        return;
+      }
+
+      throw new requestError.RequestError(response.statusText, status, {
+        headers,
+        request: requestOptions
+      });
+    }
+
+    if (status === 304) {
+      throw new requestError.RequestError("Not modified", status, {
+        headers,
+        request: requestOptions
+      });
+    }
+
+    if (status >= 400) {
+      return response.text().then(message => {
+        const error = new requestError.RequestError(message, status, {
+          headers,
+          request: requestOptions
+        });
+
+        try {
+          let responseBody = JSON.parse(error.message);
+          Object.assign(error, responseBody);
+          let errors = responseBody.errors; // Assumption `errors` would always be in Array format
+
+          error.message = error.message + ": " + errors.map(JSON.stringify).join(", ");
+        } catch (e) {// ignore, see octokit/rest.js#684
+        }
+
+        throw error;
+      });
+    }
+
+    const contentType = response.headers.get("content-type");
+
+    if (/application\/json/.test(contentType)) {
+      return response.json();
+    }
+
+    if (!contentType || /^text\/|charset=utf-8$/.test(contentType)) {
+      return response.text();
+    }
+
+    return getBufferResponse(response);
+  }).then(data => {
+    return {
+      status,
+      url,
+      headers,
+      data
+    };
+  }).catch(error => {
+    if (error instanceof requestError.RequestError) {
+      throw error;
+    }
+
+    throw new requestError.RequestError(error.message, 500, {
+      headers,
+      request: requestOptions
+    });
+  });
+}
+
+function withDefaults(oldEndpoint, newDefaults) {
+  const endpoint = oldEndpoint.defaults(newDefaults);
+
+  const newApi = function (route, parameters) {
+    const endpointOptions = endpoint.merge(route, parameters);
+
+    if (!endpointOptions.request || !endpointOptions.request.hook) {
+      return fetchWrapper(endpoint.parse(endpointOptions));
+    }
+
+    const request = (route, parameters) => {
+      return fetchWrapper(endpoint.parse(endpoint.merge(route, parameters)));
+    };
+
+    Object.assign(request, {
+      endpoint,
+      defaults: withDefaults.bind(null, endpoint)
+    });
+    return endpointOptions.request.hook(request, endpointOptions);
+  };
+
+  return Object.assign(newApi, {
+    endpoint,
+    defaults: withDefaults.bind(null, endpoint)
+  });
+}
+
+const request = withDefaults(endpoint.endpoint, {
+  headers: {
+    "user-agent": `octokit-request.js/${VERSION} ${universalUserAgent.getUserAgent()}`
+  }
+});
+
+exports.request = request;
 //# sourceMappingURL=index.js.map
 
 
@@ -1550,7 +1706,7 @@ async function hook(state, request, route, parameters) {
   return request(endpoint);
 }
 
-const VERSION = "3.0.6";
+const VERSION = "3.0.7";
 
 function createOAuthAppAuth(options) {
   const state = Object.assign({
@@ -2428,7 +2584,7 @@ var btoa = _interopDefault(__webpack_require__(2358));
 var authUnauthenticated = __webpack_require__(9567);
 var fromEntries = _interopDefault(__webpack_require__(6522));
 
-const VERSION = "2.0.1";
+const VERSION = "2.0.2";
 
 function addEventHandler(state, eventName, eventHandler) {
   if (Array.isArray(eventName)) {
@@ -2619,7 +2775,7 @@ async function createTokenWithState(state, options) {
 async function sendCheckTokenRequest(request, options) {
   const {
     data
-  } = await request("POST /applications/:client_id/token", options);
+  } = await request("POST /applications/{client_id}/token", options);
   return data;
 }
 
@@ -2644,7 +2800,7 @@ function checkTokenWithState(state, options) {
 async function sendResetTokenRequest(request, options) {
   const {
     data
-  } = await request("PATCH /applications/:client_id/token", options);
+  } = await request("PATCH /applications/{client_id}/token", options);
   return data;
 }
 
@@ -2683,7 +2839,7 @@ async function resetTokenWithState(state, options) {
 async function sendDeleteTokenRequest(request, options) {
   const {
     data
-  } = await request("DELETE /applications/:client_id/token", options);
+  } = await request("DELETE /applications/{client_id}/token", options);
   return data;
 }
 
@@ -2736,7 +2892,7 @@ async function deleteTokenWithState(state, options) {
 async function sendDeleteAuthorizationRequest(request, options) {
   const {
     data
-  } = await request("DELETE /applications/:client_id/grant", options);
+  } = await request("DELETE /applications/{client_id}/grant", options);
   return data;
 }
 
@@ -3531,7 +3687,7 @@ var debug = __webpack_require__(8237);
 
 // THIS FILE IS GENERATED - DO NOT EDIT DIRECTLY
 // make edits in scripts/update-known-events.js
-const webhookNames = ["*", "check_run", "check_run.completed", "check_run.created", "check_run.requested_action", "check_run.rerequested", "check_suite", "check_suite.completed", "check_suite.requested", "check_suite.rerequested", "code_scanning_alert", "code_scanning_alert.appeared_in_branch", "code_scanning_alert.closed_by_user", "code_scanning_alert.created", "code_scanning_alert.fixed", "code_scanning_alert.reopened", "code_scanning_alert.reopened_by_user", "commit_comment", "commit_comment.created", "content_reference", "content_reference.created", "create", "delete", "deploy_key", "deploy_key.created", "deploy_key.deleted", "deployment", "deployment.created", "deployment_status", "deployment_status.created", "error", "fork", "github_app_authorization", "github_app_authorization.revoked", "gollum", "installation", "installation.created", "installation.deleted", "installation.new_permissions_accepted", "installation.suspend", "installation.unsuspend", "installation_repositories", "installation_repositories.added", "installation_repositories.removed", "issue_comment", "issue_comment.created", "issue_comment.deleted", "issue_comment.edited", "issues", "issues.assigned", "issues.closed", "issues.deleted", "issues.demilestoned", "issues.edited", "issues.labeled", "issues.locked", "issues.milestoned", "issues.opened", "issues.pinned", "issues.reopened", "issues.transferred", "issues.unassigned", "issues.unlabeled", "issues.unlocked", "issues.unpinned", "label", "label.created", "label.deleted", "label.edited", "marketplace_purchase", "marketplace_purchase.cancelled", "marketplace_purchase.changed", "marketplace_purchase.pending_change", "marketplace_purchase.pending_change_cancelled", "marketplace_purchase.purchased", "member", "member.added", "member.edited", "member.removed", "membership", "membership.added", "membership.removed", "meta", "meta.deleted", "milestone", "milestone.closed", "milestone.created", "milestone.deleted", "milestone.edited", "milestone.opened", "org_block", "org_block.blocked", "org_block.unblocked", "organization", "organization.deleted", "organization.member_added", "organization.member_invited", "organization.member_removed", "organization.renamed", "package", "package.published", "package.updated", "page_build", "ping", "project", "project.closed", "project.created", "project.deleted", "project.edited", "project.reopened", "project_card", "project_card.converted", "project_card.created", "project_card.deleted", "project_card.edited", "project_card.moved", "project_column", "project_column.created", "project_column.deleted", "project_column.edited", "project_column.moved", "public", "pull_request", "pull_request.assigned", "pull_request.closed", "pull_request.edited", "pull_request.labeled", "pull_request.locked", "pull_request.merged", "pull_request.opened", "pull_request.ready_for_review", "pull_request.reopened", "pull_request.review_request_removed", "pull_request.review_requested", "pull_request.synchronize", "pull_request.unassigned", "pull_request.unlabeled", "pull_request.unlocked", "pull_request_review", "pull_request_review.dismissed", "pull_request_review.edited", "pull_request_review.submitted", "pull_request_review_comment", "pull_request_review_comment.created", "pull_request_review_comment.deleted", "pull_request_review_comment.edited", "push", "release", "release.created", "release.deleted", "release.edited", "release.prereleased", "release.published", "release.released", "release.unpublished", "repository", "repository.archived", "repository.created", "repository.deleted", "repository.edited", "repository.privatized", "repository.publicized", "repository.renamed", "repository.transferred", "repository.unarchived", "repository_dispatch", "repository_dispatch.on-demand-test", "repository_import", "repository_vulnerability_alert", "repository_vulnerability_alert.create", "repository_vulnerability_alert.dismiss", "repository_vulnerability_alert.resolve", "security_advisory", "security_advisory.performed", "security_advisory.published", "security_advisory.updated", "sponsorship", "sponsorship.cancelled", "sponsorship.created", "sponsorship.edited", "sponsorship.pending_cancellation", "sponsorship.pending_tier_change", "sponsorship.tier_changed", "star", "star.created", "star.deleted", "status", "team", "team.added_to_repository", "team.created", "team.deleted", "team.edited", "team.removed_from_repository", "team_add", "watch", "watch.started", "workflow_dispatch", "workflow_run", "workflow_run.action", "workflow_run.completed", "workflow_run.requested"];
+const webhookNames = ["*", "check_run", "check_run.completed", "check_run.created", "check_run.requested_action", "check_run.rerequested", "check_suite", "check_suite.completed", "check_suite.requested", "check_suite.rerequested", "code_scanning_alert", "code_scanning_alert.appeared_in_branch", "code_scanning_alert.closed_by_user", "code_scanning_alert.created", "code_scanning_alert.fixed", "code_scanning_alert.reopened", "code_scanning_alert.reopened_by_user", "commit_comment", "commit_comment.created", "content_reference", "content_reference.created", "create", "delete", "deploy_key", "deploy_key.created", "deploy_key.deleted", "deployment", "deployment.created", "deployment_status", "deployment_status.created", "error", "fork", "github_app_authorization", "github_app_authorization.revoked", "gollum", "installation", "installation.created", "installation.deleted", "installation.new_permissions_accepted", "installation.suspend", "installation.unsuspend", "installation_repositories", "installation_repositories.added", "installation_repositories.removed", "issue_comment", "issue_comment.created", "issue_comment.deleted", "issue_comment.edited", "issues", "issues.assigned", "issues.closed", "issues.deleted", "issues.demilestoned", "issues.edited", "issues.labeled", "issues.locked", "issues.milestoned", "issues.opened", "issues.pinned", "issues.reopened", "issues.transferred", "issues.unassigned", "issues.unlabeled", "issues.unlocked", "issues.unpinned", "label", "label.created", "label.deleted", "label.edited", "marketplace_purchase", "marketplace_purchase.cancelled", "marketplace_purchase.changed", "marketplace_purchase.pending_change", "marketplace_purchase.pending_change_cancelled", "marketplace_purchase.purchased", "member", "member.added", "member.edited", "member.removed", "membership", "membership.added", "membership.removed", "meta", "meta.deleted", "milestone", "milestone.closed", "milestone.created", "milestone.deleted", "milestone.edited", "milestone.opened", "org_block", "org_block.blocked", "org_block.unblocked", "organization", "organization.deleted", "organization.member_added", "organization.member_invited", "organization.member_removed", "organization.renamed", "package", "package.published", "package.updated", "page_build", "ping", "project", "project.closed", "project.created", "project.deleted", "project.edited", "project.reopened", "project_card", "project_card.converted", "project_card.created", "project_card.deleted", "project_card.edited", "project_card.moved", "project_column", "project_column.created", "project_column.deleted", "project_column.edited", "project_column.moved", "public", "pull_request", "pull_request.assigned", "pull_request.closed", "pull_request.edited", "pull_request.labeled", "pull_request.locked", "pull_request.merged", "pull_request.opened", "pull_request.ready_for_review", "pull_request.reopened", "pull_request.review_request_removed", "pull_request.review_requested", "pull_request.synchronize", "pull_request.unassigned", "pull_request.unlabeled", "pull_request.unlocked", "pull_request_review", "pull_request_review.dismissed", "pull_request_review.edited", "pull_request_review.submitted", "pull_request_review_comment", "pull_request_review_comment.created", "pull_request_review_comment.deleted", "pull_request_review_comment.edited", "push", "release", "release.created", "release.deleted", "release.edited", "release.prereleased", "release.published", "release.released", "release.unpublished", "repository", "repository.archived", "repository.created", "repository.deleted", "repository.edited", "repository.privatized", "repository.publicized", "repository.renamed", "repository.transferred", "repository.unarchived", "repository_dispatch", "repository_dispatch.on-demand-test", "repository_import", "repository_vulnerability_alert", "repository_vulnerability_alert.create", "repository_vulnerability_alert.dismiss", "repository_vulnerability_alert.resolve", "secret_scanning_alert", "secret_scanning_alert.created", "secret_scanning_alert.reopened", "secret_scanning_alert.resolved", "security_advisory", "security_advisory.performed", "security_advisory.published", "security_advisory.updated", "sponsorship", "sponsorship.cancelled", "sponsorship.created", "sponsorship.edited", "sponsorship.pending_cancellation", "sponsorship.pending_tier_change", "sponsorship.tier_changed", "star", "star.created", "star.deleted", "status", "team", "team.added_to_repository", "team.created", "team.deleted", "team.edited", "team.removed_from_repository", "team_add", "watch", "watch.started", "workflow_dispatch", "workflow_run", "workflow_run.action", "workflow_run.completed", "workflow_run.requested"];
 
 function handleEventHandlers(state, webhookName, handler) {
   if (!state.hooks[webhookName]) {
