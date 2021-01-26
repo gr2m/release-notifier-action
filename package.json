@@ -16,7 +16,7 @@
   "license": "MIT",
   "dependencies": {
     "@actions/core": "^1.2.6",
-    "@octokit/app": "^10.0.2"
+    "@octokit/app": "^10.1.0"
   },
   "release": {
     "branches": [
