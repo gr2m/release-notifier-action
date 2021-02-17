@@ -467,6 +467,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 var core = __nccwpck_require__(6762);
 var authApp = __nccwpck_require__(7541);
 var oauthApp = __nccwpck_require__(3493);
+var authUnauthenticated = __nccwpck_require__(9567);
 var webhooks$1 = __nccwpck_require__(8513);
 var pluginPaginateRest = __nccwpck_require__(4193);
 
@@ -648,22 +649,35 @@ function _objectSpread2(target) {
   return target;
 }
 
-const VERSION = "10.1.0";
+const VERSION = "10.1.1";
 
 function webhooks(appOctokit, options) {
   return new webhooks$1.Webhooks({
     secret: options.secret,
     path: "/api/github/webhooks",
     transform: async event => {
+      if (!("installation" in event.payload) || typeof event.payload.installation !== "object") {
+        const octokit = new appOctokit.constructor({
+          authStrategy: authUnauthenticated.createUnauthenticatedAuth,
+          auth: {
+            reason: `"installation" key missing in webhook event payload`
+          }
+        });
+        return _objectSpread2(_objectSpread2({}, event), {}, {
+          octokit: octokit
+        });
+      }
+
+      const installationId = event.payload.installation.id;
       const octokit = await appOctokit.auth({
         type: "installation",
-        installationId: event.payload.installation.id,
+        installationId,
         factory: auth => {
           return new auth.octokit.constructor(_objectSpread2(_objectSpread2({}, auth.octokitOptions), {}, {
             authStrategy: authApp.createAppAuth
           }, {
             auth: _objectSpread2(_objectSpread2({}, auth), {}, {
-              installationId: event.payload.installation.id
+              installationId
             })
           }));
         }
@@ -1258,15 +1272,23 @@ async function getOAuthAuthentication(state, options, customRequest) {
 }
 
 async function auth(state, options) {
-  if (options.type === "app") {
-    return getAppAuthentication(state);
-  }
+  const {
+    type
+  } = options;
 
-  if (options.type === "installation") {
-    return getInstallationAuthentication(state, options);
-  }
+  switch (type) {
+    case "app":
+      return getAppAuthentication(state);
 
-  return getOAuthAuthentication(state, options);
+    case "installation":
+      return getInstallationAuthentication(state, options);
+
+    case "oauth":
+      return getOAuthAuthentication(state, options);
+
+    default:
+      throw new Error(`Invalid auth type: ${type}`);
+  }
 }
 
 const PATHS = ["/app", "/app/hook/config", "/app/installations", "/app/installations/{installation_id}", "/app/installations/{installation_id}/access_tokens", "/app/installations/{installation_id}/suspended", "/marketplace_listing/accounts/{account_id}", "/marketplace_listing/plan", "/marketplace_listing/plans", "/marketplace_listing/plans/{plan_id}/accounts", "/marketplace_listing/stubbed/accounts/{account_id}", "/marketplace_listing/stubbed/plan", "/marketplace_listing/stubbed/plans", "/marketplace_listing/stubbed/plans/{plan_id}/accounts", "/orgs/{org}/installation", "/repos/{owner}/{repo}/installation", "/users/{username}/installation"]; // CREDIT: Simon Grondin (https://github.com/SGrondin)
@@ -1389,7 +1411,7 @@ async function sendRequestWithRetries(state, request, options, createdAt, retrie
   }
 }
 
-const VERSION = "2.10.6";
+const VERSION = "2.11.0";
 
 const createAppAuth = function createAppAuth(options) {
   const log = Object.assign({
@@ -3545,13 +3567,69 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
 
 var AggregateError = _interopDefault(__nccwpck_require__(1231));
+var debug = __nccwpck_require__(8237);
 var crypto = __nccwpck_require__(6417);
 var buffer = __nccwpck_require__(4293);
-var debug = __nccwpck_require__(8237);
+
+function _defineProperty(obj, key, value) {
+  if (key in obj) {
+    Object.defineProperty(obj, key, {
+      value: value,
+      enumerable: true,
+      configurable: true,
+      writable: true
+    });
+  } else {
+    obj[key] = value;
+  }
+
+  return obj;
+}
+
+function ownKeys(object, enumerableOnly) {
+  var keys = Object.keys(object);
+
+  if (Object.getOwnPropertySymbols) {
+    var symbols = Object.getOwnPropertySymbols(object);
+    if (enumerableOnly) symbols = symbols.filter(function (sym) {
+      return Object.getOwnPropertyDescriptor(object, sym).enumerable;
+    });
+    keys.push.apply(keys, symbols);
+  }
+
+  return keys;
+}
+
+function _objectSpread2(target) {
+  for (var i = 1; i < arguments.length; i++) {
+    var source = arguments[i] != null ? arguments[i] : {};
+
+    if (i % 2) {
+      ownKeys(Object(source), true).forEach(function (key) {
+        _defineProperty(target, key, source[key]);
+      });
+    } else if (Object.getOwnPropertyDescriptors) {
+      Object.defineProperties(target, Object.getOwnPropertyDescriptors(source));
+    } else {
+      ownKeys(Object(source)).forEach(function (key) {
+        Object.defineProperty(target, key, Object.getOwnPropertyDescriptor(source, key));
+      });
+    }
+  }
+
+  return target;
+}
+
+const createLogger = logger => _objectSpread2({
+  debug: () => {},
+  info: () => {},
+  warn: console.warn.bind(console),
+  error: console.error.bind(console)
+}, logger);
 
 // THIS FILE IS GENERATED - DO NOT EDIT DIRECTLY
-// make edits in scripts/update-known-events.js
-const webhookNames = ["*", "check_run", "check_run.completed", "check_run.created", "check_run.requested_action", "check_run.rerequested", "check_suite", "check_suite.completed", "check_suite.requested", "check_suite.rerequested", "code_scanning_alert", "code_scanning_alert.appeared_in_branch", "code_scanning_alert.closed_by_user", "code_scanning_alert.created", "code_scanning_alert.fixed", "code_scanning_alert.reopened", "code_scanning_alert.reopened_by_user", "commit_comment", "commit_comment.created", "content_reference", "content_reference.created", "create", "delete", "deploy_key", "deploy_key.created", "deploy_key.deleted", "deployment", "deployment.created", "deployment_status", "deployment_status.created", "error", "fork", "github_app_authorization", "github_app_authorization.revoked", "gollum", "installation", "installation.created", "installation.deleted", "installation.new_permissions_accepted", "installation.suspend", "installation.unsuspend", "installation_repositories", "installation_repositories.added", "installation_repositories.removed", "issue_comment", "issue_comment.created", "issue_comment.deleted", "issue_comment.edited", "issues", "issues.assigned", "issues.closed", "issues.deleted", "issues.demilestoned", "issues.edited", "issues.labeled", "issues.locked", "issues.milestoned", "issues.opened", "issues.pinned", "issues.reopened", "issues.transferred", "issues.unassigned", "issues.unlabeled", "issues.unlocked", "issues.unpinned", "label", "label.created", "label.deleted", "label.edited", "marketplace_purchase", "marketplace_purchase.cancelled", "marketplace_purchase.changed", "marketplace_purchase.pending_change", "marketplace_purchase.pending_change_cancelled", "marketplace_purchase.purchased", "member", "member.added", "member.edited", "member.removed", "membership", "membership.added", "membership.removed", "meta", "meta.deleted", "milestone", "milestone.closed", "milestone.created", "milestone.deleted", "milestone.edited", "milestone.opened", "org_block", "org_block.blocked", "org_block.unblocked", "organization", "organization.deleted", "organization.member_added", "organization.member_invited", "organization.member_removed", "organization.renamed", "package", "package.published", "package.updated", "page_build", "ping", "project", "project.closed", "project.created", "project.deleted", "project.edited", "project.reopened", "project_card", "project_card.converted", "project_card.created", "project_card.deleted", "project_card.edited", "project_card.moved", "project_column", "project_column.created", "project_column.deleted", "project_column.edited", "project_column.moved", "public", "pull_request", "pull_request.assigned", "pull_request.closed", "pull_request.edited", "pull_request.labeled", "pull_request.locked", "pull_request.merged", "pull_request.opened", "pull_request.ready_for_review", "pull_request.reopened", "pull_request.review_request_removed", "pull_request.review_requested", "pull_request.synchronize", "pull_request.unassigned", "pull_request.unlabeled", "pull_request.unlocked", "pull_request_review", "pull_request_review.dismissed", "pull_request_review.edited", "pull_request_review.submitted", "pull_request_review_comment", "pull_request_review_comment.created", "pull_request_review_comment.deleted", "pull_request_review_comment.edited", "push", "release", "release.created", "release.deleted", "release.edited", "release.prereleased", "release.published", "release.released", "release.unpublished", "repository", "repository.archived", "repository.created", "repository.deleted", "repository.edited", "repository.privatized", "repository.publicized", "repository.renamed", "repository.transferred", "repository.unarchived", "repository_dispatch", "repository_dispatch.on-demand-test", "repository_import", "repository_vulnerability_alert", "repository_vulnerability_alert.create", "repository_vulnerability_alert.dismiss", "repository_vulnerability_alert.resolve", "secret_scanning_alert", "secret_scanning_alert.created", "secret_scanning_alert.reopened", "secret_scanning_alert.resolved", "security_advisory", "security_advisory.performed", "security_advisory.published", "security_advisory.updated", "sponsorship", "sponsorship.cancelled", "sponsorship.created", "sponsorship.edited", "sponsorship.pending_cancellation", "sponsorship.pending_tier_change", "sponsorship.tier_changed", "star", "star.created", "star.deleted", "status", "team", "team.added_to_repository", "team.created", "team.deleted", "team.edited", "team.removed_from_repository", "team_add", "watch", "watch.started", "workflow_dispatch", "workflow_run", "workflow_run.action", "workflow_run.completed", "workflow_run.requested"];
+// make edits in scripts/generate-types.ts
+const emitterEventNames = ["check_run", "check_run.completed", "check_run.created", "check_run.requested_action", "check_run.rerequested", "check_suite", "check_suite.completed", "check_suite.requested", "check_suite.rerequested", "code_scanning_alert", "code_scanning_alert.appeared_in_branch", "code_scanning_alert.closed_by_user", "code_scanning_alert.created", "code_scanning_alert.fixed", "code_scanning_alert.reopened", "code_scanning_alert.reopened_by_user", "commit_comment", "commit_comment.created", "content_reference", "content_reference.created", "create", "delete", "deploy_key", "deploy_key.created", "deploy_key.deleted", "deployment", "deployment.created", "deployment_status", "deployment_status.created", "fork", "github_app_authorization", "github_app_authorization.revoked", "gollum", "installation", "installation.created", "installation.deleted", "installation.new_permissions_accepted", "installation.suspend", "installation.unsuspend", "installation_repositories", "installation_repositories.added", "installation_repositories.removed", "issue_comment", "issue_comment.created", "issue_comment.deleted", "issue_comment.edited", "issues", "issues.assigned", "issues.closed", "issues.deleted", "issues.demilestoned", "issues.edited", "issues.labeled", "issues.locked", "issues.milestoned", "issues.opened", "issues.pinned", "issues.reopened", "issues.transferred", "issues.unassigned", "issues.unlabeled", "issues.unlocked", "issues.unpinned", "label", "label.created", "label.deleted", "label.edited", "marketplace_purchase", "marketplace_purchase.cancelled", "marketplace_purchase.changed", "marketplace_purchase.pending_change", "marketplace_purchase.pending_change_cancelled", "marketplace_purchase.purchased", "member", "member.added", "member.edited", "member.removed", "membership", "membership.added", "membership.removed", "meta", "meta.deleted", "milestone", "milestone.closed", "milestone.created", "milestone.deleted", "milestone.edited", "milestone.opened", "org_block", "org_block.blocked", "org_block.unblocked", "organization", "organization.deleted", "organization.member_added", "organization.member_invited", "organization.member_removed", "organization.renamed", "package", "package.published", "package.updated", "page_build", "ping", "project", "project.closed", "project.created", "project.deleted", "project.edited", "project.reopened", "project_card", "project_card.converted", "project_card.created", "project_card.deleted", "project_card.edited", "project_card.moved", "project_column", "project_column.created", "project_column.deleted", "project_column.edited", "project_column.moved", "public", "pull_request", "pull_request.assigned", "pull_request.auto_merge_disabled", "pull_request.auto_merge_enabled", "pull_request.closed", "pull_request.converted_to_draft", "pull_request.edited", "pull_request.labeled", "pull_request.locked", "pull_request.opened", "pull_request.ready_for_review", "pull_request.reopened", "pull_request.review_request_removed", "pull_request.review_requested", "pull_request.synchronize", "pull_request.unassigned", "pull_request.unlabeled", "pull_request.unlocked", "pull_request_review", "pull_request_review.dismissed", "pull_request_review.edited", "pull_request_review.submitted", "pull_request_review_comment", "pull_request_review_comment.created", "pull_request_review_comment.deleted", "pull_request_review_comment.edited", "push", "release", "release.created", "release.deleted", "release.edited", "release.prereleased", "release.published", "release.released", "release.unpublished", "repository", "repository.archived", "repository.created", "repository.deleted", "repository.edited", "repository.privatized", "repository.publicized", "repository.renamed", "repository.transferred", "repository.unarchived", "repository_dispatch", "repository_dispatch.on-demand-test", "repository_import", "repository_vulnerability_alert", "repository_vulnerability_alert.create", "repository_vulnerability_alert.dismiss", "repository_vulnerability_alert.resolve", "secret_scanning_alert", "secret_scanning_alert.created", "secret_scanning_alert.reopened", "secret_scanning_alert.resolved", "security_advisory", "security_advisory.performed", "security_advisory.published", "security_advisory.updated", "sponsorship", "sponsorship.cancelled", "sponsorship.created", "sponsorship.edited", "sponsorship.pending_cancellation", "sponsorship.pending_tier_change", "sponsorship.tier_changed", "star", "star.created", "star.deleted", "status", "team", "team.added_to_repository", "team.created", "team.deleted", "team.edited", "team.removed_from_repository", "team_add", "watch", "watch.started", "workflow_dispatch", "workflow_run", "workflow_run.completed", "workflow_run.requested"];
 
 function handleEventHandlers(state, webhookName, handler) {
   if (!state.hooks[webhookName]) {
@@ -3567,13 +3645,14 @@ function receiverOn(state, webhookNameOrNames, handler) {
     return;
   }
 
-  if (webhookNames.indexOf(webhookNameOrNames) === -1) {
-    console.warn(`"${webhookNameOrNames}" is not a known webhook name (https://developer.github.com/v3/activity/events/types/)`);
+  if (["*", "error"].includes(webhookNameOrNames)) {
+    const webhookName = webhookNameOrNames === "*" ? "any" : webhookNameOrNames;
+    const message = `Using the "${webhookNameOrNames}" event with the regular Webhooks.on() function is not supported. Please use the Webhooks.on${webhookName.charAt(0).toUpperCase() + webhookName.slice(1)}() method instead`;
+    throw new Error(message);
   }
 
-  if (webhookNameOrNames === "*" || webhookNameOrNames === "error") {
-    const webhookName = webhookNameOrNames === "*" ? "any" : webhookNameOrNames;
-    console.warn(`Using the "${webhookNameOrNames}" event with the regular Webhooks.on() function is deprecated. Please use the Webhooks.on${webhookName.charAt(0).toUpperCase() + webhookName.slice(1)}() method instead`);
+  if (emitterEventNames.indexOf(webhookNameOrNames) === -1) {
+    state.log.warn(`"${webhookNameOrNames}" is not a known webhook name (https://developer.github.com/v3/activity/events/types/)`);
   }
 
   handleEventHandlers(state, webhookNameOrNames, handler);
@@ -3587,20 +3666,20 @@ function receiverOnError(state, handler) {
 
 // Errors thrown or rejected Promises in "error" event handlers are not handled
 // as they are in the webhook event handlers. If errors occur, we log a
-// "Fatal: Error occured" message to stdout
+// "Fatal: Error occurred" message to stdout
 function wrapErrorHandler(handler, error) {
   let returnValue;
 
   try {
     returnValue = handler(error);
   } catch (error) {
-    console.log('FATAL: Error occured in "error" event handler');
+    console.log('FATAL: Error occurred in "error" event handler');
     console.log(error);
   }
 
   if (returnValue && returnValue.catch) {
     returnValue.catch(error => {
-      console.log('FATAL: Error occured in "error" event handler');
+      console.log('FATAL: Error occurred in "error" event handler');
       console.log(error);
     });
   }
@@ -3609,9 +3688,12 @@ function wrapErrorHandler(handler, error) {
 // @ts-ignore to address #245
 
 function getHooks(state, eventPayloadAction, eventName) {
-  const hooks = [state.hooks[`${eventName}.${eventPayloadAction}`]];
-  hooks.push(state.hooks[eventName]);
-  hooks.push(state.hooks["*"]);
+  const hooks = [state.hooks[eventName], state.hooks["*"]];
+
+  if (eventPayloadAction) {
+    hooks.unshift(state.hooks[`${eventName}.${eventPayloadAction}`]);
+  }
+
   return [].concat(...hooks.filter(Boolean));
 } // main handler function
 
@@ -3637,7 +3719,7 @@ function receiverHandle(state, event) {
   } // flatten arrays of event listeners and remove undefined values
 
 
-  const hooks = getHooks(state, event.payload.action, event.name);
+  const hooks = getHooks(state, "action" in event.payload ? event.payload.action : null, event.name);
 
   if (hooks.length === 0) {
     return Promise.resolve();
@@ -3694,7 +3776,8 @@ function removeListener(state, webhookNameOrNames, handler) {
 
 function createEventHandler(options) {
   const state = {
-    hooks: {}
+    hooks: {},
+    log: createLogger(options && options.log)
   };
 
   if (options && options.transform) {
@@ -3736,7 +3819,6 @@ function getMissingHeaders(request) {
 function getPayload(request) {
   // If request.body already exists we can stop here
   // See https://github.com/octokit/webhooks.js/pull/23
-  // @ts-expect-error
   if (request.body) return Promise.resolve(request.body);
   return new Promise((resolve, reject) => {
     let data = "";
@@ -3834,7 +3916,6 @@ function verifyAndReceive(state, event) {
   });
 }
 
-const debugWebhooks = debug.debug("webhooks:receiver");
 function middleware(state, request, response, next) {
   if (isntWebhook(request, {
     path: state.path
@@ -3842,13 +3923,13 @@ function middleware(state, request, response, next) {
     // the next callback is set when used as an express middleware. That allows
     // it to define custom routes like /my/custom/page while the webhooks are
     // expected to be sent to the / root path. Otherwise the root path would
-    // match all requests and would make it impossible to define custom rooutes
+    // match all requests and would make it impossible to define custom routes
     if (next) {
       next();
       return;
     }
 
-    debugWebhooks(`ignored: ${request.method} ${request.url}`);
+    state.log.debug(`ignored: ${request.method} ${request.url}`);
     response.statusCode = 404;
     response.end("Not found");
     return;
@@ -3868,7 +3949,7 @@ function middleware(state, request, response, next) {
   const signatureSHA1 = request.headers["x-hub-signature"];
   const signatureSHA256 = request.headers["x-hub-signature-256"];
   const id = request.headers["x-github-delivery"];
-  debugWebhooks(`${eventName} event received (id: ${id})`); // GitHub will abort the request if it does not receive a response within 10s
+  state.log.debug(`${eventName} event received (id: ${id})`); // GitHub will abort the request if it does not receive a response within 10s
   // See https://github.com/octokit/webhooks.js/issues/185
 
   let didTimeout = false;
@@ -3881,7 +3962,7 @@ function middleware(state, request, response, next) {
     return verifyAndReceive(state, {
       id: id,
       name: eventName,
-      payload,
+      payload: payload,
       signature: signatureSHA256 || signatureSHA1
     });
   }).then(() => {
@@ -3906,7 +3987,10 @@ function createMiddleware(options) {
     eventHandler: createEventHandler(options),
     path: options.path || "/",
     secret: options.secret,
-    hooks: {}
+    hooks: {},
+    log: createLogger(options.log || {
+      debug: debug.debug("webhooks:receiver")
+    })
   };
   const api = middleware.bind(null, state);
   api.on = state.eventHandler.on;
@@ -3924,7 +4008,8 @@ class Webhooks {
       eventHandler: createEventHandler(options),
       path: options.path || "/",
       secret: options.secret,
-      hooks: {}
+      hooks: {},
+      log: createLogger(options.log)
     };
     this.sign = sign.bind(null, options.secret);
     this.verify = verify.bind(null, options.secret);
