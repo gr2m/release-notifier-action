@@ -649,9 +649,11 @@ function _objectSpread2(target) {
   return target;
 }
 
-const VERSION = "10.1.1";
+const VERSION = "10.2.1";
 
-function webhooks(appOctokit, options) {
+function webhooks(appOctokit, options // Explict return type for better debugability and performance,
+// see https://github.com/octokit/app.js/pull/201
+) {
   return new webhooks$1.Webhooks({
     secret: options.secret,
     path: "/api/github/webhooks",
@@ -950,7 +952,6 @@ function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'defau
 
 var universalUserAgent = __nccwpck_require__(5030);
 var request = __nccwpck_require__(6234);
-var deprecation = __nccwpck_require__(8932);
 var universalGithubAppJwt = __nccwpck_require__(4419);
 var LRU = _interopDefault(__nccwpck_require__(7129));
 var requestError = __nccwpck_require__(537);
@@ -1259,15 +1260,13 @@ async function getOAuthAuthentication(state, options, customRequest) {
 
   const {
     data: {
-      access_token: token,
-      scope
+      access_token: token
     }
   } = response;
   return {
     type: "token",
     tokenType: "oauth",
-    token,
-    scopes: scope.split(/,\s*/).filter(Boolean)
+    token
   };
 }
 
@@ -1411,17 +1410,12 @@ async function sendRequestWithRetries(state, request, options, createdAt, retrie
   }
 }
 
-const VERSION = "2.11.0";
+const VERSION = "3.0.0";
 
 const createAppAuth = function createAppAuth(options) {
   const log = Object.assign({
     warn: console.warn.bind(console)
   }, options.log);
-
-  if ("id" in options) {
-    log.warn(new deprecation.Deprecation('[@octokit/auth-app] "createAppAuth({ id })" is deprecated, use "createAppAuth({ appId })" instead'));
-  }
-
   const state = Object.assign({
     request: request.request.defaults({
       headers: {
@@ -1429,9 +1423,7 @@ const createAppAuth = function createAppAuth(options) {
       }
     }),
     cache: getCache()
-  }, options, {
-    appId: Number("appId" in options ? options.appId : options.id)
-  }, options.installationId ? {
+  }, options, options.installationId ? {
     installationId: Number(options.installationId)
   } : {}, {
     log
@@ -3809,7 +3801,7 @@ function isntWebhook(request, options) {
   return false;
 }
 
-const WEBHOOK_HEADERS = ["x-github-event", "x-hub-signature", "x-github-delivery"]; // https://developer.github.com/webhooks/#delivery-headers
+const WEBHOOK_HEADERS = ["x-github-event", "x-hub-signature", "x-github-delivery"]; // https://docs.github.com/en/developers/webhooks-and-events/webhook-events-and-payloads#delivery-headers
 
 function getMissingHeaders(request) {
   return WEBHOOK_HEADERS.filter(header => !(header in request.headers));
