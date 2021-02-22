@@ -649,7 +649,7 @@ function _objectSpread2(target) {
   return target;
 }
 
-const VERSION = "10.2.1";
+const VERSION = "10.2.2";
 
 function webhooks(appOctokit, options // Explict return type for better debugability and performance,
 // see https://github.com/octokit/app.js/pull/201
