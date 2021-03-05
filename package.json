@@ -8,7 +8,7 @@
     "build": "ncc build index.js -o dist",
     "test": "tap --100 test/*/test.js"
   },
-  "repository": "https://github.com/gr2m/release-notifier-action",
+  "repository": "github:gr2m/release-notifier-action",
   "keywords": [
     "github-action"
   ],
