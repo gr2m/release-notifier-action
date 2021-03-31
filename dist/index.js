@@ -649,14 +649,13 @@ function _objectSpread2(target) {
   return target;
 }
 
-const VERSION = "10.2.2";
+const VERSION = "11.3.0";
 
 function webhooks(appOctokit, options // Explict return type for better debugability and performance,
 // see https://github.com/octokit/app.js/pull/201
 ) {
   return new webhooks$1.Webhooks({
     secret: options.secret,
-    path: "/api/github/webhooks",
     transform: async event => {
       if (!("installation" in event.payload) || typeof event.payload.installation !== "object") {
         const octokit = new appOctokit.constructor({
@@ -674,7 +673,8 @@ function webhooks(appOctokit, options // Explict return type for better debugabi
       const octokit = await appOctokit.auth({
         type: "installation",
         installationId,
-        factory: auth => {
+
+        factory(auth) {
           return new auth.octokit.constructor(_objectSpread2(_objectSpread2({}, auth.octokitOptions), {}, {
             authStrategy: authApp.createAppAuth
           }, {
@@ -683,6 +683,7 @@ function webhooks(appOctokit, options // Explict return type for better debugabi
             })
           }));
         }
+
       });
       return _objectSpread2(_objectSpread2({}, event), {}, {
         octokit: octokit
@@ -871,6 +872,39 @@ function eachRepositoryIterator(app, query) {
   };
 }
 
+function onUnhandledRequestDefault(request, response) {
+  response.writeHead(404, {
+    "content-type": "application/json"
+  });
+  response.end(JSON.stringify({
+    error: `Unknown route: ${request.method} ${request.url}`
+  }));
+}
+
+function noop() {}
+
+function createNodeMiddleware(app, {
+  pathPrefix = "/api/github",
+  onUnhandledRequest = onUnhandledRequestDefault,
+  log
+} = {}) {
+  const logWithDefaults = Object.assign({
+    debug: noop,
+    info: noop,
+    warn: console.warn.bind(console),
+    error: console.error.bind(console)
+  }, log);
+  return webhooks$1.createNodeMiddleware(app.webhooks, {
+    path: pathPrefix + "/webhooks",
+    log: logWithDefaults,
+    // @ts-expect-error TODO: figure out this error
+    onUnhandledRequest: oauthApp.createNodeMiddleware(app.oauth, {
+      onUnhandledRequest,
+      pathPrefix: pathPrefix + "/oauth"
+    })
+  });
+}
+
 class App {
   constructor(options) {
     const Octokit = options.Octokit || core.Octokit;
@@ -894,6 +928,7 @@ class App {
     }, options.log); // set app.webhooks depending on whether "webhooks" option has been passed
 
     if (options.webhooks) {
+      // @ts-expect-error TODO: figure this out
       this.webhooks = webhooks(this.octokit, options.webhooks);
     } else {
       Object.defineProperty(this, "webhooks", {
@@ -906,6 +941,7 @@ class App {
 
 
     if (options.oauth) {
+      // @ts-expect-error TODO: figure this out
       this.oauth = new oauthApp.OAuthApp(_objectSpread2(_objectSpread2({}, options.oauth), {}, {
         Octokit
       }));
@@ -923,18 +959,21 @@ class App {
     this.eachRepository = eachRepositoryFactory(this);
   }
 
+  static defaults(defaults) {
+    const AppWithDefaults = class extends this {
+      constructor(...args) {
+        super(_objectSpread2(_objectSpread2({}, defaults), args[0]));
+      }
+
+    };
+    return AppWithDefaults;
+  }
+
 }
 App.VERSION = VERSION;
-function getNodeMiddleware(app) {
-  return oauthApp.getNodeMiddleware(app.oauth, {
-    onUnhandledRequest: (request, response) => {
-      return app.webhooks.middleware(request, response);
-    }
-  });
-}
 
 exports.App = App;
-exports.getNodeMiddleware = getNodeMiddleware;
+exports.createNodeMiddleware = createNodeMiddleware;
 //# sourceMappingURL=index.js.map
 
 
@@ -952,27 +991,11 @@ function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'defau
 
 var universalUserAgent = __nccwpck_require__(5030);
 var request = __nccwpck_require__(6234);
+var authOauthApp = __nccwpck_require__(8459);
+var deprecation = __nccwpck_require__(8932);
 var universalGithubAppJwt = __nccwpck_require__(4419);
 var LRU = _interopDefault(__nccwpck_require__(7129));
-var requestError = __nccwpck_require__(537);
-
-async function getAppAuthentication({
-  appId,
-  privateKey,
-  timeDifference
-}) {
-  const appAuthentication = await universalGithubAppJwt.githubAppJwt({
-    id: +appId,
-    privateKey,
-    now: timeDifference && Math.floor(Date.now() / 1000) + timeDifference
-  });
-  return {
-    type: "app",
-    token: appAuthentication.token,
-    appId: appAuthentication.appId,
-    expiresAt: new Date(appAuthentication.expiration * 1000).toISOString()
-  };
-}
+var authOauthUser = __nccwpck_require__(1591);
 
 function _defineProperty(obj, key, value) {
   if (key in obj) {
@@ -1057,6 +1080,24 @@ function _objectWithoutProperties(source, excluded) {
   }
 
   return target;
+}
+
+async function getAppAuthentication({
+  appId,
+  privateKey,
+  timeDifference
+}) {
+  const appAuthentication = await universalGithubAppJwt.githubAppJwt({
+    id: +appId,
+    privateKey,
+    now: timeDifference && Math.floor(Date.now() / 1000) + timeDifference
+  });
+  return {
+    type: "app",
+    token: appAuthentication.token,
+    appId: appAuthentication.appId,
+    expiresAt: new Date(appAuthentication.expiration * 1000).toISOString()
+  };
 }
 
 // https://github.com/isaacs/node-lru-cache#readme
@@ -1147,14 +1188,16 @@ async function getInstallationAuthentication(state, options, customRequest) {
   }
 
   if (options.factory) {
-    const {
+    const _state$options = _objectSpread2(_objectSpread2({}, state), options),
+          {
       type,
-      factory
-    } = options,
-          factoryAuthOptions = _objectWithoutProperties(options, ["type", "factory"]); // @ts-ignore if `options.factory` is set, the return type for `auth()` should be `Promise<ReturnType<options.factory>>`
+      factory,
+      oauthApp
+    } = _state$options,
+          factoryAuthOptions = _objectWithoutProperties(_state$options, ["type", "factory", "oauthApp"]); // @ts-expect-error if `options.factory` is set, the return type for `auth()` should be `Promise<ReturnType<options.factory>>`
 
 
-    return factory(Object.assign({}, state, factoryAuthOptions));
+    return factory(factoryAuthOptions);
   }
 
   const optionsWithInstallationTokenFromState = Object.assign({
@@ -1234,56 +1277,34 @@ async function getInstallationAuthentication(state, options, customRequest) {
   });
 }
 
-async function getOAuthAuthentication(state, options, customRequest) {
-  const request = customRequest || state.request; // The "/login/oauth/access_token" is not part of the REST API hosted on api.github.com,
-  // instead it’s using the github.com domain.
-
-  const route = /^https:\/\/(api\.)?github\.com$/.test(state.request.endpoint.DEFAULTS.baseUrl) ? "POST https://github.com/login/oauth/access_token" : `POST ${state.request.endpoint.DEFAULTS.baseUrl.replace("/api/v3", "/login/oauth/access_token")}`;
-  const parameters = {
-    headers: {
-      accept: `application/json`
-    },
-    client_id: state.clientId,
-    client_secret: state.clientSecret,
-    code: options.code,
-    state: options.state,
-    redirect_uri: options.redirectUrl
-  };
-  const response = await request(route, parameters);
-
-  if (response.data.error !== undefined) {
-    throw new requestError.RequestError(`${response.data.error_description} (${response.data.error})`, response.status, {
-      headers: response.headers,
-      request: request.endpoint(route, parameters)
-    });
-  }
-
-  const {
-    data: {
-      access_token: token
-    }
-  } = response;
-  return {
-    type: "token",
-    tokenType: "oauth",
-    token
-  };
-}
-
 async function auth(state, options) {
   const {
     type
-  } = options;
+  } = options,
+        authOptions = _objectWithoutProperties(options, ["type"]);
 
   switch (type) {
     case "app":
       return getAppAuthentication(state);
 
+    case "oauth-app":
+      return state.oauthApp({
+        type: "oauth-app"
+      });
+
     case "installation":
-      return getInstallationAuthentication(state, options);
+      return getInstallationAuthentication(state, _objectSpread2(_objectSpread2({}, authOptions), {}, {
+        type: "installation"
+      }));
+    // @ts-expect-error
 
     case "oauth":
-      return getOAuthAuthentication(state, options);
+      state.log.warn( // @ts-expect-error
+      new deprecation.Deprecation(`[@octokit/auth-app] {type: "oauth"} is deprecated. Use {type: "oauth-app"} instead`));
+
+    case "oauth-user":
+      // @ts-expect-error TODO: infer correct auth options type based on type. authOptions should be typed as "WebFlowAuthOptions | GitHubAppDeviceFlowAuthOptions"
+      return state.oauthApp(authOptions);
 
     default:
       throw new Error(`Invalid auth type: ${type}`);
@@ -1330,9 +1351,10 @@ function isNotTimeSkewError(error) {
 }
 
 async function hook(state, request, route, parameters) {
-  let endpoint = request.endpoint.merge(route, parameters);
+  const endpoint = request.endpoint.merge(route, parameters);
+  const url = endpoint.url;
 
-  if (requiresAppAuth(endpoint.url.replace(request.endpoint.DEFAULTS.baseUrl, ""))) {
+  if (requiresAppAuth(url.replace(request.endpoint.DEFAULTS.baseUrl, ""))) {
     const {
       token
     } = await getAppAuthentication(state);
@@ -1369,10 +1391,19 @@ async function hook(state, request, route, parameters) {
     return response;
   }
 
+  if (authOauthUser.requiresBasicAuth(url)) {
+    const authentication = await state.oauthApp({
+      type: "oauth-app"
+    });
+    endpoint.headers.authorization = authentication.headers.authorization;
+    return request(endpoint);
+  }
+
   const {
     token,
     createdAt
-  } = await getInstallationAuthentication(state, {}, request);
+  } = await getInstallationAuthentication(state, // @ts-expect-error TBD
+  {}, request);
   endpoint.headers.authorization = `token ${token}`;
   return sendRequestWithRetries(state, request, endpoint, createdAt);
 }
@@ -1410,29 +1441,42 @@ async function sendRequestWithRetries(state, request, options, createdAt, retrie
   }
 }
 
-const VERSION = "3.0.0";
+const VERSION = "3.3.0";
 
 const createAppAuth = function createAppAuth(options) {
   const log = Object.assign({
     warn: console.warn.bind(console)
   }, options.log);
+  const request$1 = options.request || request.request.defaults({
+    headers: {
+      "user-agent": `octokit-auth-app.js/${VERSION} ${universalUserAgent.getUserAgent()}`
+    }
+  });
   const state = Object.assign({
-    request: request.request.defaults({
-      headers: {
-        "user-agent": `octokit-auth-app.js/${VERSION} ${universalUserAgent.getUserAgent()}`
-      }
-    }),
+    request: request$1,
     cache: getCache()
   }, options, options.installationId ? {
     installationId: Number(options.installationId)
   } : {}, {
-    log
+    log,
+    oauthApp: authOauthApp.createOAuthAppAuth({
+      clientType: "github-app",
+      clientId: options.clientId || "",
+      clientSecret: options.clientSecret || "",
+      request: request$1
+    })
   });
   return Object.assign(auth.bind(null, state), {
     hook: hook.bind(null, state)
   });
 };
 
+Object.defineProperty(exports, "createOAuthUserAuth", ({
+  enumerable: true,
+  get: function () {
+    return authOauthUser.createOAuthUserAuth;
+  }
+}));
 exports.createAppAuth = createAppAuth;
 //# sourceMappingURL=index.js.map
 
@@ -1452,139 +1496,146 @@ function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'defau
 var universalUserAgent = __nccwpck_require__(5030);
 var request = __nccwpck_require__(6234);
 var btoa = _interopDefault(__nccwpck_require__(2358));
-var requestError = __nccwpck_require__(537);
+var authOauthUser = __nccwpck_require__(1591);
 
-async function getOAuthAccessToken(state, options) {
-  const authOptionsPassed = options.auth ? typeof options.auth.code !== "undefined" : false;
-  const authOptions = options.auth && authOptionsPassed ? options.auth : state;
-
-  if (state.token && !authOptionsPassed) {
-    return state.token;
-  } // The "/login/oauth/access_token" is not part of the REST API hosted on api.github.com,
-  // instead it’s using the github.com domain.
-
-
-  const route = /^https:\/\/(api\.)?github\.com$/.test(state.request.endpoint.DEFAULTS.baseUrl) ? "POST https://github.com/login/oauth/access_token" : `POST ${state.request.endpoint.DEFAULTS.baseUrl.replace("/api/v3", "/login/oauth/access_token")}`;
-  const request = options.request || state.request;
-  const parameters = {
-    headers: {
-      accept: "application/json"
-    },
-    client_id: state.clientId,
-    client_secret: state.clientSecret,
-    code: authOptions.code,
-    redirect_uri: authOptions.redirectUrl,
-    state: authOptions.state
-  };
-  const response = await request(route, parameters);
-
-  if (response.data.error !== undefined) {
-    throw new requestError.RequestError(`${response.data.error_description} (${response.data.error})`, response.status, {
-      headers: response.headers,
-      request: request.endpoint(route, parameters)
+function _defineProperty(obj, key, value) {
+  if (key in obj) {
+    Object.defineProperty(obj, key, {
+      value: value,
+      enumerable: true,
+      configurable: true,
+      writable: true
     });
+  } else {
+    obj[key] = value;
   }
 
-  const {
-    data
-  } = response;
-  const newToken = {
-    token: data.access_token,
-    scopes: data.scope.split(/,\s*/).filter(Boolean)
-  };
+  return obj;
+}
 
-  if (!authOptionsPassed) {
-    state.token = newToken;
+function ownKeys(object, enumerableOnly) {
+  var keys = Object.keys(object);
+
+  if (Object.getOwnPropertySymbols) {
+    var symbols = Object.getOwnPropertySymbols(object);
+    if (enumerableOnly) symbols = symbols.filter(function (sym) {
+      return Object.getOwnPropertyDescriptor(object, sym).enumerable;
+    });
+    keys.push.apply(keys, symbols);
   }
 
-  return newToken;
+  return keys;
+}
+
+function _objectSpread2(target) {
+  for (var i = 1; i < arguments.length; i++) {
+    var source = arguments[i] != null ? arguments[i] : {};
+
+    if (i % 2) {
+      ownKeys(Object(source), true).forEach(function (key) {
+        _defineProperty(target, key, source[key]);
+      });
+    } else if (Object.getOwnPropertyDescriptors) {
+      Object.defineProperties(target, Object.getOwnPropertyDescriptors(source));
+    } else {
+      ownKeys(Object(source)).forEach(function (key) {
+        Object.defineProperty(target, key, Object.getOwnPropertyDescriptor(source, key));
+      });
+    }
+  }
+
+  return target;
+}
+
+function _objectWithoutPropertiesLoose(source, excluded) {
+  if (source == null) return {};
+  var target = {};
+  var sourceKeys = Object.keys(source);
+  var key, i;
+
+  for (i = 0; i < sourceKeys.length; i++) {
+    key = sourceKeys[i];
+    if (excluded.indexOf(key) >= 0) continue;
+    target[key] = source[key];
+  }
+
+  return target;
+}
+
+function _objectWithoutProperties(source, excluded) {
+  if (source == null) return {};
+
+  var target = _objectWithoutPropertiesLoose(source, excluded);
+
+  var key, i;
+
+  if (Object.getOwnPropertySymbols) {
+    var sourceSymbolKeys = Object.getOwnPropertySymbols(source);
+
+    for (i = 0; i < sourceSymbolKeys.length; i++) {
+      key = sourceSymbolKeys[i];
+      if (excluded.indexOf(key) >= 0) continue;
+      if (!Object.prototype.propertyIsEnumerable.call(source, key)) continue;
+      target[key] = source[key];
+    }
+  }
+
+  return target;
 }
 
 async function auth(state, authOptions) {
-  if (authOptions.type === "token") {
-    const {
-      token,
-      scopes
-    } = await getOAuthAccessToken(state, {
-      auth: authOptions
-    });
+  if (authOptions.type === "oauth-app") {
     return {
-      type: "token",
-      token,
-      tokenType: "oauth",
-      scopes
+      type: "oauth-app",
+      clientId: state.clientId,
+      clientSecret: state.clientSecret,
+      clientType: state.clientType,
+      headers: {
+        authorization: `basic ${btoa(`${state.clientId}:${state.clientSecret}`)}`
+      }
     };
   }
 
-  return {
-    type: "oauth-app",
+  if ("factory" in authOptions) {
+    const _authOptions$state = _objectSpread2(_objectSpread2({}, authOptions), state),
+          options = _objectWithoutProperties(_authOptions$state, ["type"]); // @ts-expect-error TODO: `option` cannot be never, is this a bug?
+
+
+    return authOptions.factory(options);
+  }
+
+  const common = _objectSpread2({
     clientId: state.clientId,
     clientSecret: state.clientSecret,
-    headers: {
-      authorization: `basic ${btoa(`${state.clientId}:${state.clientSecret}`)}`
-    }
-  };
-}
+    request: state.request
+  }, authOptions); // TS: Look what you made me do
 
-/**
- * The following endpoints require an OAuth App to authenticate using its client_id and client_secret.
- *
- * - [`POST /applications/{client_id}/token`](https://developer.github.com/v3/apps/oauth_applications/#check-a-token) - Check a token
- * - [`PATCH /applications/{client_id}/token`](https://developer.github.com/v3/apps/oauth_applications/#reset-a-token) - Reset a token
- * - [`DELETE /applications/{client_id}/token`](https://developer.github.com/v3/apps/oauth_applications/#reset-a-token) - Delete an app token
- * - [`DELETE /applications/{client_id}/grant`](https://developer.github.com/v3/apps/oauth_applications/#delete-an-app-authorization) - Delete an app authorization
- *
- * deprecated:
- *
- * - [`GET /applications/{client_id}/tokens/{access_token}`](https://developer.github.com/v3/apps/oauth_applications/#check-an-authorization) - Check an authorization
- * - [`POST /applications/{client_id}/tokens/{access_token}`](https://developer.github.com/v3/apps/oauth_applications/#reset-an-authorization) - Reset an authorization
- * - [`DELETE /applications/{client_id}/tokens/{access_token}`](https://developer.github.com/v3/apps/oauth_applications/#revoke-an-authorization-for-an-application) - Revoke an authorization for an application
- * - [`DELETE /applications/{client_id}/grants/{access_token}`](https://developer.github.com/v3/apps/oauth_applications/#revoke-a-grant-for-an-application) - Revoke a grant for an application
- */
-const ROUTES_REQUIRING_BASIC_AUTH = /\/applications\/[:{]?[\w_]+\}?\/(token|grant)(s\/[:{]?[\w_]+\}?)?($|\?)/;
-function requiresBasicAuth(url) {
-  return url && ROUTES_REQUIRING_BASIC_AUTH.test(url);
+
+  const userAuth = state.clientType === "oauth-app" ? await authOauthUser.createOAuthUserAuth(_objectSpread2(_objectSpread2({}, common), {}, {
+    clientType: state.clientType
+  })) : await authOauthUser.createOAuthUserAuth(_objectSpread2(_objectSpread2({}, common), {}, {
+    clientType: state.clientType
+  }));
+  return userAuth();
 }
 
 async function hook(state, request, route, parameters) {
-  let endpoint = request.endpoint.merge(route, parameters); // Do not intercept request to retrieve a new token
+  let endpoint = request.endpoint.merge(route, parameters); // Do not intercept OAuth Web/Device flow request
 
-  if (/\/login\/oauth\/access_token$/.test(endpoint.url)) {
+  if (/\/login\/(oauth\/access_token|device\/code)$/.test(endpoint.url)) {
     return request(endpoint);
   }
 
-  if (!state.code || requiresBasicAuth(endpoint.url)) {
-    const credentials = btoa(`${state.clientId}:${state.clientSecret}`);
-    endpoint.headers.authorization = `basic ${credentials}`;
-    const response = await request(endpoint); // `POST /applications/{client_id}/tokens/{access_token}` (legacy) or
-    // `PATCH /applications/{client_id}/token` resets the passed token
-    // and returns a new one. If that’s the current request then update internal state.
-    // Regex supports both the `{param}` as well as the legacy `:param` notation
-
-    const isLegacyTokenResetRequest = endpoint.method === "POST" && /^\/applications\/[:{]?[\w_]+\}?\/tokens\/[:{]?[\w_]+\}?$/.test(endpoint.url);
-    const isTokenResetRequest = endpoint.method === "PATCH" && /^\/applications\/[:{]?[\w_]+\}?\/token$/.test(endpoint.url);
-
-    if (isLegacyTokenResetRequest || isTokenResetRequest) {
-      state.token = {
-        token: response.data.token,
-        // @ts-ignore figure this out
-        scope: response.data.scopes
-      };
-    }
-
-    return response;
+  if (!authOauthUser.requiresBasicAuth(endpoint.url)) {
+    throw new Error(`[@octokit/auth-oauth-app] "${endpoint.method} ${endpoint.url}" does not support clientId/clientSecret basic authentication. Use @octokit/auth-oauth-user instead.`);
   }
 
-  const {
-    token
-  } = await getOAuthAccessToken(state, {
-    request
-  });
-  endpoint.headers.authorization = `token ${token}`;
-  return request(endpoint);
+  const credentials = btoa(`${state.clientId}:${state.clientSecret}`);
+  endpoint.headers.authorization = `basic ${credentials}`;
+  return await request(endpoint);
 }
 
-const VERSION = "3.0.8";
+const VERSION = "4.1.1";
 
 function createOAuthAppAuth(options) {
   const state = Object.assign({
@@ -1592,14 +1643,973 @@ function createOAuthAppAuth(options) {
       headers: {
         "user-agent": `octokit-auth-oauth-app.js/${VERSION} ${universalUserAgent.getUserAgent()}`
       }
-    })
-  }, options);
+    }),
+    clientType: "oauth-app"
+  }, options); // @ts-expect-error not worth the extra code to appease TS
+
+  return Object.assign(auth.bind(null, state), {
+    // @ts-expect-error not worth the extra code to appease TS
+    hook: hook.bind(null, state)
+  });
+}
+
+Object.defineProperty(exports, "createOAuthUserAuth", ({
+  enumerable: true,
+  get: function () {
+    return authOauthUser.createOAuthUserAuth;
+  }
+}));
+exports.createOAuthAppAuth = createOAuthAppAuth;
+//# sourceMappingURL=index.js.map
+
+
+/***/ }),
+
+/***/ 4344:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+
+var universalUserAgent = __nccwpck_require__(5030);
+var request = __nccwpck_require__(4847);
+var oauthMethods = __nccwpck_require__(8445);
+
+function _defineProperty(obj, key, value) {
+  if (key in obj) {
+    Object.defineProperty(obj, key, {
+      value: value,
+      enumerable: true,
+      configurable: true,
+      writable: true
+    });
+  } else {
+    obj[key] = value;
+  }
+
+  return obj;
+}
+
+function ownKeys(object, enumerableOnly) {
+  var keys = Object.keys(object);
+
+  if (Object.getOwnPropertySymbols) {
+    var symbols = Object.getOwnPropertySymbols(object);
+    if (enumerableOnly) symbols = symbols.filter(function (sym) {
+      return Object.getOwnPropertyDescriptor(object, sym).enumerable;
+    });
+    keys.push.apply(keys, symbols);
+  }
+
+  return keys;
+}
+
+function _objectSpread2(target) {
+  for (var i = 1; i < arguments.length; i++) {
+    var source = arguments[i] != null ? arguments[i] : {};
+
+    if (i % 2) {
+      ownKeys(Object(source), true).forEach(function (key) {
+        _defineProperty(target, key, source[key]);
+      });
+    } else if (Object.getOwnPropertyDescriptors) {
+      Object.defineProperties(target, Object.getOwnPropertyDescriptors(source));
+    } else {
+      ownKeys(Object(source)).forEach(function (key) {
+        Object.defineProperty(target, key, Object.getOwnPropertyDescriptor(source, key));
+      });
+    }
+  }
+
+  return target;
+}
+
+function _objectWithoutPropertiesLoose(source, excluded) {
+  if (source == null) return {};
+  var target = {};
+  var sourceKeys = Object.keys(source);
+  var key, i;
+
+  for (i = 0; i < sourceKeys.length; i++) {
+    key = sourceKeys[i];
+    if (excluded.indexOf(key) >= 0) continue;
+    target[key] = source[key];
+  }
+
+  return target;
+}
+
+function _objectWithoutProperties(source, excluded) {
+  if (source == null) return {};
+
+  var target = _objectWithoutPropertiesLoose(source, excluded);
+
+  var key, i;
+
+  if (Object.getOwnPropertySymbols) {
+    var sourceSymbolKeys = Object.getOwnPropertySymbols(source);
+
+    for (i = 0; i < sourceSymbolKeys.length; i++) {
+      key = sourceSymbolKeys[i];
+      if (excluded.indexOf(key) >= 0) continue;
+      if (!Object.prototype.propertyIsEnumerable.call(source, key)) continue;
+      target[key] = source[key];
+    }
+  }
+
+  return target;
+}
+
+async function getOAuthAccessToken(state, options) {
+  const cachedAuthentication = getCachedAuthentication(state, options.auth);
+  if (cachedAuthentication) return cachedAuthentication; // Step 1: Request device and user codes
+  // https://docs.github.com/en/developers/apps/authorizing-oauth-apps#step-1-app-requests-the-device-and-user-verification-codes-from-github
+
+  const {
+    data: verification
+  } = await oauthMethods.createDeviceCode({
+    clientType: state.clientType,
+    clientId: state.clientId,
+    request: options.request || state.request,
+    // @ts-expect-error the extra code to make TS happy is not worth it
+    scopes: options.auth.scopes || state.scopes
+  }); // Step 2: User must enter the user code on https://github.com/login/device
+  // See https://docs.github.com/en/developers/apps/authorizing-oauth-apps#step-2-prompt-the-user-to-enter-the-user-code-in-a-browser
+
+  await state.onVerification(verification); // Step 3: Exchange device code for access token
+  // See https://docs.github.com/en/developers/apps/authorizing-oauth-apps#step-3-app-polls-github-to-check-if-the-user-authorized-the-device
+
+  const authentication = await waitForAccessToken(options.request || state.request, state.clientId, state.clientType, verification);
+  state.authentication = authentication;
+  return authentication;
+}
+
+function getCachedAuthentication(state, auth) {
+  if (auth.refresh === true) return false;
+  if (!state.authentication) return false;
+
+  if (state.clientType === "github-app") {
+    return state.authentication;
+  }
+
+  const authentication = state.authentication;
+  const newScope = ("scopes" in auth && auth.scopes || state.scopes).join(" ");
+  const currentScope = authentication.scopes.join(" ");
+  return newScope === currentScope ? authentication : false;
+}
+
+async function wait(seconds) {
+  await new Promise(resolve => setTimeout(resolve, seconds * 1000));
+}
+
+async function waitForAccessToken(request, clientId, clientType, verification) {
+  try {
+    const options = {
+      clientId,
+      request,
+      code: verification.device_code
+    }; // WHY TYPESCRIPT WHY ARE YOU DOING THIS TO ME
+
+    const {
+      authentication
+    } = clientType === "oauth-app" ? await oauthMethods.exchangeDeviceCode(_objectSpread2(_objectSpread2({}, options), {}, {
+      clientType: "oauth-app"
+    })) : await oauthMethods.exchangeDeviceCode(_objectSpread2(_objectSpread2({}, options), {}, {
+      clientType: "github-app"
+    }));
+    return _objectSpread2({
+      type: "token",
+      tokenType: "oauth"
+    }, authentication);
+  } catch (error) {
+    // istanbul ignore if
+    if (!error.response) throw error;
+    const errorType = error.response.data.error;
+
+    if (errorType === "authorization_pending") {
+      await wait(verification.interval);
+      return waitForAccessToken(request, clientId, clientType, verification);
+    }
+
+    if (errorType === "slow_down") {
+      await wait(verification.interval + 5);
+      return waitForAccessToken(request, clientId, clientType, verification);
+    }
+
+    throw error;
+  }
+}
+
+async function auth(state, authOptions) {
+  return getOAuthAccessToken(state, {
+    auth: authOptions
+  });
+}
+
+async function hook(state, request, route, parameters) {
+  let endpoint = request.endpoint.merge(route, parameters); // Do not intercept request to retrieve codes or token
+
+  if (/\/login\/(oauth\/access_token|device\/code)$/.test(endpoint.url)) {
+    return request(endpoint);
+  }
+
+  const {
+    token
+  } = await getOAuthAccessToken(state, {
+    request,
+    auth: {
+      type: "oauth"
+    }
+  });
+  endpoint.headers.authorization = `token ${token}`;
+  return request(endpoint);
+}
+
+const VERSION = "3.1.1";
+
+function createOAuthDeviceAuth(options) {
+  const requestWithDefaults = options.request || request.request.defaults({
+    headers: {
+      "user-agent": `octokit-auth-oauth-device.js/${VERSION} ${universalUserAgent.getUserAgent()}`
+    }
+  });
+
+  const {
+    request: request$1 = requestWithDefaults
+  } = options,
+        otherOptions = _objectWithoutProperties(options, ["request"]);
+
+  const state = options.clientType === "github-app" ? _objectSpread2(_objectSpread2({}, otherOptions), {}, {
+    clientType: "github-app",
+    request: request$1
+  }) : _objectSpread2(_objectSpread2({}, otherOptions), {}, {
+    clientType: "oauth-app",
+    request: request$1,
+    scopes: options.scopes || []
+  });
+
+  if (!options.clientId) {
+    throw new Error('[@octokit/auth-oauth-device] "clientId" option must be set (https://github.com/octokit/auth-oauth-device.js#usage)');
+  }
+
+  if (!options.onVerification) {
+    throw new Error('[@octokit/auth-oauth-device] "onVerification" option must be a function (https://github.com/octokit/auth-oauth-device.js#usage)');
+  } // @ts-ignore too much for tsc / ts-jest ¯\_(ツ)_/¯
+
+
   return Object.assign(auth.bind(null, state), {
     hook: hook.bind(null, state)
   });
 }
 
-exports.createOAuthAppAuth = createOAuthAppAuth;
+exports.createOAuthDeviceAuth = createOAuthDeviceAuth;
+//# sourceMappingURL=index.js.map
+
+
+/***/ }),
+
+/***/ 4847:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+
+function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
+
+var endpoint = __nccwpck_require__(9440);
+var universalUserAgent = __nccwpck_require__(5030);
+var isPlainObject = __nccwpck_require__(3287);
+var nodeFetch = _interopDefault(__nccwpck_require__(467));
+var requestError = __nccwpck_require__(537);
+
+const VERSION = "5.4.14";
+
+function getBufferResponse(response) {
+  return response.arrayBuffer();
+}
+
+function fetchWrapper(requestOptions) {
+  if (isPlainObject.isPlainObject(requestOptions.body) || Array.isArray(requestOptions.body)) {
+    requestOptions.body = JSON.stringify(requestOptions.body);
+  }
+
+  let headers = {};
+  let status;
+  let url;
+  const fetch = requestOptions.request && requestOptions.request.fetch || nodeFetch;
+  return fetch(requestOptions.url, Object.assign({
+    method: requestOptions.method,
+    body: requestOptions.body,
+    headers: requestOptions.headers,
+    redirect: requestOptions.redirect
+  }, requestOptions.request)).then(response => {
+    url = response.url;
+    status = response.status;
+
+    for (const keyAndValue of response.headers) {
+      headers[keyAndValue[0]] = keyAndValue[1];
+    }
+
+    if (status === 204 || status === 205) {
+      return;
+    } // GitHub API returns 200 for HEAD requests
+
+
+    if (requestOptions.method === "HEAD") {
+      if (status < 400) {
+        return;
+      }
+
+      throw new requestError.RequestError(response.statusText, status, {
+        headers,
+        request: requestOptions
+      });
+    }
+
+    if (status === 304) {
+      throw new requestError.RequestError("Not modified", status, {
+        headers,
+        request: requestOptions
+      });
+    }
+
+    if (status >= 400) {
+      return response.text().then(message => {
+        const error = new requestError.RequestError(message, status, {
+          headers,
+          request: requestOptions
+        });
+
+        try {
+          let responseBody = JSON.parse(error.message);
+          Object.assign(error, responseBody);
+          let errors = responseBody.errors; // Assumption `errors` would always be in Array format
+
+          error.message = error.message + ": " + errors.map(JSON.stringify).join(", ");
+        } catch (e) {// ignore, see octokit/rest.js#684
+        }
+
+        throw error;
+      });
+    }
+
+    const contentType = response.headers.get("content-type");
+
+    if (/application\/json/.test(contentType)) {
+      return response.json();
+    }
+
+    if (!contentType || /^text\/|charset=utf-8$/.test(contentType)) {
+      return response.text();
+    }
+
+    return getBufferResponse(response);
+  }).then(data => {
+    return {
+      status,
+      url,
+      headers,
+      data
+    };
+  }).catch(error => {
+    if (error instanceof requestError.RequestError) {
+      throw error;
+    }
+
+    throw new requestError.RequestError(error.message, 500, {
+      headers,
+      request: requestOptions
+    });
+  });
+}
+
+function withDefaults(oldEndpoint, newDefaults) {
+  const endpoint = oldEndpoint.defaults(newDefaults);
+
+  const newApi = function (route, parameters) {
+    const endpointOptions = endpoint.merge(route, parameters);
+
+    if (!endpointOptions.request || !endpointOptions.request.hook) {
+      return fetchWrapper(endpoint.parse(endpointOptions));
+    }
+
+    const request = (route, parameters) => {
+      return fetchWrapper(endpoint.parse(endpoint.merge(route, parameters)));
+    };
+
+    Object.assign(request, {
+      endpoint,
+      defaults: withDefaults.bind(null, endpoint)
+    });
+    return endpointOptions.request.hook(request, endpointOptions);
+  };
+
+  return Object.assign(newApi, {
+    endpoint,
+    defaults: withDefaults.bind(null, endpoint)
+  });
+}
+
+const request = withDefaults(endpoint.endpoint, {
+  headers: {
+    "user-agent": `octokit-request.js/${VERSION} ${universalUserAgent.getUserAgent()}`
+  }
+});
+
+exports.request = request;
+//# sourceMappingURL=index.js.map
+
+
+/***/ }),
+
+/***/ 1591:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+
+function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
+
+var universalUserAgent = __nccwpck_require__(5030);
+var request = __nccwpck_require__(8608);
+var authOauthDevice = __nccwpck_require__(4344);
+var oauthMethods = __nccwpck_require__(8445);
+var btoa = _interopDefault(__nccwpck_require__(2358));
+
+function _defineProperty(obj, key, value) {
+  if (key in obj) {
+    Object.defineProperty(obj, key, {
+      value: value,
+      enumerable: true,
+      configurable: true,
+      writable: true
+    });
+  } else {
+    obj[key] = value;
+  }
+
+  return obj;
+}
+
+function ownKeys(object, enumerableOnly) {
+  var keys = Object.keys(object);
+
+  if (Object.getOwnPropertySymbols) {
+    var symbols = Object.getOwnPropertySymbols(object);
+    if (enumerableOnly) symbols = symbols.filter(function (sym) {
+      return Object.getOwnPropertyDescriptor(object, sym).enumerable;
+    });
+    keys.push.apply(keys, symbols);
+  }
+
+  return keys;
+}
+
+function _objectSpread2(target) {
+  for (var i = 1; i < arguments.length; i++) {
+    var source = arguments[i] != null ? arguments[i] : {};
+
+    if (i % 2) {
+      ownKeys(Object(source), true).forEach(function (key) {
+        _defineProperty(target, key, source[key]);
+      });
+    } else if (Object.getOwnPropertyDescriptors) {
+      Object.defineProperties(target, Object.getOwnPropertyDescriptors(source));
+    } else {
+      ownKeys(Object(source)).forEach(function (key) {
+        Object.defineProperty(target, key, Object.getOwnPropertyDescriptor(source, key));
+      });
+    }
+  }
+
+  return target;
+}
+
+function _objectWithoutPropertiesLoose(source, excluded) {
+  if (source == null) return {};
+  var target = {};
+  var sourceKeys = Object.keys(source);
+  var key, i;
+
+  for (i = 0; i < sourceKeys.length; i++) {
+    key = sourceKeys[i];
+    if (excluded.indexOf(key) >= 0) continue;
+    target[key] = source[key];
+  }
+
+  return target;
+}
+
+function _objectWithoutProperties(source, excluded) {
+  if (source == null) return {};
+
+  var target = _objectWithoutPropertiesLoose(source, excluded);
+
+  var key, i;
+
+  if (Object.getOwnPropertySymbols) {
+    var sourceSymbolKeys = Object.getOwnPropertySymbols(source);
+
+    for (i = 0; i < sourceSymbolKeys.length; i++) {
+      key = sourceSymbolKeys[i];
+      if (excluded.indexOf(key) >= 0) continue;
+      if (!Object.prototype.propertyIsEnumerable.call(source, key)) continue;
+      target[key] = source[key];
+    }
+  }
+
+  return target;
+}
+
+const VERSION = "1.2.3";
+
+async function getAuthentication(state) {
+  // handle code exchange form OAuth Web Flow
+  if ("code" in state.strategyOptions) {
+    const {
+      authentication
+    } = await oauthMethods.exchangeWebFlowCode(_objectSpread2(_objectSpread2({
+      clientId: state.clientId,
+      clientSecret: state.clientSecret,
+      clientType: state.clientType
+    }, state.strategyOptions), {}, {
+      request: state.request
+    }));
+    return _objectSpread2({
+      type: "token",
+      tokenType: "oauth"
+    }, authentication);
+  } // handle OAuth device flow
+
+
+  if ("onVerification" in state.strategyOptions) {
+    const deviceAuth = authOauthDevice.createOAuthDeviceAuth(_objectSpread2(_objectSpread2({
+      clientType: state.clientType,
+      clientId: state.clientId
+    }, state.strategyOptions), {}, {
+      request: state.request
+    }));
+    const authentication = await deviceAuth({
+      type: "oauth"
+    });
+    return _objectSpread2({
+      clientSecret: state.clientSecret
+    }, authentication);
+  } // use existing authentication
+
+
+  if ("token" in state.strategyOptions) {
+    return _objectSpread2({
+      type: "token",
+      tokenType: "oauth",
+      clientId: state.clientId,
+      clientSecret: state.clientSecret,
+      clientType: state.clientType
+    }, state.strategyOptions);
+  }
+
+  throw new Error("[@octokit/auth-oauth-user] Invalid strategy options");
+}
+
+async function auth(state, options = {}) {
+  if (!state.authentication) {
+    // This is what TS makes us do ¯\_(ツ)_/¯
+    state.authentication = state.clientType === "oauth-app" ? await getAuthentication(state) : await getAuthentication(state);
+  }
+
+  if (state.authentication.invalid) {
+    throw new Error("[@octokit/auth-oauth-user] Token is invalid");
+  }
+
+  const currentAuthentication = state.authentication; // (auto) refresh for user-to-server tokens
+
+  if ("expiresAt" in currentAuthentication) {
+    if (options.type === "refresh" || new Date(currentAuthentication.expiresAt) < new Date()) {
+      const {
+        authentication
+      } = await oauthMethods.refreshToken({
+        clientType: "github-app",
+        clientId: state.clientId,
+        clientSecret: state.clientSecret,
+        refreshToken: currentAuthentication.refreshToken,
+        request: state.request
+      });
+      state.authentication = _objectSpread2({
+        tokenType: "oauth",
+        type: "token"
+      }, authentication);
+    }
+  } // throw error for invalid refresh call
+
+
+  if (options.type === "refresh") {
+    if (state.clientType === "oauth-app") {
+      throw new Error("[@octokit/auth-oauth-user] OAuth Apps do not support expiring tokens");
+    }
+
+    if (!currentAuthentication.hasOwnProperty("expiresAt")) {
+      throw new Error("[@octokit/auth-oauth-user] Refresh token missing");
+    }
+  } // check or reset token
+
+
+  if (options.type === "check" || options.type === "reset") {
+    const method = options.type === "check" ? oauthMethods.checkToken : oauthMethods.resetToken;
+
+    try {
+      const {
+        authentication
+      } = await method({
+        // @ts-expect-error making TS happy would require unnecessary code so no
+        clientType: state.clientType,
+        clientId: state.clientId,
+        clientSecret: state.clientSecret,
+        token: state.authentication.token,
+        request: state.request
+      });
+      state.authentication = _objectSpread2({
+        tokenType: "oauth",
+        type: "token"
+      }, authentication);
+      return state.authentication;
+    } catch (error) {
+      // istanbul ignore else
+      if (error.status === 404) {
+        error.message = "[@octokit/auth-oauth-user] Token is invalid"; // @ts-expect-error TBD
+
+        state.authentication.invalid = true;
+      }
+
+      throw error;
+    }
+  } // invalidate
+
+
+  if (options.type === "delete" || options.type === "deleteAuthorization") {
+    const method = options.type === "delete" ? oauthMethods.deleteToken : oauthMethods.deleteAuthorization;
+
+    try {
+      await method({
+        // @ts-expect-error making TS happy would require unnecessary code so no
+        clientType: state.clientType,
+        clientId: state.clientId,
+        clientSecret: state.clientSecret,
+        token: state.authentication.token,
+        request: state.request
+      });
+    } catch (error) {
+      // istanbul ignore if
+      if (error.status !== 404) throw error;
+    }
+
+    state.authentication.invalid = true;
+    return state.authentication;
+  }
+
+  return state.authentication;
+}
+
+/**
+ * The following endpoints require an OAuth App to authenticate using its client_id and client_secret.
+ *
+ * - [`POST /applications/{client_id}/token`](https://docs.github.com/en/rest/reference/apps#check-a-token) - Check a token
+ * - [`PATCH /applications/{client_id}/token`](https://docs.github.com/en/rest/reference/apps#reset-a-token) - Reset a token
+ * - [`POST /applications/{client_id}/token/scoped`](https://docs.github.com/en/rest/reference/apps#create-a-scoped-access-token) - Create a scoped access token
+ * - [`DELETE /applications/{client_id}/token`](https://docs.github.com/en/rest/reference/apps#delete-an-app-token) - Delete an app token
+ * - [`DELETE /applications/{client_id}/grant`](https://docs.github.com/en/rest/reference/apps#delete-an-app-authorization) - Delete an app authorization
+ *
+ * deprecated:
+ *
+ * - [`GET /applications/{client_id}/tokens/{access_token}`](https://docs.github.com/en/rest/reference/apps#check-an-authorization) - Check an authorization
+ * - [`POST /applications/{client_id}/tokens/{access_token}`](https://docs.github.com/en/rest/reference/apps#reset-an-authorization) - Reset an authorization
+ * - [`DELETE /applications/{client_id}/tokens/{access_token}`](https://docs.github.com/en/rest/reference/apps#revoke-an-authorization-for-an-application) - Revoke an authorization for an application
+ * - [`DELETE /applications/{client_id}/grants/{access_token}`](https://docs.github.com/en/rest/reference/apps#revoke-a-grant-for-an-application) - Revoke a grant for an application
+ */
+const ROUTES_REQUIRING_BASIC_AUTH = /\/applications\/[^/]+\/(token|grant)s?/;
+function requiresBasicAuth(url) {
+  return url && ROUTES_REQUIRING_BASIC_AUTH.test(url);
+}
+
+async function hook(state, request, route, parameters = {}) {
+  const endpoint = request.endpoint.merge(route, parameters); // Do not intercept OAuth Web/Device flow request
+
+  if (/\/login\/(oauth\/access_token|device\/code)$/.test(endpoint.url)) {
+    return request(endpoint);
+  }
+
+  if (requiresBasicAuth(endpoint.url)) {
+    const credentials = btoa(`${state.clientId}:${state.clientSecret}`);
+    endpoint.headers.authorization = `basic ${credentials}`;
+    return request(endpoint);
+  } // TS makes us do this ¯\_(ツ)_/¯
+
+
+  const {
+    token
+  } = state.clientType === "oauth-app" ? await auth(_objectSpread2(_objectSpread2({}, state), {}, {
+    request
+  })) : await auth(_objectSpread2(_objectSpread2({}, state), {}, {
+    request
+  }));
+  endpoint.headers.authorization = "token " + token;
+  return request(endpoint);
+}
+
+function createOAuthUserAuth(_ref) {
+  let {
+    clientId,
+    clientSecret,
+    clientType = "oauth-app",
+    request: request$1 = request.request.defaults({
+      headers: {
+        "user-agent": `octokit-auth-oauth-app.js/${VERSION} ${universalUserAgent.getUserAgent()}`
+      }
+    })
+  } = _ref,
+      strategyOptions = _objectWithoutProperties(_ref, ["clientId", "clientSecret", "clientType", "request"]);
+
+  const state = Object.assign({
+    clientType,
+    clientId,
+    clientSecret,
+    strategyOptions,
+    request: request$1
+  }); // @ts-expect-error not worth the extra code needed to appease TS
+
+  return Object.assign(auth.bind(null, state), {
+    // @ts-expect-error not worth the extra code needed to appease TS
+    hook: hook.bind(null, state)
+  });
+}
+createOAuthUserAuth.VERSION = VERSION;
+
+exports.createOAuthUserAuth = createOAuthUserAuth;
+exports.requiresBasicAuth = requiresBasicAuth;
+//# sourceMappingURL=index.js.map
+
+
+/***/ }),
+
+/***/ 7450:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+
+function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
+
+var deprecation = __nccwpck_require__(8932);
+var once = _interopDefault(__nccwpck_require__(1223));
+
+const logOnce = once(deprecation => console.warn(deprecation));
+/**
+ * Error with extra properties to help with debugging
+ */
+
+class RequestError extends Error {
+  constructor(message, statusCode, options) {
+    super(message); // Maintains proper stack trace (only available on V8)
+
+    /* istanbul ignore next */
+
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, this.constructor);
+    }
+
+    this.name = "HttpError";
+    this.status = statusCode;
+    Object.defineProperty(this, "code", {
+      get() {
+        logOnce(new deprecation.Deprecation("[@octokit/request-error] `error.code` is deprecated, use `error.status`."));
+        return statusCode;
+      }
+
+    });
+    this.headers = options.headers || {}; // redact request credentials without mutating original request options
+
+    const requestCopy = Object.assign({}, options.request);
+
+    if (options.request.headers.authorization) {
+      requestCopy.headers = Object.assign({}, options.request.headers, {
+        authorization: options.request.headers.authorization.replace(/ .*$/, " [REDACTED]")
+      });
+    }
+
+    requestCopy.url = requestCopy.url // client_id & client_secret can be passed as URL query parameters to increase rate limit
+    // see https://developer.github.com/v3/#increasing-the-unauthenticated-rate-limit-for-oauth-applications
+    .replace(/\bclient_secret=\w+/g, "client_secret=[REDACTED]") // OAuth tokens can be passed as URL query parameters, although it is not recommended
+    // see https://developer.github.com/v3/#oauth2-token-sent-in-a-header
+    .replace(/\baccess_token=\w+/g, "access_token=[REDACTED]");
+    this.request = requestCopy;
+  }
+
+}
+
+exports.RequestError = RequestError;
+//# sourceMappingURL=index.js.map
+
+
+/***/ }),
+
+/***/ 8608:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+
+function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
+
+var endpoint = __nccwpck_require__(9440);
+var universalUserAgent = __nccwpck_require__(5030);
+var isPlainObject = __nccwpck_require__(3287);
+var nodeFetch = _interopDefault(__nccwpck_require__(467));
+var requestError = __nccwpck_require__(7450);
+
+const VERSION = "5.4.14";
+
+function getBufferResponse(response) {
+  return response.arrayBuffer();
+}
+
+function fetchWrapper(requestOptions) {
+  if (isPlainObject.isPlainObject(requestOptions.body) || Array.isArray(requestOptions.body)) {
+    requestOptions.body = JSON.stringify(requestOptions.body);
+  }
+
+  let headers = {};
+  let status;
+  let url;
+  const fetch = requestOptions.request && requestOptions.request.fetch || nodeFetch;
+  return fetch(requestOptions.url, Object.assign({
+    method: requestOptions.method,
+    body: requestOptions.body,
+    headers: requestOptions.headers,
+    redirect: requestOptions.redirect
+  }, requestOptions.request)).then(response => {
+    url = response.url;
+    status = response.status;
+
+    for (const keyAndValue of response.headers) {
+      headers[keyAndValue[0]] = keyAndValue[1];
+    }
+
+    if (status === 204 || status === 205) {
+      return;
+    } // GitHub API returns 200 for HEAD requests
+
+
+    if (requestOptions.method === "HEAD") {
+      if (status < 400) {
+        return;
+      }
+
+      throw new requestError.RequestError(response.statusText, status, {
+        headers,
+        request: requestOptions
+      });
+    }
+
+    if (status === 304) {
+      throw new requestError.RequestError("Not modified", status, {
+        headers,
+        request: requestOptions
+      });
+    }
+
+    if (status >= 400) {
+      return response.text().then(message => {
+        const error = new requestError.RequestError(message, status, {
+          headers,
+          request: requestOptions
+        });
+
+        try {
+          let responseBody = JSON.parse(error.message);
+          Object.assign(error, responseBody);
+          let errors = responseBody.errors; // Assumption `errors` would always be in Array format
+
+          error.message = error.message + ": " + errors.map(JSON.stringify).join(", ");
+        } catch (e) {// ignore, see octokit/rest.js#684
+        }
+
+        throw error;
+      });
+    }
+
+    const contentType = response.headers.get("content-type");
+
+    if (/application\/json/.test(contentType)) {
+      return response.json();
+    }
+
+    if (!contentType || /^text\/|charset=utf-8$/.test(contentType)) {
+      return response.text();
+    }
+
+    return getBufferResponse(response);
+  }).then(data => {
+    return {
+      status,
+      url,
+      headers,
+      data
+    };
+  }).catch(error => {
+    if (error instanceof requestError.RequestError) {
+      throw error;
+    }
+
+    throw new requestError.RequestError(error.message, 500, {
+      headers,
+      request: requestOptions
+    });
+  });
+}
+
+function withDefaults(oldEndpoint, newDefaults) {
+  const endpoint = oldEndpoint.defaults(newDefaults);
+
+  const newApi = function (route, parameters) {
+    const endpointOptions = endpoint.merge(route, parameters);
+
+    if (!endpointOptions.request || !endpointOptions.request.hook) {
+      return fetchWrapper(endpoint.parse(endpointOptions));
+    }
+
+    const request = (route, parameters) => {
+      return fetchWrapper(endpoint.parse(endpoint.merge(route, parameters)));
+    };
+
+    Object.assign(request, {
+      endpoint,
+      defaults: withDefaults.bind(null, endpoint)
+    });
+    return endpointOptions.request.hook(request, endpointOptions);
+  };
+
+  return Object.assign(newApi, {
+    endpoint,
+    defaults: withDefaults.bind(null, endpoint)
+  });
+}
+
+const request = withDefaults(endpoint.endpoint, {
+  headers: {
+    "user-agent": `octokit-request.js/${VERSION} ${universalUserAgent.getUserAgent()}`
+  }
+});
+
+exports.request = request;
 //# sourceMappingURL=index.js.map
 
 
@@ -2453,16 +3463,64 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
 
-var authOauthApp = __nccwpck_require__(8459);
-var core = __nccwpck_require__(6762);
+var OAuthAppAuth = __nccwpck_require__(8459);
+var core = __nccwpck_require__(2113);
 var universalUserAgent = __nccwpck_require__(5030);
-var oauthAuthorizationUrl = __nccwpck_require__(1017);
-var request = __nccwpck_require__(6234);
-var btoa = _interopDefault(__nccwpck_require__(2358));
+var authOauthUser = __nccwpck_require__(1591);
+var OAuthMethods = __nccwpck_require__(8445);
 var authUnauthenticated = __nccwpck_require__(9567);
 var fromEntries = _interopDefault(__nccwpck_require__(6522));
 
-const VERSION = "2.0.4";
+function _defineProperty(obj, key, value) {
+  if (key in obj) {
+    Object.defineProperty(obj, key, {
+      value: value,
+      enumerable: true,
+      configurable: true,
+      writable: true
+    });
+  } else {
+    obj[key] = value;
+  }
+
+  return obj;
+}
+
+function ownKeys(object, enumerableOnly) {
+  var keys = Object.keys(object);
+
+  if (Object.getOwnPropertySymbols) {
+    var symbols = Object.getOwnPropertySymbols(object);
+    if (enumerableOnly) symbols = symbols.filter(function (sym) {
+      return Object.getOwnPropertyDescriptor(object, sym).enumerable;
+    });
+    keys.push.apply(keys, symbols);
+  }
+
+  return keys;
+}
+
+function _objectSpread2(target) {
+  for (var i = 1; i < arguments.length; i++) {
+    var source = arguments[i] != null ? arguments[i] : {};
+
+    if (i % 2) {
+      ownKeys(Object(source), true).forEach(function (key) {
+        _defineProperty(target, key, source[key]);
+      });
+    } else if (Object.getOwnPropertyDescriptors) {
+      Object.defineProperties(target, Object.getOwnPropertyDescriptors(source));
+    } else {
+      ownKeys(Object(source)).forEach(function (key) {
+        Object.defineProperty(target, key, Object.getOwnPropertyDescriptor(source, key));
+      });
+    }
+  }
+
+  return target;
+}
+
+const VERSION = "3.2.0";
 
 function addEventHandler(state, eventName, eventHandler) {
   if (Array.isArray(eventName)) {
@@ -2483,6 +3541,1072 @@ function addEventHandler(state, eventName, eventHandler) {
 const OAuthAppOctokit = core.Octokit.defaults({
   userAgent: `octokit-oauth-app.js/${VERSION} ${universalUserAgent.getUserAgent()}`
 });
+
+async function getUserOctokitWithState(state, options) {
+  return state.octokit.auth(_objectSpread2(_objectSpread2({
+    type: "oauth-user"
+  }, options), {}, {
+    factory(options) {
+      return new state.Octokit({
+        authStrategy: authOauthUser.createOAuthUserAuth,
+        auth: options
+      });
+    }
+
+  }));
+}
+
+function getWebFlowAuthorizationUrlWithState(state, options) {
+  const optionsWithDefaults = _objectSpread2(_objectSpread2({
+    clientId: state.clientId,
+    request: state.octokit.request
+  }, options), {}, {
+    allowSignup: options.allowSignup || state.allowSignup,
+    scopes: options.scopes || state.defaultScopes
+  });
+
+  return OAuthMethods.getWebFlowAuthorizationUrl(_objectSpread2({
+    clientType: state.clientType
+  }, optionsWithDefaults));
+}
+
+async function emitEvent(state, context) {
+  const {
+    name,
+    action
+  } = context;
+
+  if (state.eventHandlers[`${name}.${action}`]) {
+    for (const eventHandler of state.eventHandlers[`${name}.${action}`]) {
+      await eventHandler(context);
+    }
+  }
+
+  if (state.eventHandlers[name]) {
+    for (const eventHandler of state.eventHandlers[name]) {
+      await eventHandler(context);
+    }
+  }
+}
+
+async function createTokenWithState(state, options) {
+  const authentication = await state.octokit.auth(_objectSpread2({
+    type: "oauth-user"
+  }, options));
+  await emitEvent(state, {
+    name: "token",
+    action: "created",
+    token: authentication.token,
+    scopes: authentication.scopes,
+    authentication,
+    octokit: new state.Octokit({
+      authStrategy: OAuthAppAuth.createOAuthUserAuth,
+      auth: {
+        clientType: state.clientType,
+        clientId: state.clientId,
+        clientSecret: state.clientSecret,
+        token: authentication.token,
+        scopes: authentication.scopes,
+        refreshToken: authentication.refreshToken,
+        expiresAt: authentication.expiresAt,
+        refreshTokenExpiresAt: authentication.refreshTokenExpiresAt
+      }
+    })
+  });
+  return {
+    authentication
+  };
+}
+
+async function checkTokenWithState(state, options) {
+  return await OAuthMethods.checkToken(_objectSpread2({
+    // @ts-expect-error not worth the extra code to appease TS
+    clientType: state.clientType,
+    clientId: state.clientId,
+    clientSecret: state.clientSecret,
+    request: state.octokit.request
+  }, options));
+}
+
+async function resetTokenWithState(state, options) {
+  const optionsWithDefaults = _objectSpread2({
+    clientId: state.clientId,
+    clientSecret: state.clientSecret,
+    request: state.octokit.request
+  }, options);
+
+  if (state.clientType === "oauth-app") {
+    const response = await OAuthMethods.resetToken(_objectSpread2({
+      clientType: "oauth-app"
+    }, optionsWithDefaults));
+    await emitEvent(state, {
+      name: "token",
+      action: "reset",
+      token: response.authentication.token,
+      scopes: response.authentication.scopes || undefined,
+      authentication: _objectSpread2({
+        type: "token",
+        tokenType: "oauth"
+      }, response.authentication),
+      octokit: new state.Octokit({
+        authStrategy: authOauthUser.createOAuthUserAuth,
+        auth: {
+          clientType: state.clientType,
+          clientId: state.clientId,
+          clientSecret: state.clientSecret,
+          token: response.authentication.token,
+          scopes: response.authentication.scopes
+        }
+      })
+    });
+    return response;
+  }
+
+  const response = await OAuthMethods.resetToken(_objectSpread2({
+    clientType: "github-app"
+  }, optionsWithDefaults));
+  await emitEvent(state, {
+    name: "token",
+    action: "reset",
+    token: response.authentication.token,
+    authentication: _objectSpread2({
+      type: "token",
+      tokenType: "oauth"
+    }, response.authentication),
+    octokit: new state.Octokit({
+      authStrategy: authOauthUser.createOAuthUserAuth,
+      auth: {
+        clientType: state.clientType,
+        clientId: state.clientId,
+        clientSecret: state.clientSecret,
+        token: response.authentication.token
+      }
+    })
+  });
+  return response;
+}
+
+async function refreshTokenWithState(state, options) {
+  if (state.clientType === "oauth-app") {
+    throw new Error("[@octokit/oauth-app] app.refreshToken() is not supported for OAuth Apps");
+  }
+
+  const response = await OAuthMethods.refreshToken({
+    clientType: "github-app",
+    clientId: state.clientId,
+    clientSecret: state.clientSecret,
+    request: state.octokit.request,
+    refreshToken: options.refreshToken
+  });
+  await emitEvent(state, {
+    name: "token",
+    action: "refreshed",
+    token: response.authentication.token,
+    authentication: _objectSpread2({
+      type: "token",
+      tokenType: "oauth"
+    }, response.authentication),
+    octokit: new state.Octokit({
+      authStrategy: authOauthUser.createOAuthUserAuth,
+      auth: {
+        clientType: state.clientType,
+        clientId: state.clientId,
+        clientSecret: state.clientSecret,
+        token: response.authentication.token
+      }
+    })
+  });
+  return response;
+}
+
+async function scopeTokenWithState(state, options) {
+  if (state.clientType === "oauth-app") {
+    throw new Error("[@octokit/oauth-app] app.scopeToken() is not supported for OAuth Apps");
+  }
+
+  const response = await OAuthMethods.scopeToken(_objectSpread2({
+    clientType: "github-app",
+    clientId: state.clientId,
+    clientSecret: state.clientSecret,
+    request: state.octokit.request
+  }, options));
+  await emitEvent(state, {
+    name: "token",
+    action: "scoped",
+    token: response.authentication.token,
+    authentication: _objectSpread2({
+      type: "token",
+      tokenType: "oauth"
+    }, response.authentication),
+    octokit: new state.Octokit({
+      authStrategy: authOauthUser.createOAuthUserAuth,
+      auth: {
+        clientType: state.clientType,
+        clientId: state.clientId,
+        clientSecret: state.clientSecret,
+        token: response.authentication.token
+      }
+    })
+  });
+  return response;
+}
+
+async function deleteTokenWithState(state, options) {
+  const optionsWithDefaults = _objectSpread2({
+    clientId: state.clientId,
+    clientSecret: state.clientSecret,
+    request: state.octokit.request
+  }, options);
+
+  const response = state.clientType === "oauth-app" ? await OAuthMethods.deleteToken(_objectSpread2({
+    clientType: "oauth-app"
+  }, optionsWithDefaults)) : // istanbul ignore next
+  await OAuthMethods.deleteToken(_objectSpread2({
+    clientType: "github-app"
+  }, optionsWithDefaults));
+  await emitEvent(state, {
+    name: "token",
+    action: "deleted",
+    token: options.token,
+    octokit: new state.Octokit({
+      authStrategy: authUnauthenticated.createUnauthenticatedAuth,
+      auth: {
+        reason: `Handling "token.deleted" event. The access for the token has been revoked.`
+      }
+    })
+  });
+  return response;
+}
+
+async function deleteAuthorizationWithState(state, options) {
+  const optionsWithDefaults = _objectSpread2({
+    clientId: state.clientId,
+    clientSecret: state.clientSecret,
+    request: state.octokit.request
+  }, options);
+
+  const response = state.clientType === "oauth-app" ? await OAuthMethods.deleteAuthorization(_objectSpread2({
+    clientType: "oauth-app"
+  }, optionsWithDefaults)) : // istanbul ignore next
+  await OAuthMethods.deleteAuthorization(_objectSpread2({
+    clientType: "github-app"
+  }, optionsWithDefaults));
+  await emitEvent(state, {
+    name: "token",
+    action: "deleted",
+    token: options.token,
+    octokit: new state.Octokit({
+      authStrategy: authUnauthenticated.createUnauthenticatedAuth,
+      auth: {
+        reason: `Handling "token.deleted" event. The access for the token has been revoked.`
+      }
+    })
+  });
+  await emitEvent(state, {
+    name: "authorization",
+    action: "deleted",
+    token: options.token,
+    octokit: new state.Octokit({
+      authStrategy: authUnauthenticated.createUnauthenticatedAuth,
+      auth: {
+        reason: `Handling "authorization.deleted" event. The access for the app has been revoked.`
+      }
+    })
+  });
+  return response;
+}
+
+// @ts-ignore remove once Node 10 is out maintenance. Replace with Object.fromEntries
+async function parseRequest(request) {
+  const {
+    searchParams
+  } = new URL(request.url, "http://localhost");
+  const query = fromEntries(searchParams);
+  const headers = request.headers;
+
+  if (!["POST", "PATCH"].includes(request.method)) {
+    return {
+      headers,
+      query
+    };
+  }
+
+  return new Promise((resolve, reject) => {
+    let bodyChunks = [];
+    request.on("error", reject).on("data", chunk => bodyChunks.push(chunk)).on("end", async () => {
+      const bodyString = Buffer.concat(bodyChunks).toString();
+      if (!bodyString) return resolve({
+        headers,
+        query
+      });
+
+      try {
+        resolve({
+          headers,
+          query,
+          body: JSON.parse(bodyString)
+        });
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
+}
+
+async function middleware(app, options, request, response) {
+  // request.url mayb include ?query parameters which we don't want for `route`
+  // hence the workaround using new URL()
+  const {
+    pathname
+  } = new URL(request.url, "http://localhost");
+  const route = [request.method, pathname].join(" ");
+  const routes = {
+    getLogin: `GET ${options.pathPrefix}/login`,
+    getCallback: `GET ${options.pathPrefix}/callback`,
+    createToken: `POST ${options.pathPrefix}/token`,
+    getToken: `GET ${options.pathPrefix}/token`,
+    patchToken: `PATCH ${options.pathPrefix}/token`,
+    patchRefreshToken: `PATCH ${options.pathPrefix}/refresh-token`,
+    scopeToken: `POST ${options.pathPrefix}/token/scoped`,
+    deleteToken: `DELETE ${options.pathPrefix}/token`,
+    deleteGrant: `DELETE ${options.pathPrefix}/grant`
+  };
+
+  if (!Object.values(routes).includes(route)) {
+    options.onUnhandledRequest(request, response);
+    return;
+  }
+
+  let parsedRequest;
+
+  try {
+    parsedRequest = await parseRequest(request);
+  } catch (error) {
+    response.writeHead(400, {
+      "content-type": "application/json"
+    });
+    return response.end(JSON.stringify({
+      error: "[@octokit/oauth-app] request error"
+    }));
+  }
+
+  const {
+    headers,
+    query,
+    body = {}
+  } = parsedRequest;
+
+  try {
+    var _headers$authorizatio6;
+
+    if (route === routes.getLogin) {
+      var _query$scopes;
+
+      const {
+        url
+      } = app.getWebFlowAuthorizationUrl({
+        state: query.state,
+        scopes: (_query$scopes = query.scopes) === null || _query$scopes === void 0 ? void 0 : _query$scopes.split(","),
+        allowSignup: query.allowSignup,
+        redirectUrl: query.redirectUrl
+      });
+      response.writeHead(302, {
+        location: url
+      });
+      return response.end();
+    }
+
+    if (route === routes.getCallback) {
+      if (query.error) {
+        throw new Error(`[@octokit/oauth-app] ${query.error} ${query.error_description}`);
+      }
+
+      if (!query.state || !query.code) {
+        throw new Error('[@octokit/oauth-app] Both "code" & "state" parameters are required');
+      }
+
+      const {
+        authentication: {
+          token
+        }
+      } = await app.createToken({
+        state: query.state,
+        code: query.code
+      });
+      response.writeHead(200, {
+        "content-type": "text/html"
+      });
+      response.write(`<h1>Token created successfull</h1>
+    
+<p>Your token is: <strong>${token}</strong>. Copy it now as it cannot be shown again.</p>`);
+      return response.end();
+    }
+
+    if (route === routes.createToken) {
+      const {
+        state: oauthState,
+        code,
+        redirectUrl
+      } = body;
+
+      if (!oauthState || !code) {
+        throw new Error('[@octokit/oauth-app] Both "code" & "state" parameters are required');
+      }
+
+      const {
+        // @ts-expect-error scopes won't be set for GitHub Apps
+        authentication: {
+          token,
+          scopes
+        }
+      } = await app.createToken({
+        state: oauthState,
+        code,
+        redirectUrl
+      });
+      response.writeHead(201, {
+        "content-type": "application/json"
+      });
+      return response.end(JSON.stringify({
+        token,
+        scopes
+      }));
+    }
+
+    if (route === routes.getToken) {
+      var _headers$authorizatio;
+
+      const token = (_headers$authorizatio = headers.authorization) === null || _headers$authorizatio === void 0 ? void 0 : _headers$authorizatio.substr("token ".length);
+
+      if (!token) {
+        throw new Error('[@octokit/oauth-app] "Authorization" header is required');
+      }
+
+      const result = await app.checkToken({
+        token
+      });
+      response.writeHead(200, {
+        "content-type": "application/json"
+      });
+      return response.end(JSON.stringify(result));
+    }
+
+    if (route === routes.patchToken) {
+      var _headers$authorizatio2;
+
+      const token = (_headers$authorizatio2 = headers.authorization) === null || _headers$authorizatio2 === void 0 ? void 0 : _headers$authorizatio2.substr("token ".length);
+
+      if (!token) {
+        throw new Error('[@octokit/oauth-app] "Authorization" header is required');
+      }
+
+      const result = await app.resetToken({
+        token
+      });
+      response.writeHead(200, {
+        "content-type": "application/json"
+      });
+      return response.end(JSON.stringify(result));
+    }
+
+    if (route === routes.patchRefreshToken) {
+      var _headers$authorizatio3;
+
+      const token = (_headers$authorizatio3 = headers.authorization) === null || _headers$authorizatio3 === void 0 ? void 0 : _headers$authorizatio3.substr("token ".length);
+
+      if (!token) {
+        throw new Error('[@octokit/oauth-app] "Authorization" header is required');
+      }
+
+      const {
+        refreshToken
+      } = body;
+
+      if (!refreshToken) {
+        throw new Error("[@octokit/oauth-app] refreshToken must be sent in request body");
+      }
+
+      const result = await app.refreshToken({
+        refreshToken
+      });
+      response.writeHead(200, {
+        "content-type": "application/json"
+      });
+      return response.end(JSON.stringify(result));
+    }
+
+    if (route === routes.scopeToken) {
+      var _headers$authorizatio4;
+
+      const token = (_headers$authorizatio4 = headers.authorization) === null || _headers$authorizatio4 === void 0 ? void 0 : _headers$authorizatio4.substr("token ".length);
+
+      if (!token) {
+        throw new Error('[@octokit/oauth-app] "Authorization" header is required');
+      }
+
+      const result = await app.scopeToken(_objectSpread2({
+        token
+      }, body));
+      response.writeHead(200, {
+        "content-type": "application/json"
+      });
+      return response.end(JSON.stringify(result));
+    }
+
+    if (route === routes.deleteToken) {
+      var _headers$authorizatio5;
+
+      const token = (_headers$authorizatio5 = headers.authorization) === null || _headers$authorizatio5 === void 0 ? void 0 : _headers$authorizatio5.substr("token ".length);
+
+      if (!token) {
+        throw new Error('[@octokit/oauth-app] "Authorization" header is required');
+      }
+
+      await app.deleteToken({
+        token
+      });
+      response.writeHead(204);
+      return response.end();
+    } // route === routes.deleteGrant
+
+
+    const token = (_headers$authorizatio6 = headers.authorization) === null || _headers$authorizatio6 === void 0 ? void 0 : _headers$authorizatio6.substr("token ".length);
+
+    if (!token) {
+      throw new Error('[@octokit/oauth-app] "Authorization" header is required');
+    }
+
+    await app.deleteAuthorization({
+      token
+    });
+    response.writeHead(204);
+    return response.end();
+  } catch (error) {
+    response.writeHead(400, {
+      "content-type": "application/json"
+    });
+    response.end(JSON.stringify({
+      error: error.message
+    }));
+  }
+}
+
+function onUnhandledRequestDefault(request, response) {
+  response.writeHead(404, {
+    "content-type": "application/json"
+  });
+  response.end(JSON.stringify({
+    error: `Unknown route: ${request.method} ${request.url}`
+  }));
+}
+
+function createNodeMiddleware(app, {
+  pathPrefix = "/api/github/oauth",
+  onUnhandledRequest = onUnhandledRequestDefault
+} = {}) {
+  return middleware.bind(null, app, {
+    pathPrefix,
+    onUnhandledRequest
+  });
+}
+
+class OAuthApp {
+  constructor(options) {
+    const Octokit = options.Octokit || OAuthAppOctokit;
+    this.type = options.clientType || "oauth-app";
+    const octokit = new Octokit({
+      authStrategy: OAuthAppAuth.createOAuthAppAuth,
+      auth: {
+        clientType: this.type,
+        clientId: options.clientId,
+        clientSecret: options.clientSecret
+      }
+    });
+    const state = {
+      clientType: this.type,
+      clientId: options.clientId,
+      clientSecret: options.clientSecret,
+      // @ts-expect-error defaultScopes not permitted for GitHub Apps
+      defaultScopes: options.defaultScopes || [],
+      allowSignup: options.allowSignup,
+      baseUrl: options.baseUrl,
+      log: options.log,
+      Octokit,
+      octokit,
+      eventHandlers: {}
+    };
+    this.on = addEventHandler.bind(null, state); // @ts-expect-error TODO: figure this out
+
+    this.octokit = octokit;
+    this.getUserOctokit = getUserOctokitWithState.bind(null, state);
+    this.getWebFlowAuthorizationUrl = getWebFlowAuthorizationUrlWithState.bind(null, state);
+    this.createToken = createTokenWithState.bind(null, state);
+    this.checkToken = checkTokenWithState.bind(null, state);
+    this.resetToken = resetTokenWithState.bind(null, state);
+    this.refreshToken = refreshTokenWithState.bind(null, state);
+    this.scopeToken = scopeTokenWithState.bind(null, state);
+    this.deleteToken = deleteTokenWithState.bind(null, state);
+    this.deleteAuthorization = deleteAuthorizationWithState.bind(null, state);
+  }
+
+  static defaults(defaults) {
+    const OAuthAppWithDefaults = class extends this {
+      constructor(...args) {
+        super(_objectSpread2(_objectSpread2({}, defaults), args[0]));
+      }
+
+    };
+    return OAuthAppWithDefaults;
+  }
+
+}
+OAuthApp.VERSION = VERSION;
+
+exports.OAuthApp = OAuthApp;
+exports.createNodeMiddleware = createNodeMiddleware;
+//# sourceMappingURL=index.js.map
+
+
+/***/ }),
+
+/***/ 2113:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+
+var universalUserAgent = __nccwpck_require__(5030);
+var beforeAfterHook = __nccwpck_require__(594);
+var request = __nccwpck_require__(6234);
+var graphql = __nccwpck_require__(8467);
+var authToken = __nccwpck_require__(334);
+
+function _objectWithoutPropertiesLoose(source, excluded) {
+  if (source == null) return {};
+  var target = {};
+  var sourceKeys = Object.keys(source);
+  var key, i;
+
+  for (i = 0; i < sourceKeys.length; i++) {
+    key = sourceKeys[i];
+    if (excluded.indexOf(key) >= 0) continue;
+    target[key] = source[key];
+  }
+
+  return target;
+}
+
+function _objectWithoutProperties(source, excluded) {
+  if (source == null) return {};
+
+  var target = _objectWithoutPropertiesLoose(source, excluded);
+
+  var key, i;
+
+  if (Object.getOwnPropertySymbols) {
+    var sourceSymbolKeys = Object.getOwnPropertySymbols(source);
+
+    for (i = 0; i < sourceSymbolKeys.length; i++) {
+      key = sourceSymbolKeys[i];
+      if (excluded.indexOf(key) >= 0) continue;
+      if (!Object.prototype.propertyIsEnumerable.call(source, key)) continue;
+      target[key] = source[key];
+    }
+  }
+
+  return target;
+}
+
+const VERSION = "3.3.2";
+
+class Octokit {
+  constructor(options = {}) {
+    const hook = new beforeAfterHook.Collection();
+    const requestDefaults = {
+      baseUrl: request.request.endpoint.DEFAULTS.baseUrl,
+      headers: {},
+      request: Object.assign({}, options.request, {
+        // @ts-ignore internal usage only, no need to type
+        hook: hook.bind(null, "request")
+      }),
+      mediaType: {
+        previews: [],
+        format: ""
+      }
+    }; // prepend default user agent with `options.userAgent` if set
+
+    requestDefaults.headers["user-agent"] = [options.userAgent, `octokit-core.js/${VERSION} ${universalUserAgent.getUserAgent()}`].filter(Boolean).join(" ");
+
+    if (options.baseUrl) {
+      requestDefaults.baseUrl = options.baseUrl;
+    }
+
+    if (options.previews) {
+      requestDefaults.mediaType.previews = options.previews;
+    }
+
+    if (options.timeZone) {
+      requestDefaults.headers["time-zone"] = options.timeZone;
+    }
+
+    this.request = request.request.defaults(requestDefaults);
+    this.graphql = graphql.withCustomRequest(this.request).defaults(requestDefaults);
+    this.log = Object.assign({
+      debug: () => {},
+      info: () => {},
+      warn: console.warn.bind(console),
+      error: console.error.bind(console)
+    }, options.log);
+    this.hook = hook; // (1) If neither `options.authStrategy` nor `options.auth` are set, the `octokit` instance
+    //     is unauthenticated. The `this.auth()` method is a no-op and no request hook is registered.
+    // (2) If only `options.auth` is set, use the default token authentication strategy.
+    // (3) If `options.authStrategy` is set then use it and pass in `options.auth`. Always pass own request as many strategies accept a custom request instance.
+    // TODO: type `options.auth` based on `options.authStrategy`.
+
+    if (!options.authStrategy) {
+      if (!options.auth) {
+        // (1)
+        this.auth = async () => ({
+          type: "unauthenticated"
+        });
+      } else {
+        // (2)
+        const auth = authToken.createTokenAuth(options.auth); // @ts-ignore  ¯\_(ツ)_/¯
+
+        hook.wrap("request", auth.hook);
+        this.auth = auth;
+      }
+    } else {
+      const {
+        authStrategy
+      } = options,
+            otherOptions = _objectWithoutProperties(options, ["authStrategy"]);
+
+      const auth = authStrategy(Object.assign({
+        request: this.request,
+        log: this.log,
+        // we pass the current octokit instance as well as its constructor options
+        // to allow for authentication strategies that return a new octokit instance
+        // that shares the same internal state as the current one. The original
+        // requirement for this was the "event-octokit" authentication strategy
+        // of https://github.com/probot/octokit-auth-probot.
+        octokit: this,
+        octokitOptions: otherOptions
+      }, options.auth)); // @ts-ignore  ¯\_(ツ)_/¯
+
+      hook.wrap("request", auth.hook);
+      this.auth = auth;
+    } // apply plugins
+    // https://stackoverflow.com/a/16345172
+
+
+    const classConstructor = this.constructor;
+    classConstructor.plugins.forEach(plugin => {
+      Object.assign(this, plugin(this, options));
+    });
+  }
+
+  static defaults(defaults) {
+    const OctokitWithDefaults = class extends this {
+      constructor(...args) {
+        const options = args[0] || {};
+
+        if (typeof defaults === "function") {
+          super(defaults(options));
+          return;
+        }
+
+        super(Object.assign({}, defaults, options, options.userAgent && defaults.userAgent ? {
+          userAgent: `${options.userAgent} ${defaults.userAgent}`
+        } : null));
+      }
+
+    };
+    return OctokitWithDefaults;
+  }
+  /**
+   * Attach a plugin (or many) to your Octokit instance.
+   *
+   * @example
+   * const API = Octokit.plugin(plugin1, plugin2, plugin3, ...)
+   */
+
+
+  static plugin(...newPlugins) {
+    var _a;
+
+    const currentPlugins = this.plugins;
+    const NewOctokit = (_a = class extends this {}, _a.plugins = currentPlugins.concat(newPlugins.filter(plugin => !currentPlugins.includes(plugin))), _a);
+    return NewOctokit;
+  }
+
+}
+Octokit.VERSION = VERSION;
+Octokit.plugins = [];
+
+exports.Octokit = Octokit;
+//# sourceMappingURL=index.js.map
+
+
+/***/ }),
+
+/***/ 594:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+var register = __nccwpck_require__(9815)
+var addHook = __nccwpck_require__(7178)
+var removeHook = __nccwpck_require__(1601)
+
+// bind with array of arguments: https://stackoverflow.com/a/21792913
+var bind = Function.bind
+var bindable = bind.bind(bind)
+
+function bindApi (hook, state, name) {
+  var removeHookRef = bindable(removeHook, null).apply(null, name ? [state, name] : [state])
+  hook.api = { remove: removeHookRef }
+  hook.remove = removeHookRef
+
+  ;['before', 'error', 'after', 'wrap'].forEach(function (kind) {
+    var args = name ? [state, kind, name] : [state, kind]
+    hook[kind] = hook.api[kind] = bindable(addHook, null).apply(null, args)
+  })
+}
+
+function HookSingular () {
+  var singularHookName = 'h'
+  var singularHookState = {
+    registry: {}
+  }
+  var singularHook = register.bind(null, singularHookState, singularHookName)
+  bindApi(singularHook, singularHookState, singularHookName)
+  return singularHook
+}
+
+function HookCollection () {
+  var state = {
+    registry: {}
+  }
+
+  var hook = register.bind(null, state)
+  bindApi(hook, state)
+
+  return hook
+}
+
+var collectionHookDeprecationMessageDisplayed = false
+function Hook () {
+  if (!collectionHookDeprecationMessageDisplayed) {
+    console.warn('[before-after-hook]: "Hook()" repurposing warning, use "Hook.Collection()". Read more: https://git.io/upgrade-before-after-hook-to-1.4')
+    collectionHookDeprecationMessageDisplayed = true
+  }
+  return HookCollection()
+}
+
+Hook.Singular = HookSingular.bind()
+Hook.Collection = HookCollection.bind()
+
+module.exports = Hook
+// expose constructors as a named property for TypeScript
+module.exports.Hook = Hook
+module.exports.Singular = Hook.Singular
+module.exports.Collection = Hook.Collection
+
+
+/***/ }),
+
+/***/ 7178:
+/***/ ((module) => {
+
+module.exports = addHook;
+
+function addHook(state, kind, name, hook) {
+  var orig = hook;
+  if (!state.registry[name]) {
+    state.registry[name] = [];
+  }
+
+  if (kind === "before") {
+    hook = function (method, options) {
+      return Promise.resolve()
+        .then(orig.bind(null, options))
+        .then(method.bind(null, options));
+    };
+  }
+
+  if (kind === "after") {
+    hook = function (method, options) {
+      var result;
+      return Promise.resolve()
+        .then(method.bind(null, options))
+        .then(function (result_) {
+          result = result_;
+          return orig(result, options);
+        })
+        .then(function () {
+          return result;
+        });
+    };
+  }
+
+  if (kind === "error") {
+    hook = function (method, options) {
+      return Promise.resolve()
+        .then(method.bind(null, options))
+        .catch(function (error) {
+          return orig(error, options);
+        });
+    };
+  }
+
+  state.registry[name].push({
+    hook: hook,
+    orig: orig,
+  });
+}
+
+
+/***/ }),
+
+/***/ 9815:
+/***/ ((module) => {
+
+module.exports = register;
+
+function register(state, name, method, options) {
+  if (typeof method !== "function") {
+    throw new Error("method for before hook must be a function");
+  }
+
+  if (!options) {
+    options = {};
+  }
+
+  if (Array.isArray(name)) {
+    return name.reverse().reduce(function (callback, name) {
+      return register.bind(null, state, name, callback, options);
+    }, method)();
+  }
+
+  return Promise.resolve().then(function () {
+    if (!state.registry[name]) {
+      return method(options);
+    }
+
+    return state.registry[name].reduce(function (method, registered) {
+      return registered.hook.bind(null, method, options);
+    }, method)();
+  });
+}
+
+
+/***/ }),
+
+/***/ 1601:
+/***/ ((module) => {
+
+module.exports = removeHook;
+
+function removeHook(state, name, method) {
+  if (!state.registry[name]) {
+    return;
+  }
+
+  var index = state.registry[name]
+    .map(function (registered) {
+      return registered.orig;
+    })
+    .indexOf(method);
+
+  if (index === -1) {
+    return;
+  }
+
+  state.registry[name].splice(index, 1);
+}
+
+
+/***/ }),
+
+/***/ 1017:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+
+function oauthAuthorizationUrl(options) {
+  const clientType = options.clientType || "oauth-app";
+  const baseUrl = options.baseUrl || "https://github.com";
+  const result = {
+    clientType,
+    allowSignup: options.allowSignup === false ? false : true,
+    clientId: options.clientId,
+    login: options.login || null,
+    redirectUrl: options.redirectUrl || null,
+    state: options.state || Math.random().toString(36).substr(2),
+    url: ""
+  };
+
+  if (clientType === "oauth-app") {
+    const scopes = "scopes" in options ? options.scopes : [];
+    result.scopes = typeof scopes === "string" ? scopes.split(/[,\s]+/).filter(Boolean) : scopes;
+  }
+
+  result.url = urlBuilderAuthorize(`${baseUrl}/login/oauth/authorize`, result);
+  return result;
+}
+
+function urlBuilderAuthorize(base, options) {
+  const map = {
+    allowSignup: "allow_signup",
+    clientId: "client_id",
+    login: "login",
+    redirectUrl: "redirect_uri",
+    scopes: "scope",
+    state: "state"
+  };
+  let url = base;
+  Object.keys(map) // Filter out keys that are null and remove the url key
+  .filter(k => options[k] !== null) // Filter out empty scopes array
+  .filter(k => {
+    if (k !== "scopes") return true;
+    if (options.clientType === "github-app") return false;
+    return !Array.isArray(options[k]) || options[k].length > 0;
+  }) // Map Array with the proper URL parameter names and change the value to a string using template strings
+  // @ts-ignore
+  .map(key => [map[key], `${options[key]}`]) // Finally, build the URL
+  .forEach(([key, value], index) => {
+    url += index === 0 ? `?` : "&";
+    url += `${key}=${value}`;
+  });
+  return url;
+}
+
+exports.oauthAuthorizationUrl = oauthAuthorizationUrl;
+//# sourceMappingURL=index.js.map
+
+
+/***/ }),
+
+/***/ 8445:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+
+function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
+
+var oauthAuthorizationUrl = __nccwpck_require__(1017);
+var request = __nccwpck_require__(3315);
+var requestError = __nccwpck_require__(2434);
+var btoa = _interopDefault(__nccwpck_require__(2358));
+
+const VERSION = "1.2.2";
 
 function _defineProperty(obj, key, value) {
   if (key in obj) {
@@ -2569,621 +4693,510 @@ function _objectWithoutProperties(source, excluded) {
   return target;
 }
 
-function getAuthorizationUrl(options) {
-  const {
-    url
-  } = oauthAuthorizationUrl.oauthAuthorizationUrl(options);
-  return url;
+function requestToOAuthBaseUrl(request) {
+  const endpointDefaults = request.endpoint.DEFAULTS;
+  return /^https:\/\/(api\.)?github\.com$/.test(endpointDefaults.baseUrl) ? "https://github.com" : endpointDefaults.baseUrl.replace("/api/v3", "");
 }
-function getAuthorizationUrlWithState(state, options) {
-  return getAuthorizationUrl(_objectSpread2(_objectSpread2({}, options), {}, {
-    clientId: options.clientId || state.clientId,
-    allowSignup: options.allowSignup || state.allowSignup,
-    baseUrl: options.baseUrl || state.baseUrl,
-    scopes: options.scopes || state.defaultScopes
+async function oauthRequest(request, route, parameters) {
+  const withOAuthParameters = _objectSpread2({
+    baseUrl: requestToOAuthBaseUrl(request),
+    headers: {
+      accept: "application/json"
+    }
+  }, parameters);
+
+  const response = await request(route, withOAuthParameters);
+
+  if ("error" in response.data) {
+    const error = new requestError.RequestError(`${response.data.error_description} (${response.data.error}, ${response.data.error_url})`, 400, {
+      request: request.endpoint.merge(route, withOAuthParameters),
+      headers: response.headers
+    }); // @ts-ignore add custom response property until https://github.com/octokit/request-error.js/issues/169 is resolved
+
+    error.response = response;
+    throw error;
+  }
+
+  return response;
+}
+
+function getWebFlowAuthorizationUrl(_ref) {
+  let {
+    request: request$1 = request.request
+  } = _ref,
+      options = _objectWithoutProperties(_ref, ["request"]);
+
+  const baseUrl = requestToOAuthBaseUrl(request$1); // @ts-expect-error TypeScript wants `clientType` to be set explicitly ¯\_(ツ)_/¯
+
+  return oauthAuthorizationUrl.oauthAuthorizationUrl(_objectSpread2(_objectSpread2({}, options), {}, {
+    baseUrl
   }));
 }
 
-async function emitEvent(state, context) {
-  const {
-    name,
-    action
-  } = context;
-
-  if (state.eventHandlers[`${name}.${action}`]) {
-    for (const eventHandler of state.eventHandlers[`${name}.${action}`]) {
-      await eventHandler(context);
-    }
-  }
-
-  if (state.eventHandlers[name]) {
-    for (const eventHandler of state.eventHandlers[name]) {
-      await eventHandler(context);
-    }
-  }
-}
-
-async function createTokenWithAuth(auth, options) {
-  // @ts-ignore fix return types for auth()
-  const {
-    token,
-    scopes
-  } = await auth({
-    type: "token",
-    state: options.state,
-    code: options.code
+async function exchangeWebFlowCode(options) {
+  const request$1 = options.request ||
+  /* istanbul ignore next: we always pass a custom request in tests */
+  request.request;
+  const response = await oauthRequest(request$1, "POST /login/oauth/access_token", {
+    client_id: options.clientId,
+    client_secret: options.clientSecret,
+    code: options.code,
+    redirect_uri: options.redirectUrl,
+    state: options.state
   });
-  return {
-    token,
-    scopes
+  const authentication = {
+    clientType: options.clientType,
+    clientId: options.clientId,
+    clientSecret: options.clientSecret,
+    token: response.data.access_token,
+    scopes: response.data.scope.split(/\s+/).filter(Boolean)
   };
-}
 
-function createToken(options) {
-  const {
-    clientId,
-    clientSecret
-  } = options,
-        otherOptions = _objectWithoutProperties(options, ["clientId", "clientSecret"]);
-
-  const auth = authOauthApp.createOAuthAppAuth({
-    clientId,
-    clientSecret
-  });
-  return createTokenWithAuth(auth, otherOptions);
-}
-async function createTokenWithState(state, options) {
-  const result = await createTokenWithAuth(state.octokit.auth, options);
-  await emitEvent(state, {
-    name: "token",
-    action: "created",
-    token: result.token,
-    scopes: result.scopes,
-
-    get octokit() {
-      return new state.Octokit({
-        auth: result.token
-      });
+  if (options.clientType === "github-app") {
+    if ("refresh_token" in response.data) {
+      const apiTimeInMs = new Date(response.headers.date).getTime();
+      authentication.refreshToken = response.data.refresh_token, authentication.expiresAt = toTimestamp(apiTimeInMs, response.data.expires_in), authentication.refreshTokenExpiresAt = toTimestamp(apiTimeInMs, response.data.refresh_token_expires_in);
     }
 
+    delete authentication.scopes;
+  }
+
+  return _objectSpread2(_objectSpread2({}, response), {}, {
+    authentication
   });
-  return result;
 }
 
-async function sendCheckTokenRequest(request, options) {
-  const {
-    data
-  } = await request("POST /applications/{client_id}/token", options);
-  return data;
+function toTimestamp(apiTimeInMs, expirationInSeconds) {
+  return new Date(apiTimeInMs + expirationInSeconds * 1000).toISOString();
+}
+
+async function createDeviceCode(options) {
+  const request$1 = options.request ||
+  /* istanbul ignore next: we always pass a custom request in tests */
+  request.request;
+  const parameters = {
+    client_id: options.clientId
+  };
+
+  if ("scopes" in options && Array.isArray(options.scopes)) {
+    parameters.scope = options.scopes.join(" ");
+  }
+
+  return oauthRequest(request$1, "POST /login/device/code", parameters);
+}
+
+async function exchangeDeviceCode(options) {
+  const request$1 = options.request ||
+  /* istanbul ignore next: we always pass a custom request in tests */
+  request.request;
+  const response = await oauthRequest(request$1, "POST /login/oauth/access_token", {
+    client_id: options.clientId,
+    device_code: options.code,
+    grant_type: "urn:ietf:params:oauth:grant-type:device_code"
+  });
+  const authentication = {
+    clientType: options.clientType,
+    clientId: options.clientId,
+    token: response.data.access_token,
+    scopes: response.data.scope.split(/\s+/).filter(Boolean)
+  };
+
+  if ("clientSecret" in options) {
+    authentication.clientSecret = options.clientSecret;
+  }
+
+  if (options.clientType === "github-app") {
+    if ("refresh_token" in response.data) {
+      const apiTimeInMs = new Date(response.headers.date).getTime();
+      authentication.refreshToken = response.data.refresh_token, authentication.expiresAt = toTimestamp$1(apiTimeInMs, response.data.expires_in), authentication.refreshTokenExpiresAt = toTimestamp$1(apiTimeInMs, response.data.refresh_token_expires_in);
+    }
+
+    delete authentication.scopes;
+  }
+
+  return _objectSpread2(_objectSpread2({}, response), {}, {
+    authentication
+  });
+}
+
+function toTimestamp$1(apiTimeInMs, expirationInSeconds) {
+  return new Date(apiTimeInMs + expirationInSeconds * 1000).toISOString();
 }
 
 async function checkToken(options) {
-  const request$1 = request.request.defaults({
+  const request$1 = options.request ||
+  /* istanbul ignore next: we always pass a custom request in tests */
+  request.request;
+  const response = await request$1("POST /applications/{client_id}/token", {
     headers: {
       authorization: `basic ${btoa(`${options.clientId}:${options.clientSecret}`)}`
-    }
-  });
-  return sendCheckTokenRequest(request$1, {
+    },
     client_id: options.clientId,
     access_token: options.token
   });
-}
-function checkTokenWithState(state, options) {
-  return sendCheckTokenRequest(state.octokit.request, {
-    client_id: state.clientId,
-    access_token: options.token
-  });
-}
-
-async function sendResetTokenRequest(request, options) {
-  const {
-    data
-  } = await request("PATCH /applications/{client_id}/token", options);
-  return data;
-}
-
-function resetToken(options) {
-  const request$1 = request.request.defaults({
-    headers: {
-      authorization: `basic ${btoa(`${options.clientId}:${options.clientSecret}`)}`
-    }
-  });
-  return sendResetTokenRequest(request$1, {
-    client_id: options.clientId,
-    access_token: options.token
-  });
-}
-async function resetTokenWithState(state, options) {
-  const result = await sendResetTokenRequest(state.octokit.request, {
-    client_id: state.clientId,
-    access_token: options.token
-  });
-  await emitEvent(state, {
-    name: "token",
-    action: "reset",
-    token: result.token,
-    scopes: result.scopes || undefined,
-
-    get octokit() {
-      return new state.Octokit({
-        auth: result.token
-      });
-    }
-
-  });
-  return result;
-}
-
-async function sendDeleteTokenRequest(request, options) {
-  const {
-    data
-  } = await request("DELETE /applications/{client_id}/token", options);
-  return data;
-}
-
-function deleteToken(options) {
-  const request$1 = request.request.defaults({
-    headers: {
-      authorization: `basic ${btoa(`${options.clientId}:${options.clientSecret}`)}`
-    }
-  });
-  return sendDeleteTokenRequest(request$1, {
-    client_id: options.clientId,
-    access_token: options.token
-  });
-}
-async function deleteTokenWithState(state, options) {
-  await emitEvent(state, {
-    name: "token",
-    action: "before_deleted",
+  const authentication = {
+    clientType: options.clientType,
+    clientId: options.clientId,
+    clientSecret: options.clientSecret,
     token: options.token,
-
-    get octokit() {
-      return new state.Octokit({
-        auth: options.token
-      });
-    }
-
-  });
-  const result = await sendDeleteTokenRequest(state.octokit.request, {
-    client_id: state.clientId,
-    access_token: options.token
-  });
-  await emitEvent(state, {
-    name: "token",
-    action: "deleted",
-    token: options.token,
-
-    get octokit() {
-      return new state.Octokit({
-        authStrategy: authUnauthenticated.createUnauthenticatedAuth,
-        auth: {
-          reason: `Handling "token.deleted" event. The access for the token has been revoked.`
-        }
-      });
-    }
-
-  });
-  return result;
-}
-
-async function sendDeleteAuthorizationRequest(request, options) {
-  const {
-    data
-  } = await request("DELETE /applications/{client_id}/grant", options);
-  return data;
-}
-
-function deleteAuthorization(options) {
-  const request$1 = request.request.defaults({
-    request: {
-      hook: authOauthApp.createOAuthAppAuth({
-        clientId: options.clientId,
-        clientSecret: options.clientSecret
-      }).hook
-    }
-  });
-  return sendDeleteAuthorizationRequest(request$1, {
-    client_id: options.clientId,
-    access_token: options.token
-  });
-}
-async function deleteAuthorizationWithState(state, options) {
-  await emitEvent(state, {
-    name: "authorization",
-    action: "before_deleted",
-    token: options.token,
-
-    get octokit() {
-      return new state.Octokit({
-        auth: options.token
-      });
-    }
-
-  });
-  await emitEvent(state, {
-    name: "token",
-    action: "before_deleted",
-    token: options.token,
-
-    get octokit() {
-      return new state.Octokit({
-        auth: options.token
-      });
-    }
-
-  });
-  const result = await sendDeleteAuthorizationRequest(state.octokit.request, {
-    client_id: state.clientId,
-    access_token: options.token
-  });
-  await emitEvent(state, {
-    name: "token",
-    action: "deleted",
-    token: options.token,
-
-    get octokit() {
-      return new state.Octokit({
-        authStrategy: authUnauthenticated.createUnauthenticatedAuth,
-        auth: {
-          reason: `Handling "token.deleted" event. The access for the token has been revoked.`
-        }
-      });
-    }
-
-  });
-  await emitEvent(state, {
-    name: "authorization",
-    action: "deleted",
-    token: options.token,
-
-    get octokit() {
-      return new state.Octokit({
-        authStrategy: authUnauthenticated.createUnauthenticatedAuth,
-        auth: {
-          reason: `Handling "authorization.deleted" event. The access for the app has been revoked.`
-        }
-      });
-    }
-
-  });
-  return result;
-}
-
-// @ts-ignore remove once Node 10 is out maintenance. Replace with Object.fromEntries
-async function parseRequest(request) {
-  const {
-    searchParams
-  } = new URL(request.url, "http://localhost");
-  const query = fromEntries(searchParams);
-  const headers = request.headers;
-
-  if (!["POST", "PATCH"].includes(request.method)) {
-    return {
-      headers,
-      query
-    };
-  }
-
-  return new Promise((resolve, reject) => {
-    let bodyChunks = [];
-    request.on("error", reject).on("data", chunk => bodyChunks.push(chunk)).on("end", async () => {
-      const bodyString = Buffer.concat(bodyChunks).toString();
-      if (!bodyString) return resolve({
-        headers,
-        query
-      });
-
-      try {
-        resolve({
-          headers,
-          query,
-          body: JSON.parse(bodyString)
-        });
-      } catch (error) {
-        reject(error);
-      }
-    });
-  });
-}
-
-async function middleware(app, options, request, response) {
-  // request.url mayb include ?query parameters which we don't want for `route`
-  // hence the workaround using new URL()
-  const {
-    pathname
-  } = new URL(request.url, "http://localhost");
-  const route = [request.method, pathname].join(" ");
-  const routes = {
-    getLogin: `GET ${options.pathPrefix}/login`,
-    getCallback: `GET ${options.pathPrefix}/callback`,
-    createToken: `POST ${options.pathPrefix}/token`,
-    getToken: `GET ${options.pathPrefix}/token`,
-    patchToken: `PATCH ${options.pathPrefix}/token`,
-    deleteToken: `DELETE ${options.pathPrefix}/token`,
-    deleteGrant: `DELETE ${options.pathPrefix}/grant`
+    scopes: response.data.scopes
   };
 
-  if (!Object.values(routes).includes(route)) {
-    options.onUnhandledRequest(request, response);
-    return;
+  if (options.clientType === "github-app") {
+    delete authentication.scopes;
   }
 
-  let parsedRequest;
+  return _objectSpread2(_objectSpread2({}, response), {}, {
+    authentication
+  });
+}
 
-  try {
-    parsedRequest = await parseRequest(request);
-  } catch (error) {
-    response.writeHead(400, {
-      "content-type": "application/json"
-    });
-    return response.end(JSON.stringify({
-      error: "[@octokit/oauth-app] request error"
-    }));
-  }
+async function refreshToken(options) {
+  const request$1 = options.request ||
+  /* istanbul ignore next: we always pass a custom request in tests */
+  request.request;
+  const response = await oauthRequest(request$1, "POST /login/oauth/access_token", {
+    client_id: options.clientId,
+    client_secret: options.clientSecret,
+    grant_type: "refresh_token",
+    refresh_token: options.refreshToken
+  });
+  const apiTimeInMs = new Date(response.headers.date).getTime();
+  const authentication = {
+    clientType: "github-app",
+    clientId: options.clientId,
+    clientSecret: options.clientSecret,
+    token: response.data.access_token,
+    refreshToken: response.data.refresh_token,
+    expiresAt: toTimestamp$2(apiTimeInMs, response.data.expires_in),
+    refreshTokenExpiresAt: toTimestamp$2(apiTimeInMs, response.data.refresh_token_expires_in)
+  };
+  return _objectSpread2(_objectSpread2({}, response), {}, {
+    authentication
+  });
+}
 
+function toTimestamp$2(apiTimeInMs, expirationInSeconds) {
+  return new Date(apiTimeInMs + expirationInSeconds * 1000).toISOString();
+}
+
+async function scopeToken(options) {
   const {
-    headers,
-    query,
-    body
-  } = parsedRequest;
+    request: request$1,
+    clientType,
+    clientId,
+    clientSecret,
+    token
+  } = options,
+        requestOptions = _objectWithoutProperties(options, ["request", "clientType", "clientId", "clientSecret", "token"]);
 
-  try {
-    var _headers$authorizatio4;
-
-    if (route === routes.getLogin) {
-      var _query$scopes;
-
-      const url = app.getAuthorizationUrl({
-        state: query.state,
-        scopes: (_query$scopes = query.scopes) === null || _query$scopes === void 0 ? void 0 : _query$scopes.split(","),
-        allowSignup: query.allowSignup,
-        redirectUrl: query.redirectUrl
-      });
-      response.writeHead(302, {
-        location: url
-      });
-      return response.end();
-    }
-
-    if (route === routes.getCallback) {
-      if (query.error) {
-        throw new Error(`[@octokit/oauth-app] ${query.error} ${query.error_description}`);
-      }
-
-      if (!query.state || !query.code) {
-        throw new Error('[@octokit/oauth-app] Both "code" & "state" parameters are required');
-      }
-
-      const {
-        token
-      } = await app.createToken({
-        state: query.state,
-        code: query.code
-      });
-      response.writeHead(200, {
-        "content-type": "text/html"
-      });
-      response.write(`<h1>Token created successfull</h1>
-    
-<p>Your token is: <strong>${token}</strong>. Copy it now as it cannot be shown again.</p>`);
-      return response.end();
-    }
-
-    if (route === routes.createToken) {
-      // @ts-ignore body is guaraenteed to exist
-      const {
-        state: oauthState,
-        code,
-        redirectUrl
-      } = body;
-
-      if (!oauthState || !code) {
-        throw new Error('[@octokit/oauth-app] Both "code" & "state" parameters are required');
-      }
-
-      const {
-        token,
-        scopes
-      } = await app.createToken({
-        state: oauthState,
-        code
-      });
-      response.writeHead(201, {
-        "content-type": "application/json"
-      });
-      return response.end(JSON.stringify({
-        token,
-        scopes
-      }));
-    }
-
-    if (route === routes.getToken) {
-      var _headers$authorizatio;
-
-      const token = (_headers$authorizatio = headers.authorization) === null || _headers$authorizatio === void 0 ? void 0 : _headers$authorizatio.substr("token ".length);
-
-      if (!token) {
-        throw new Error('[@octokit/oauth-app] "Authorization" header is required');
-      }
-
-      const result = await app.checkToken({
-        token
-      });
-      response.writeHead(200, {
-        "content-type": "application/json"
-      });
-      return response.end(JSON.stringify(result));
-    }
-
-    if (route === routes.patchToken) {
-      var _headers$authorizatio2;
-
-      const token = (_headers$authorizatio2 = headers.authorization) === null || _headers$authorizatio2 === void 0 ? void 0 : _headers$authorizatio2.substr("token ".length);
-
-      if (!token) {
-        throw new Error('[@octokit/oauth-app] "Authorization" header is required');
-      }
-
-      const result = await app.resetToken({
-        token
-      });
-      response.writeHead(200, {
-        "content-type": "application/json"
-      });
-      return response.end(JSON.stringify(result));
-    }
-
-    if (route === routes.deleteToken) {
-      var _headers$authorizatio3;
-
-      const token = (_headers$authorizatio3 = headers.authorization) === null || _headers$authorizatio3 === void 0 ? void 0 : _headers$authorizatio3.substr("token ".length);
-
-      if (!token) {
-        throw new Error('[@octokit/oauth-app] "Authorization" header is required');
-      }
-
-      await app.deleteToken({
-        token
-      });
-      response.writeHead(204);
-      return response.end();
-    } // route === routes.deleteGrant
-
-
-    const token = (_headers$authorizatio4 = headers.authorization) === null || _headers$authorizatio4 === void 0 ? void 0 : _headers$authorizatio4.substr("token ".length);
-
-    if (!token) {
-      throw new Error('[@octokit/oauth-app] "Authorization" header is required');
-    }
-
-    await app.deleteAuthorization({
-      token
-    });
-    response.writeHead(204);
-    return response.end();
-  } catch (error) {
-    response.writeHead(400, {
-      "content-type": "application/json"
-    });
-    response.end(JSON.stringify({
-      error: error.message
-    }));
-  }
-}
-
-function onUnhandledRequestDefault(request, response) {
-  response.writeHead(404, {
-    "content-type": "application/json"
-  });
-  response.end(JSON.stringify({
-    error: `Unknown route: ${request.method} ${request.url}`
-  }));
-}
-
-function getNodeMiddleware(app, {
-  pathPrefix = "/api/github/oauth",
-  onUnhandledRequest = onUnhandledRequestDefault
-} = {}) {
-  return middleware.bind(null, app, {
-    pathPrefix,
-    onUnhandledRequest
+  const response = await (request$1 ||
+  /* istanbul ignore next: we always pass a custom request in tests */
+  request.request)("POST /applications/{client_id}/token/scoped", _objectSpread2({
+    headers: {
+      authorization: `basic ${btoa(`${clientId}:${clientSecret}`)}`
+    },
+    client_id: clientId,
+    access_token: token
+  }, requestOptions));
+  const authentication = {
+    clientType,
+    clientId,
+    clientSecret,
+    token: response.data.token
+  };
+  return _objectSpread2(_objectSpread2({}, response), {}, {
+    authentication
   });
 }
 
-class OAuthApp {
-  constructor(options) {
-    const Octokit = options.Octokit || OAuthAppOctokit;
-    const octokit = new Octokit({
-      authStrategy: authOauthApp.createOAuthAppAuth,
-      auth: {
-        clientId: options.clientId,
-        clientSecret: options.clientSecret
-      }
-    });
-    const state = {
-      clientId: options.clientId,
-      clientSecret: options.clientSecret,
-      defaultScopes: options.defaultScopes || [],
-      allowSignup: options.allowSignup,
-      baseUrl: options.baseUrl,
-      log: options.log,
-      Octokit,
-      octokit,
-      eventHandlers: {}
-    };
-    this.on = addEventHandler.bind(null, state);
-    this.octokit = octokit;
-    this.getAuthorizationUrl = getAuthorizationUrlWithState.bind(null, state);
-    this.createToken = createTokenWithState.bind(null, state);
-    this.checkToken = checkTokenWithState.bind(null, state);
-    this.resetToken = resetTokenWithState.bind(null, state);
-    this.deleteToken = deleteTokenWithState.bind(null, state);
-    this.deleteAuthorization = deleteAuthorizationWithState.bind(null, state);
+async function resetToken(options) {
+  const request$1 = options.request ||
+  /* istanbul ignore next: we always pass a custom request in tests */
+  request.request;
+  const auth = btoa(`${options.clientId}:${options.clientSecret}`);
+  const response = await request$1("PATCH /applications/{client_id}/token", {
+    headers: {
+      authorization: `basic ${auth}`
+    },
+    client_id: options.clientId,
+    access_token: options.token
+  });
+  const authentication = {
+    clientType: options.clientType,
+    clientId: options.clientId,
+    clientSecret: options.clientSecret,
+    token: response.data.token,
+    scopes: response.data.scopes
+  };
+
+  if (options.clientType === "github-app") {
+    delete authentication.scopes;
   }
 
+  return _objectSpread2(_objectSpread2({}, response), {}, {
+    authentication
+  });
 }
-OAuthApp.VERSION = VERSION;
 
-exports.OAuthApp = OAuthApp;
+async function deleteToken(options) {
+  const request$1 = options.request ||
+  /* istanbul ignore next: we always pass a custom request in tests */
+  request.request;
+  const auth = btoa(`${options.clientId}:${options.clientSecret}`);
+  return request$1("DELETE /applications/{client_id}/token", {
+    headers: {
+      authorization: `basic ${auth}`
+    },
+    client_id: options.clientId,
+    access_token: options.token
+  });
+}
+
+async function deleteAuthorization(options) {
+  const request$1 = options.request ||
+  /* istanbul ignore next: we always pass a custom request in tests */
+  request.request;
+  const auth = btoa(`${options.clientId}:${options.clientSecret}`);
+  return request$1("DELETE /applications/{client_id}/grant", {
+    headers: {
+      authorization: `basic ${auth}`
+    },
+    client_id: options.clientId,
+    access_token: options.token
+  });
+}
+
+exports.VERSION = VERSION;
 exports.checkToken = checkToken;
-exports.createToken = createToken;
+exports.createDeviceCode = createDeviceCode;
 exports.deleteAuthorization = deleteAuthorization;
 exports.deleteToken = deleteToken;
-exports.getAuthorizationUrl = getAuthorizationUrl;
-exports.getNodeMiddleware = getNodeMiddleware;
+exports.exchangeDeviceCode = exchangeDeviceCode;
+exports.exchangeWebFlowCode = exchangeWebFlowCode;
+exports.getWebFlowAuthorizationUrl = getWebFlowAuthorizationUrl;
+exports.refreshToken = refreshToken;
 exports.resetToken = resetToken;
+exports.scopeToken = scopeToken;
 //# sourceMappingURL=index.js.map
 
 
 /***/ }),
 
-/***/ 1017:
-/***/ ((__unused_webpack_module, exports) => {
+/***/ 2434:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 
-function oauthAuthorizationUrl(options) {
-  const scopesNormalized = typeof options.scopes === "string" ? options.scopes.split(/[,\s]+/).filter(Boolean) : Array.isArray(options.scopes) ? options.scopes : [];
-  const result = {
-    allowSignup: options.allowSignup === false ? false : true,
-    clientId: options.clientId,
-    login: options.login || null,
-    redirectUrl: options.redirectUrl || null,
-    scopes: scopesNormalized,
-    state: options.state || Math.random().toString(36).substr(2),
-    url: ""
-  };
-  const baseUrl = options.baseUrl || "https://github.com";
-  result.url = urlBuilderAuthorize(`${baseUrl}/login/oauth/authorize`, result);
-  return result;
+function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
+
+var deprecation = __nccwpck_require__(8932);
+var once = _interopDefault(__nccwpck_require__(1223));
+
+const logOnce = once(deprecation => console.warn(deprecation));
+/**
+ * Error with extra properties to help with debugging
+ */
+
+class RequestError extends Error {
+  constructor(message, statusCode, options) {
+    super(message); // Maintains proper stack trace (only available on V8)
+
+    /* istanbul ignore next */
+
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, this.constructor);
+    }
+
+    this.name = "HttpError";
+    this.status = statusCode;
+    Object.defineProperty(this, "code", {
+      get() {
+        logOnce(new deprecation.Deprecation("[@octokit/request-error] `error.code` is deprecated, use `error.status`."));
+        return statusCode;
+      }
+
+    });
+    this.headers = options.headers || {}; // redact request credentials without mutating original request options
+
+    const requestCopy = Object.assign({}, options.request);
+
+    if (options.request.headers.authorization) {
+      requestCopy.headers = Object.assign({}, options.request.headers, {
+        authorization: options.request.headers.authorization.replace(/ .*$/, " [REDACTED]")
+      });
+    }
+
+    requestCopy.url = requestCopy.url // client_id & client_secret can be passed as URL query parameters to increase rate limit
+    // see https://developer.github.com/v3/#increasing-the-unauthenticated-rate-limit-for-oauth-applications
+    .replace(/\bclient_secret=\w+/g, "client_secret=[REDACTED]") // OAuth tokens can be passed as URL query parameters, although it is not recommended
+    // see https://developer.github.com/v3/#oauth2-token-sent-in-a-header
+    .replace(/\baccess_token=\w+/g, "access_token=[REDACTED]");
+    this.request = requestCopy;
+  }
+
 }
 
-function urlBuilderAuthorize(base, options) {
-  const map = {
-    allowSignup: "allow_signup",
-    clientId: "client_id",
-    login: "login",
-    redirectUrl: "redirect_uri",
-    scopes: "scope",
-    state: "state"
-  };
-  let url = base;
-  Object.entries(options).filter(([k, v]) => v !== null && k !== "url") // Filter out keys that are null and remove the url key
-  .filter(([, v]) => Array.isArray(v) ? v.length !== 0 : true) // Filter out empty Array
-  .map(([key]) => [map[key], `${options[key]}`]) // Map Array with the proper URL parameter names and change the value to a string using template strings
-  .forEach(([key, value], index) => {
-    // Finally, build the URL
-    url += index === 0 ? `?` : "&";
-    url += `${key}=${value}`;
+exports.RequestError = RequestError;
+//# sourceMappingURL=index.js.map
+
+
+/***/ }),
+
+/***/ 3315:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+
+function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
+
+var endpoint = __nccwpck_require__(9440);
+var universalUserAgent = __nccwpck_require__(5030);
+var isPlainObject = __nccwpck_require__(3287);
+var nodeFetch = _interopDefault(__nccwpck_require__(467));
+var requestError = __nccwpck_require__(2434);
+
+const VERSION = "5.4.14";
+
+function getBufferResponse(response) {
+  return response.arrayBuffer();
+}
+
+function fetchWrapper(requestOptions) {
+  if (isPlainObject.isPlainObject(requestOptions.body) || Array.isArray(requestOptions.body)) {
+    requestOptions.body = JSON.stringify(requestOptions.body);
+  }
+
+  let headers = {};
+  let status;
+  let url;
+  const fetch = requestOptions.request && requestOptions.request.fetch || nodeFetch;
+  return fetch(requestOptions.url, Object.assign({
+    method: requestOptions.method,
+    body: requestOptions.body,
+    headers: requestOptions.headers,
+    redirect: requestOptions.redirect
+  }, requestOptions.request)).then(response => {
+    url = response.url;
+    status = response.status;
+
+    for (const keyAndValue of response.headers) {
+      headers[keyAndValue[0]] = keyAndValue[1];
+    }
+
+    if (status === 204 || status === 205) {
+      return;
+    } // GitHub API returns 200 for HEAD requests
+
+
+    if (requestOptions.method === "HEAD") {
+      if (status < 400) {
+        return;
+      }
+
+      throw new requestError.RequestError(response.statusText, status, {
+        headers,
+        request: requestOptions
+      });
+    }
+
+    if (status === 304) {
+      throw new requestError.RequestError("Not modified", status, {
+        headers,
+        request: requestOptions
+      });
+    }
+
+    if (status >= 400) {
+      return response.text().then(message => {
+        const error = new requestError.RequestError(message, status, {
+          headers,
+          request: requestOptions
+        });
+
+        try {
+          let responseBody = JSON.parse(error.message);
+          Object.assign(error, responseBody);
+          let errors = responseBody.errors; // Assumption `errors` would always be in Array format
+
+          error.message = error.message + ": " + errors.map(JSON.stringify).join(", ");
+        } catch (e) {// ignore, see octokit/rest.js#684
+        }
+
+        throw error;
+      });
+    }
+
+    const contentType = response.headers.get("content-type");
+
+    if (/application\/json/.test(contentType)) {
+      return response.json();
+    }
+
+    if (!contentType || /^text\/|charset=utf-8$/.test(contentType)) {
+      return response.text();
+    }
+
+    return getBufferResponse(response);
+  }).then(data => {
+    return {
+      status,
+      url,
+      headers,
+      data
+    };
+  }).catch(error => {
+    if (error instanceof requestError.RequestError) {
+      throw error;
+    }
+
+    throw new requestError.RequestError(error.message, 500, {
+      headers,
+      request: requestOptions
+    });
   });
-  return url;
 }
 
-exports.oauthAuthorizationUrl = oauthAuthorizationUrl;
+function withDefaults(oldEndpoint, newDefaults) {
+  const endpoint = oldEndpoint.defaults(newDefaults);
+
+  const newApi = function (route, parameters) {
+    const endpointOptions = endpoint.merge(route, parameters);
+
+    if (!endpointOptions.request || !endpointOptions.request.hook) {
+      return fetchWrapper(endpoint.parse(endpointOptions));
+    }
+
+    const request = (route, parameters) => {
+      return fetchWrapper(endpoint.parse(endpoint.merge(route, parameters)));
+    };
+
+    Object.assign(request, {
+      endpoint,
+      defaults: withDefaults.bind(null, endpoint)
+    });
+    return endpointOptions.request.hook(request, endpointOptions);
+  };
+
+  return Object.assign(newApi, {
+    endpoint,
+    defaults: withDefaults.bind(null, endpoint)
+  });
+}
+
+const request = withDefaults(endpoint.endpoint, {
+  headers: {
+    "user-agent": `octokit-request.js/${VERSION} ${universalUserAgent.getUserAgent()}`
+  }
+});
+
+exports.request = request;
 //# sourceMappingURL=index.js.map
 
 
@@ -3559,7 +5572,6 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
 
 var AggregateError = _interopDefault(__nccwpck_require__(1231));
-var debug = __nccwpck_require__(8237);
 var crypto = __nccwpck_require__(6417);
 var buffer = __nccwpck_require__(4293);
 
@@ -3785,50 +5797,6 @@ function createEventHandler(options) {
   };
 }
 
-function isntWebhook(request, options) {
-  // GitHub sends all events as POST requests
-  if (request.method !== "POST") {
-    return true;
-  } // We must match the configured path to allow custom POST routes which include
-  // the webhook route. For example if the webhook route is / then it would be
-  // impossible to define a `POST /my/custom/app` route as the `POST /`.
-
-
-  if (typeof request.url !== "string" || request.url.split("?")[0] !== options.path) {
-    return true;
-  }
-
-  return false;
-}
-
-const WEBHOOK_HEADERS = ["x-github-event", "x-hub-signature", "x-github-delivery"]; // https://docs.github.com/en/developers/webhooks-and-events/webhook-events-and-payloads#delivery-headers
-
-function getMissingHeaders(request) {
-  return WEBHOOK_HEADERS.filter(header => !(header in request.headers));
-}
-
-// @ts-ignore to address #245
-function getPayload(request) {
-  // If request.body already exists we can stop here
-  // See https://github.com/octokit/webhooks.js/pull/23
-  if (request.body) return Promise.resolve(request.body);
-  return new Promise((resolve, reject) => {
-    let data = "";
-    request.setEncoding("utf8");
-    request.on("error", error => reject(new AggregateError([error])));
-    request.on("data", chunk => data += chunk);
-    request.on("end", () => {
-      try {
-        resolve(JSON.parse(data));
-      } catch (error) {
-        error.message = "Invalid JSON";
-        error.status = 400;
-        reject(new AggregateError([error]));
-      }
-    });
-  });
-}
-
 var Algorithm;
 
 (function (Algorithm) {
@@ -3842,10 +5810,10 @@ function sign(options, payload) {
     algorithm
   } = typeof options === "string" ? {
     secret: options,
-    algorithm: Algorithm.SHA1
+    algorithm: Algorithm.SHA256
   } : {
     secret: options.secret,
-    algorithm: options.algorithm || Algorithm.SHA1
+    algorithm: options.algorithm || Algorithm.SHA256
   };
 
   if (!secret || !payload) {
@@ -3908,40 +5876,62 @@ function verifyAndReceive(state, event) {
   });
 }
 
-function middleware(state, request, response, next) {
-  if (isntWebhook(request, {
-    path: state.path
-  })) {
-    // the next callback is set when used as an express middleware. That allows
-    // it to define custom routes like /my/custom/page while the webhooks are
-    // expected to be sent to the / root path. Otherwise the root path would
-    // match all requests and would make it impossible to define custom routes
-    if (next) {
-      next();
-      return;
-    }
+const WEBHOOK_HEADERS = ["x-github-event", "x-hub-signature-256", "x-github-delivery"]; // https://docs.github.com/en/developers/webhooks-and-events/webhook-events-and-payloads#delivery-headers
 
-    state.log.debug(`ignored: ${request.method} ${request.url}`);
-    response.statusCode = 404;
-    response.end("Not found");
-    return;
+function getMissingHeaders(request) {
+  return WEBHOOK_HEADERS.filter(header => !(header in request.headers));
+}
+
+// @ts-ignore to address #245
+function getPayload(request) {
+  // If request.body already exists we can stop here
+  // See https://github.com/octokit/webhooks.js/pull/23
+  if (request.body) return Promise.resolve(request.body);
+  return new Promise((resolve, reject) => {
+    let data = "";
+    request.setEncoding("utf8"); // istanbul ignore next
+
+    request.on("error", error => reject(new AggregateError([error])));
+    request.on("data", chunk => data += chunk);
+    request.on("end", () => {
+      try {
+        resolve(JSON.parse(data));
+      } catch (error) {
+        error.message = "Invalid JSON";
+        error.status = 400;
+        reject(new AggregateError([error]));
+      }
+    });
+  });
+}
+
+async function middleware(webhooks, options, request, response, next) {
+  const {
+    pathname
+  } = new URL(request.url, "http://localhost");
+  const isUnknownRoute = request.method !== "POST" || pathname !== options.path;
+  const isExpressMiddleware = typeof next === "function";
+
+  if (!isExpressMiddleware && isUnknownRoute) {
+    return options.onUnhandledRequest(request, response);
   }
 
   const missingHeaders = getMissingHeaders(request).join(", ");
 
   if (missingHeaders) {
-    const error = new Error(`[@octokit/webhooks] Required headers missing: ${missingHeaders}`);
-    return state.eventHandler.receive(error).catch(() => {
-      response.statusCode = 400;
-      response.end(error.message);
+    response.writeHead(400, {
+      "content-type": "application/json"
     });
+    response.end(JSON.stringify({
+      error: `Required headers missing: ${missingHeaders}`
+    }));
+    return;
   }
 
   const eventName = request.headers["x-github-event"];
-  const signatureSHA1 = request.headers["x-hub-signature"];
   const signatureSHA256 = request.headers["x-hub-signature-256"];
   const id = request.headers["x-github-delivery"];
-  state.log.debug(`${eventName} event received (id: ${id})`); // GitHub will abort the request if it does not receive a response within 10s
+  options.log.debug(`${eventName} event received (id: ${id})`); // GitHub will abort the request if it does not receive a response within 10s
   // See https://github.com/octokit/webhooks.js/issues/185
 
   let didTimeout = false;
@@ -3950,44 +5940,46 @@ function middleware(state, request, response, next) {
     response.statusCode = 202;
     response.end("still processing\n");
   }, 9000).unref();
-  return getPayload(request).then(payload => {
-    return verifyAndReceive(state, {
+
+  try {
+    const payload = await getPayload(request);
+    await webhooks.verifyAndReceive({
       id: id,
       name: eventName,
       payload: payload,
-      signature: signatureSHA256 || signatureSHA1
+      signature: signatureSHA256
     });
-  }).then(() => {
     clearTimeout(timeout);
     if (didTimeout) return;
     response.end("ok\n");
-  }).catch(error => {
+  } catch (error) {
     clearTimeout(timeout);
     if (didTimeout) return;
     const statusCode = Array.from(error)[0].status;
-    response.statusCode = statusCode || 500;
+    response.statusCode = typeof statusCode !== "undefined" ? statusCode : 500;
     response.end(error.toString());
-  });
+  }
 }
 
-function createMiddleware(options) {
-  if (!options || !options.secret) {
-    throw new Error("[@octokit/webhooks] options.secret required");
-  }
+function onUnhandledRequestDefault(request, response) {
+  response.writeHead(404, {
+    "content-type": "application/json"
+  });
+  response.end(JSON.stringify({
+    error: `Unknown route: ${request.method} ${request.url}`
+  }));
+}
 
-  const state = {
-    eventHandler: createEventHandler(options),
-    path: options.path || "/",
-    secret: options.secret,
-    hooks: {},
-    log: createLogger(options.log || {
-      debug: debug.debug("webhooks:receiver")
-    })
-  };
-  const api = middleware.bind(null, state);
-  api.on = state.eventHandler.on;
-  api.removeListener = state.eventHandler.removeListener;
-  return api;
+function createNodeMiddleware(webhooks, {
+  path = "/api/github/webhooks",
+  onUnhandledRequest = onUnhandledRequestDefault,
+  log = createLogger()
+} = {}) {
+  return middleware.bind(null, webhooks, {
+    path,
+    onUnhandledRequest,
+    log
+  });
 }
 
 class Webhooks {
@@ -3998,7 +5990,6 @@ class Webhooks {
 
     const state = {
       eventHandler: createEventHandler(options),
-      path: options.path || "/",
       secret: options.secret,
       hooks: {},
       log: createLogger(options.log)
@@ -4010,18 +6001,14 @@ class Webhooks {
     this.onError = state.eventHandler.onError;
     this.removeListener = state.eventHandler.removeListener;
     this.receive = state.eventHandler.receive;
-    this.middleware = middleware.bind(null, state);
     this.verifyAndReceive = verifyAndReceive.bind(null, state);
   }
 
 }
 
-const createWebhooksApi = Webhooks.prototype.constructor;
-
 exports.Webhooks = Webhooks;
 exports.createEventHandler = createEventHandler;
-exports.createMiddleware = createMiddleware;
-exports.createWebhooksApi = createWebhooksApi;
+exports.createNodeMiddleware = createNodeMiddleware;
 exports.sign = sign;
 exports.verify = verify;
 //# sourceMappingURL=index.js.map
@@ -4367,824 +6354,6 @@ module.exports = (stack, options) => {
 
 /***/ }),
 
-/***/ 8222:
-/***/ ((module, exports, __nccwpck_require__) => {
-
-/* eslint-env browser */
-
-/**
- * This is the web browser implementation of `debug()`.
- */
-
-exports.formatArgs = formatArgs;
-exports.save = save;
-exports.load = load;
-exports.useColors = useColors;
-exports.storage = localstorage();
-
-/**
- * Colors.
- */
-
-exports.colors = [
-	'#0000CC',
-	'#0000FF',
-	'#0033CC',
-	'#0033FF',
-	'#0066CC',
-	'#0066FF',
-	'#0099CC',
-	'#0099FF',
-	'#00CC00',
-	'#00CC33',
-	'#00CC66',
-	'#00CC99',
-	'#00CCCC',
-	'#00CCFF',
-	'#3300CC',
-	'#3300FF',
-	'#3333CC',
-	'#3333FF',
-	'#3366CC',
-	'#3366FF',
-	'#3399CC',
-	'#3399FF',
-	'#33CC00',
-	'#33CC33',
-	'#33CC66',
-	'#33CC99',
-	'#33CCCC',
-	'#33CCFF',
-	'#6600CC',
-	'#6600FF',
-	'#6633CC',
-	'#6633FF',
-	'#66CC00',
-	'#66CC33',
-	'#9900CC',
-	'#9900FF',
-	'#9933CC',
-	'#9933FF',
-	'#99CC00',
-	'#99CC33',
-	'#CC0000',
-	'#CC0033',
-	'#CC0066',
-	'#CC0099',
-	'#CC00CC',
-	'#CC00FF',
-	'#CC3300',
-	'#CC3333',
-	'#CC3366',
-	'#CC3399',
-	'#CC33CC',
-	'#CC33FF',
-	'#CC6600',
-	'#CC6633',
-	'#CC9900',
-	'#CC9933',
-	'#CCCC00',
-	'#CCCC33',
-	'#FF0000',
-	'#FF0033',
-	'#FF0066',
-	'#FF0099',
-	'#FF00CC',
-	'#FF00FF',
-	'#FF3300',
-	'#FF3333',
-	'#FF3366',
-	'#FF3399',
-	'#FF33CC',
-	'#FF33FF',
-	'#FF6600',
-	'#FF6633',
-	'#FF9900',
-	'#FF9933',
-	'#FFCC00',
-	'#FFCC33'
-];
-
-/**
- * Currently only WebKit-based Web Inspectors, Firefox >= v31,
- * and the Firebug extension (any Firefox version) are known
- * to support "%c" CSS customizations.
- *
- * TODO: add a `localStorage` variable to explicitly enable/disable colors
- */
-
-// eslint-disable-next-line complexity
-function useColors() {
-	// NB: In an Electron preload script, document will be defined but not fully
-	// initialized. Since we know we're in Chrome, we'll just detect this case
-	// explicitly
-	if (typeof window !== 'undefined' && window.process && (window.process.type === 'renderer' || window.process.__nwjs)) {
-		return true;
-	}
-
-	// Internet Explorer and Edge do not support colors.
-	if (typeof navigator !== 'undefined' && navigator.userAgent && navigator.userAgent.toLowerCase().match(/(edge|trident)\/(\d+)/)) {
-		return false;
-	}
-
-	// Is webkit? http://stackoverflow.com/a/16459606/376773
-	// document is undefined in react-native: https://github.com/facebook/react-native/pull/1632
-	return (typeof document !== 'undefined' && document.documentElement && document.documentElement.style && document.documentElement.style.WebkitAppearance) ||
-		// Is firebug? http://stackoverflow.com/a/398120/376773
-		(typeof window !== 'undefined' && window.console && (window.console.firebug || (window.console.exception && window.console.table))) ||
-		// Is firefox >= v31?
-		// https://developer.mozilla.org/en-US/docs/Tools/Web_Console#Styling_messages
-		(typeof navigator !== 'undefined' && navigator.userAgent && navigator.userAgent.toLowerCase().match(/firefox\/(\d+)/) && parseInt(RegExp.$1, 10) >= 31) ||
-		// Double check webkit in userAgent just in case we are in a worker
-		(typeof navigator !== 'undefined' && navigator.userAgent && navigator.userAgent.toLowerCase().match(/applewebkit\/(\d+)/));
-}
-
-/**
- * Colorize log arguments if enabled.
- *
- * @api public
- */
-
-function formatArgs(args) {
-	args[0] = (this.useColors ? '%c' : '') +
-		this.namespace +
-		(this.useColors ? ' %c' : ' ') +
-		args[0] +
-		(this.useColors ? '%c ' : ' ') +
-		'+' + module.exports.humanize(this.diff);
-
-	if (!this.useColors) {
-		return;
-	}
-
-	const c = 'color: ' + this.color;
-	args.splice(1, 0, c, 'color: inherit');
-
-	// The final "%c" is somewhat tricky, because there could be other
-	// arguments passed either before or after the %c, so we need to
-	// figure out the correct index to insert the CSS into
-	let index = 0;
-	let lastC = 0;
-	args[0].replace(/%[a-zA-Z%]/g, match => {
-		if (match === '%%') {
-			return;
-		}
-		index++;
-		if (match === '%c') {
-			// We only are interested in the *last* %c
-			// (the user may have provided their own)
-			lastC = index;
-		}
-	});
-
-	args.splice(lastC, 0, c);
-}
-
-/**
- * Invokes `console.debug()` when available.
- * No-op when `console.debug` is not a "function".
- * If `console.debug` is not available, falls back
- * to `console.log`.
- *
- * @api public
- */
-exports.log = console.debug || console.log || (() => {});
-
-/**
- * Save `namespaces`.
- *
- * @param {String} namespaces
- * @api private
- */
-function save(namespaces) {
-	try {
-		if (namespaces) {
-			exports.storage.setItem('debug', namespaces);
-		} else {
-			exports.storage.removeItem('debug');
-		}
-	} catch (error) {
-		// Swallow
-		// XXX (@Qix-) should we be logging these?
-	}
-}
-
-/**
- * Load `namespaces`.
- *
- * @return {String} returns the previously persisted debug modes
- * @api private
- */
-function load() {
-	let r;
-	try {
-		r = exports.storage.getItem('debug');
-	} catch (error) {
-		// Swallow
-		// XXX (@Qix-) should we be logging these?
-	}
-
-	// If debug isn't set in LS, and we're in Electron, try to load $DEBUG
-	if (!r && typeof process !== 'undefined' && 'env' in process) {
-		r = process.env.DEBUG;
-	}
-
-	return r;
-}
-
-/**
- * Localstorage attempts to return the localstorage.
- *
- * This is necessary because safari throws
- * when a user disables cookies/localstorage
- * and you attempt to access it.
- *
- * @return {LocalStorage}
- * @api private
- */
-
-function localstorage() {
-	try {
-		// TVMLKit (Apple TV JS Runtime) does not have a window object, just localStorage in the global context
-		// The Browser also has localStorage in the global context.
-		return localStorage;
-	} catch (error) {
-		// Swallow
-		// XXX (@Qix-) should we be logging these?
-	}
-}
-
-module.exports = __nccwpck_require__(6243)(exports);
-
-const {formatters} = module.exports;
-
-/**
- * Map %j to `JSON.stringify()`, since no Web Inspectors do that by default.
- */
-
-formatters.j = function (v) {
-	try {
-		return JSON.stringify(v);
-	} catch (error) {
-		return '[UnexpectedJSONParseError]: ' + error.message;
-	}
-};
-
-
-/***/ }),
-
-/***/ 6243:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
-
-
-/**
- * This is the common logic for both the Node.js and web browser
- * implementations of `debug()`.
- */
-
-function setup(env) {
-	createDebug.debug = createDebug;
-	createDebug.default = createDebug;
-	createDebug.coerce = coerce;
-	createDebug.disable = disable;
-	createDebug.enable = enable;
-	createDebug.enabled = enabled;
-	createDebug.humanize = __nccwpck_require__(900);
-
-	Object.keys(env).forEach(key => {
-		createDebug[key] = env[key];
-	});
-
-	/**
-	* Active `debug` instances.
-	*/
-	createDebug.instances = [];
-
-	/**
-	* The currently active debug mode names, and names to skip.
-	*/
-
-	createDebug.names = [];
-	createDebug.skips = [];
-
-	/**
-	* Map of special "%n" handling functions, for the debug "format" argument.
-	*
-	* Valid key names are a single, lower or upper-case letter, i.e. "n" and "N".
-	*/
-	createDebug.formatters = {};
-
-	/**
-	* Selects a color for a debug namespace
-	* @param {String} namespace The namespace string for the for the debug instance to be colored
-	* @return {Number|String} An ANSI color code for the given namespace
-	* @api private
-	*/
-	function selectColor(namespace) {
-		let hash = 0;
-
-		for (let i = 0; i < namespace.length; i++) {
-			hash = ((hash << 5) - hash) + namespace.charCodeAt(i);
-			hash |= 0; // Convert to 32bit integer
-		}
-
-		return createDebug.colors[Math.abs(hash) % createDebug.colors.length];
-	}
-	createDebug.selectColor = selectColor;
-
-	/**
-	* Create a debugger with the given `namespace`.
-	*
-	* @param {String} namespace
-	* @return {Function}
-	* @api public
-	*/
-	function createDebug(namespace) {
-		let prevTime;
-
-		function debug(...args) {
-			// Disabled?
-			if (!debug.enabled) {
-				return;
-			}
-
-			const self = debug;
-
-			// Set `diff` timestamp
-			const curr = Number(new Date());
-			const ms = curr - (prevTime || curr);
-			self.diff = ms;
-			self.prev = prevTime;
-			self.curr = curr;
-			prevTime = curr;
-
-			args[0] = createDebug.coerce(args[0]);
-
-			if (typeof args[0] !== 'string') {
-				// Anything else let's inspect with %O
-				args.unshift('%O');
-			}
-
-			// Apply any `formatters` transformations
-			let index = 0;
-			args[0] = args[0].replace(/%([a-zA-Z%])/g, (match, format) => {
-				// If we encounter an escaped % then don't increase the array index
-				if (match === '%%') {
-					return match;
-				}
-				index++;
-				const formatter = createDebug.formatters[format];
-				if (typeof formatter === 'function') {
-					const val = args[index];
-					match = formatter.call(self, val);
-
-					// Now we need to remove `args[index]` since it's inlined in the `format`
-					args.splice(index, 1);
-					index--;
-				}
-				return match;
-			});
-
-			// Apply env-specific formatting (colors, etc.)
-			createDebug.formatArgs.call(self, args);
-
-			const logFn = self.log || createDebug.log;
-			logFn.apply(self, args);
-		}
-
-		debug.namespace = namespace;
-		debug.enabled = createDebug.enabled(namespace);
-		debug.useColors = createDebug.useColors();
-		debug.color = createDebug.selectColor(namespace);
-		debug.destroy = destroy;
-		debug.extend = extend;
-
-		// Env-specific initialization logic for debug instances
-		if (typeof createDebug.init === 'function') {
-			createDebug.init(debug);
-		}
-
-		createDebug.instances.push(debug);
-
-		return debug;
-	}
-
-	function destroy() {
-		const index = createDebug.instances.indexOf(this);
-		if (index !== -1) {
-			createDebug.instances.splice(index, 1);
-			return true;
-		}
-		return false;
-	}
-
-	function extend(namespace, delimiter) {
-		const newDebug = createDebug(this.namespace + (typeof delimiter === 'undefined' ? ':' : delimiter) + namespace);
-		newDebug.log = this.log;
-		return newDebug;
-	}
-
-	/**
-	* Enables a debug mode by namespaces. This can include modes
-	* separated by a colon and wildcards.
-	*
-	* @param {String} namespaces
-	* @api public
-	*/
-	function enable(namespaces) {
-		createDebug.save(namespaces);
-
-		createDebug.names = [];
-		createDebug.skips = [];
-
-		let i;
-		const split = (typeof namespaces === 'string' ? namespaces : '').split(/[\s,]+/);
-		const len = split.length;
-
-		for (i = 0; i < len; i++) {
-			if (!split[i]) {
-				// ignore empty strings
-				continue;
-			}
-
-			namespaces = split[i].replace(/\*/g, '.*?');
-
-			if (namespaces[0] === '-') {
-				createDebug.skips.push(new RegExp('^' + namespaces.substr(1) + '$'));
-			} else {
-				createDebug.names.push(new RegExp('^' + namespaces + '$'));
-			}
-		}
-
-		for (i = 0; i < createDebug.instances.length; i++) {
-			const instance = createDebug.instances[i];
-			instance.enabled = createDebug.enabled(instance.namespace);
-		}
-	}
-
-	/**
-	* Disable debug output.
-	*
-	* @return {String} namespaces
-	* @api public
-	*/
-	function disable() {
-		const namespaces = [
-			...createDebug.names.map(toNamespace),
-			...createDebug.skips.map(toNamespace).map(namespace => '-' + namespace)
-		].join(',');
-		createDebug.enable('');
-		return namespaces;
-	}
-
-	/**
-	* Returns true if the given mode name is enabled, false otherwise.
-	*
-	* @param {String} name
-	* @return {Boolean}
-	* @api public
-	*/
-	function enabled(name) {
-		if (name[name.length - 1] === '*') {
-			return true;
-		}
-
-		let i;
-		let len;
-
-		for (i = 0, len = createDebug.skips.length; i < len; i++) {
-			if (createDebug.skips[i].test(name)) {
-				return false;
-			}
-		}
-
-		for (i = 0, len = createDebug.names.length; i < len; i++) {
-			if (createDebug.names[i].test(name)) {
-				return true;
-			}
-		}
-
-		return false;
-	}
-
-	/**
-	* Convert regexp to namespace
-	*
-	* @param {RegExp} regxep
-	* @return {String} namespace
-	* @api private
-	*/
-	function toNamespace(regexp) {
-		return regexp.toString()
-			.substring(2, regexp.toString().length - 2)
-			.replace(/\.\*\?$/, '*');
-	}
-
-	/**
-	* Coerce `val`.
-	*
-	* @param {Mixed} val
-	* @return {Mixed}
-	* @api private
-	*/
-	function coerce(val) {
-		if (val instanceof Error) {
-			return val.stack || val.message;
-		}
-		return val;
-	}
-
-	createDebug.enable(createDebug.load());
-
-	return createDebug;
-}
-
-module.exports = setup;
-
-
-/***/ }),
-
-/***/ 8237:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
-
-/**
- * Detect Electron renderer / nwjs process, which is node, but we should
- * treat as a browser.
- */
-
-if (typeof process === 'undefined' || process.type === 'renderer' || process.browser === true || process.__nwjs) {
-	module.exports = __nccwpck_require__(8222);
-} else {
-	module.exports = __nccwpck_require__(5332);
-}
-
-
-/***/ }),
-
-/***/ 5332:
-/***/ ((module, exports, __nccwpck_require__) => {
-
-/**
- * Module dependencies.
- */
-
-const tty = __nccwpck_require__(3867);
-const util = __nccwpck_require__(1669);
-
-/**
- * This is the Node.js implementation of `debug()`.
- */
-
-exports.init = init;
-exports.log = log;
-exports.formatArgs = formatArgs;
-exports.save = save;
-exports.load = load;
-exports.useColors = useColors;
-
-/**
- * Colors.
- */
-
-exports.colors = [6, 2, 3, 4, 5, 1];
-
-try {
-	// Optional dependency (as in, doesn't need to be installed, NOT like optionalDependencies in package.json)
-	// eslint-disable-next-line import/no-extraneous-dependencies
-	const supportsColor = __nccwpck_require__(9318);
-
-	if (supportsColor && (supportsColor.stderr || supportsColor).level >= 2) {
-		exports.colors = [
-			20,
-			21,
-			26,
-			27,
-			32,
-			33,
-			38,
-			39,
-			40,
-			41,
-			42,
-			43,
-			44,
-			45,
-			56,
-			57,
-			62,
-			63,
-			68,
-			69,
-			74,
-			75,
-			76,
-			77,
-			78,
-			79,
-			80,
-			81,
-			92,
-			93,
-			98,
-			99,
-			112,
-			113,
-			128,
-			129,
-			134,
-			135,
-			148,
-			149,
-			160,
-			161,
-			162,
-			163,
-			164,
-			165,
-			166,
-			167,
-			168,
-			169,
-			170,
-			171,
-			172,
-			173,
-			178,
-			179,
-			184,
-			185,
-			196,
-			197,
-			198,
-			199,
-			200,
-			201,
-			202,
-			203,
-			204,
-			205,
-			206,
-			207,
-			208,
-			209,
-			214,
-			215,
-			220,
-			221
-		];
-	}
-} catch (error) {
-	// Swallow - we only care if `supports-color` is available; it doesn't have to be.
-}
-
-/**
- * Build up the default `inspectOpts` object from the environment variables.
- *
- *   $ DEBUG_COLORS=no DEBUG_DEPTH=10 DEBUG_SHOW_HIDDEN=enabled node script.js
- */
-
-exports.inspectOpts = Object.keys(process.env).filter(key => {
-	return /^debug_/i.test(key);
-}).reduce((obj, key) => {
-	// Camel-case
-	const prop = key
-		.substring(6)
-		.toLowerCase()
-		.replace(/_([a-z])/g, (_, k) => {
-			return k.toUpperCase();
-		});
-
-	// Coerce string value into JS value
-	let val = process.env[key];
-	if (/^(yes|on|true|enabled)$/i.test(val)) {
-		val = true;
-	} else if (/^(no|off|false|disabled)$/i.test(val)) {
-		val = false;
-	} else if (val === 'null') {
-		val = null;
-	} else {
-		val = Number(val);
-	}
-
-	obj[prop] = val;
-	return obj;
-}, {});
-
-/**
- * Is stdout a TTY? Colored output is enabled when `true`.
- */
-
-function useColors() {
-	return 'colors' in exports.inspectOpts ?
-		Boolean(exports.inspectOpts.colors) :
-		tty.isatty(process.stderr.fd);
-}
-
-/**
- * Adds ANSI color escape codes if enabled.
- *
- * @api public
- */
-
-function formatArgs(args) {
-	const {namespace: name, useColors} = this;
-
-	if (useColors) {
-		const c = this.color;
-		const colorCode = '\u001B[3' + (c < 8 ? c : '8;5;' + c);
-		const prefix = `  ${colorCode};1m${name} \u001B[0m`;
-
-		args[0] = prefix + args[0].split('\n').join('\n' + prefix);
-		args.push(colorCode + 'm+' + module.exports.humanize(this.diff) + '\u001B[0m');
-	} else {
-		args[0] = getDate() + name + ' ' + args[0];
-	}
-}
-
-function getDate() {
-	if (exports.inspectOpts.hideDate) {
-		return '';
-	}
-	return new Date().toISOString() + ' ';
-}
-
-/**
- * Invokes `util.format()` with the specified arguments and writes to stderr.
- */
-
-function log(...args) {
-	return process.stderr.write(util.format(...args) + '\n');
-}
-
-/**
- * Save `namespaces`.
- *
- * @param {String} namespaces
- * @api private
- */
-function save(namespaces) {
-	if (namespaces) {
-		process.env.DEBUG = namespaces;
-	} else {
-		// If you set a process.env field to null or undefined, it gets cast to the
-		// string 'null' or 'undefined'. Just delete instead.
-		delete process.env.DEBUG;
-	}
-}
-
-/**
- * Load `namespaces`.
- *
- * @return {String} returns the previously persisted debug modes
- * @api private
- */
-
-function load() {
-	return process.env.DEBUG;
-}
-
-/**
- * Init logic for `debug` instances.
- *
- * Create a new `inspectOpts` object in case `useColors` is set
- * differently for a particular `debug` instance.
- */
-
-function init(debug) {
-	debug.inspectOpts = {};
-
-	const keys = Object.keys(exports.inspectOpts);
-	for (let i = 0; i < keys.length; i++) {
-		debug.inspectOpts[keys[i]] = exports.inspectOpts[keys[i]];
-	}
-}
-
-module.exports = __nccwpck_require__(6243)(exports);
-
-const {formatters} = module.exports;
-
-/**
- * Map %o to `util.inspect()`, all on a single line.
- */
-
-formatters.o = function (v) {
-	this.inspectOpts.colors = this.useColors;
-	return util.inspect(v, this.inspectOpts)
-		.replace(/\s*\n\s*/g, ' ');
-};
-
-/**
- * Map %O to `util.inspect()`, allowing multiple lines if needed.
- */
-
-formatters.O = function (v) {
-	this.inspectOpts.colors = this.useColors;
-	return util.inspect(v, this.inspectOpts);
-};
-
-
-/***/ }),
-
 /***/ 8932:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -5449,22 +6618,6 @@ module.exports = function fromEntries (iterable) {
     return obj
   }, {})
 }
-
-
-/***/ }),
-
-/***/ 1621:
-/***/ ((module) => {
-
-"use strict";
-
-module.exports = (flag, argv) => {
-	argv = argv || process.argv;
-	const prefix = flag.startsWith('-') ? '' : (flag.length === 1 ? '-' : '--');
-	const pos = argv.indexOf(prefix + flag);
-	const terminatorPos = argv.indexOf('--');
-	return pos !== -1 && (terminatorPos === -1 ? true : pos < terminatorPos);
-};
 
 
 /***/ }),
@@ -12242,145 +13395,6 @@ function coerce (version) {
 
 /***/ }),
 
-/***/ 9318:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
-
-"use strict";
-
-const os = __nccwpck_require__(2087);
-const hasFlag = __nccwpck_require__(1621);
-
-const env = process.env;
-
-let forceColor;
-if (hasFlag('no-color') ||
-	hasFlag('no-colors') ||
-	hasFlag('color=false')) {
-	forceColor = false;
-} else if (hasFlag('color') ||
-	hasFlag('colors') ||
-	hasFlag('color=true') ||
-	hasFlag('color=always')) {
-	forceColor = true;
-}
-if ('FORCE_COLOR' in env) {
-	forceColor = env.FORCE_COLOR.length === 0 || parseInt(env.FORCE_COLOR, 10) !== 0;
-}
-
-function translateLevel(level) {
-	if (level === 0) {
-		return false;
-	}
-
-	return {
-		level,
-		hasBasic: true,
-		has256: level >= 2,
-		has16m: level >= 3
-	};
-}
-
-function supportsColor(stream) {
-	if (forceColor === false) {
-		return 0;
-	}
-
-	if (hasFlag('color=16m') ||
-		hasFlag('color=full') ||
-		hasFlag('color=truecolor')) {
-		return 3;
-	}
-
-	if (hasFlag('color=256')) {
-		return 2;
-	}
-
-	if (stream && !stream.isTTY && forceColor !== true) {
-		return 0;
-	}
-
-	const min = forceColor ? 1 : 0;
-
-	if (process.platform === 'win32') {
-		// Node.js 7.5.0 is the first version of Node.js to include a patch to
-		// libuv that enables 256 color output on Windows. Anything earlier and it
-		// won't work. However, here we target Node.js 8 at minimum as it is an LTS
-		// release, and Node.js 7 is not. Windows 10 build 10586 is the first Windows
-		// release that supports 256 colors. Windows 10 build 14931 is the first release
-		// that supports 16m/TrueColor.
-		const osRelease = os.release().split('.');
-		if (
-			Number(process.versions.node.split('.')[0]) >= 8 &&
-			Number(osRelease[0]) >= 10 &&
-			Number(osRelease[2]) >= 10586
-		) {
-			return Number(osRelease[2]) >= 14931 ? 3 : 2;
-		}
-
-		return 1;
-	}
-
-	if ('CI' in env) {
-		if (['TRAVIS', 'CIRCLECI', 'APPVEYOR', 'GITLAB_CI'].some(sign => sign in env) || env.CI_NAME === 'codeship') {
-			return 1;
-		}
-
-		return min;
-	}
-
-	if ('TEAMCITY_VERSION' in env) {
-		return /^(9\.(0*[1-9]\d*)\.|\d{2,}\.)/.test(env.TEAMCITY_VERSION) ? 1 : 0;
-	}
-
-	if (env.COLORTERM === 'truecolor') {
-		return 3;
-	}
-
-	if ('TERM_PROGRAM' in env) {
-		const version = parseInt((env.TERM_PROGRAM_VERSION || '').split('.')[0], 10);
-
-		switch (env.TERM_PROGRAM) {
-			case 'iTerm.app':
-				return version >= 3 ? 3 : 2;
-			case 'Apple_Terminal':
-				return 2;
-			// No default
-		}
-	}
-
-	if (/-256(color)?$/i.test(env.TERM)) {
-		return 2;
-	}
-
-	if (/^screen|^xterm|^vt100|^vt220|^rxvt|color|ansi|cygwin|linux/i.test(env.TERM)) {
-		return 1;
-	}
-
-	if ('COLORTERM' in env) {
-		return 1;
-	}
-
-	if (env.TERM === 'dumb') {
-		return min;
-	}
-
-	return min;
-}
-
-function getSupportLevel(stream) {
-	const level = supportsColor(stream);
-	return translateLevel(level);
-}
-
-module.exports = {
-	supportsColor: getSupportLevel,
-	stdout: getSupportLevel(process.stdout),
-	stderr: getSupportLevel(process.stderr)
-};
-
-
-/***/ }),
-
 /***/ 4419:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
@@ -13021,14 +14035,6 @@ module.exports = require("path");;
 
 "use strict";
 module.exports = require("stream");;
-
-/***/ }),
-
-/***/ 3867:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("tty");;
 
 /***/ }),
 
