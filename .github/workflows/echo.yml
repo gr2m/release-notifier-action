@@ -1,9 +1,0 @@
-name: Echo
-on: repository_dispatch
-
-jobs:
-  published:
-    runs-on: ubuntu-latest
-    steps:
-      - run: "echo 'event type: ${{ github.event.action }}'"
-      - run: "echo 'new release: ${{ github.event.client_payload.release.tag_name }}'"
