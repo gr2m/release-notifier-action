@@ -649,7 +649,7 @@ function _objectSpread2(target) {
   return target;
 }
 
-const VERSION = "11.3.0";
+const VERSION = "11.3.1";
 
 function webhooks(appOctokit, options // Explict return type for better debugability and performance,
 // see https://github.com/octokit/app.js/pull/201
@@ -897,7 +897,6 @@ function createNodeMiddleware(app, {
   return webhooks$1.createNodeMiddleware(app.webhooks, {
     path: pathPrefix + "/webhooks",
     log: logWithDefaults,
-    // @ts-expect-error TODO: figure out this error
     onUnhandledRequest: oauthApp.createNodeMiddleware(app.oauth, {
       onUnhandledRequest,
       pathPrefix: pathPrefix + "/oauth"
@@ -941,7 +940,6 @@ class App {
 
 
     if (options.oauth) {
-      // @ts-expect-error TODO: figure this out
       this.oauth = new oauthApp.OAuthApp(_objectSpread2(_objectSpread2({}, options.oauth), {}, {
         Octokit
       }));
@@ -4219,7 +4217,7 @@ function _objectWithoutProperties(source, excluded) {
   return target;
 }
 
-const VERSION = "3.3.2";
+const VERSION = "3.4.0";
 
 class Octokit {
   constructor(options = {}) {
