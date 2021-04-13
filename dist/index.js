@@ -1,67 +1,5 @@
-module.exports =
 /******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
-
-/***/ 2932:
-/***/ ((__unused_webpack_module, __unused_webpack_exports, __nccwpck_require__) => {
-
-const { inspect } = __nccwpck_require__(1669);
-
-const core = __nccwpck_require__(2186);
-const { App } = __nccwpck_require__(4389);
-
-const eventPayload = require(process.env.TEST_GITHUB_EVENT_PATH ||
-  process.env.GITHUB_EVENT_PATH);
-
-main();
-
-async function main() {
-  try {
-    const app = new App({
-      appId: +core.getInput("app_id"),
-      privateKey: core.getInput("private_key"),
-    });
-    const eventType =
-      core.getInput("dispatch_event_type") ||
-      `${process.env.GITHUB_REPOSITORY.toLowerCase()} release`;
-
-    core.info(`ℹ️  Repository dispatch event type: "${eventType}"`);
-    core.debug(
-      `ℹ️  event client payload: ${inspect(eventPayload, { depth: Infinity })}`
-    );
-
-    await app.eachRepository(async ({ octokit, repository }) => {
-      const owner = repository.owner.login;
-      const repoUrl = repository.private
-        ? `${owner}/[private]`
-        : repository.html_url;
-
-      core.debug(`ℹ️  Dispatching event for ${repoUrl} (id: ${repository.id})`);
-      try {
-        await octokit.request("POST /repos/{owner}/{repo}/dispatches", {
-          owner,
-          repo: repository.name,
-          event_type: eventType,
-          client_payload: eventPayload,
-        });
-
-        core.info(
-          `✅  Event dispatched successfully for ${repoUrl} (id: ${repository.id})`
-        );
-      } catch (error) {
-        core.warning(
-          `⚠️  Dispatch error: ${inspect(error, { depth: Infinity })}`
-        );
-      }
-    });
-  } catch (error) {
-    core.debug(inspect(error, { depth: Infinity }));
-    core.setFailed(error.message);
-  }
-}
-
-
-/***/ }),
 
 /***/ 7351:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
@@ -649,7 +587,7 @@ function _objectSpread2(target) {
   return target;
 }
 
-const VERSION = "11.3.1";
+const VERSION = "11.4.2";
 
 function webhooks(appOctokit, options // Explict return type for better debugability and performance,
 // see https://github.com/octokit/app.js/pull/201
@@ -941,6 +879,7 @@ class App {
 
     if (options.oauth) {
       this.oauth = new oauthApp.OAuthApp(_objectSpread2(_objectSpread2({}, options.oauth), {}, {
+        clientType: "github-app",
         Octokit
       }));
     } else {
@@ -1633,7 +1572,7 @@ async function hook(state, request, route, parameters) {
   return await request(endpoint);
 }
 
-const VERSION = "4.1.1";
+const VERSION = "4.1.2";
 
 function createOAuthAppAuth(options) {
   const state = Object.assign({
@@ -1924,7 +1863,7 @@ var isPlainObject = __nccwpck_require__(3287);
 var nodeFetch = _interopDefault(__nccwpck_require__(467));
 var requestError = __nccwpck_require__(537);
 
-const VERSION = "5.4.14";
+const VERSION = "5.4.15";
 
 function getBufferResponse(response) {
   return response.arrayBuffer();
@@ -1944,7 +1883,9 @@ function fetchWrapper(requestOptions) {
     body: requestOptions.body,
     headers: requestOptions.headers,
     redirect: requestOptions.redirect
-  }, requestOptions.request)).then(response => {
+  }, // `requestOptions.request.agent` type is incompatible
+  // see https://github.com/octokit/types.ts/pull/264
+  requestOptions.request)).then(response => {
     url = response.url;
     status = response.status;
 
@@ -2165,7 +2106,7 @@ function _objectWithoutProperties(source, excluded) {
   return target;
 }
 
-const VERSION = "1.2.3";
+const VERSION = "1.2.4";
 
 async function getAuthentication(state) {
   // handle code exchange form OAuth Web Flow
@@ -2394,69 +2335,6 @@ exports.requiresBasicAuth = requiresBasicAuth;
 
 /***/ }),
 
-/***/ 7450:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
-
-"use strict";
-
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-
-function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
-
-var deprecation = __nccwpck_require__(8932);
-var once = _interopDefault(__nccwpck_require__(1223));
-
-const logOnce = once(deprecation => console.warn(deprecation));
-/**
- * Error with extra properties to help with debugging
- */
-
-class RequestError extends Error {
-  constructor(message, statusCode, options) {
-    super(message); // Maintains proper stack trace (only available on V8)
-
-    /* istanbul ignore next */
-
-    if (Error.captureStackTrace) {
-      Error.captureStackTrace(this, this.constructor);
-    }
-
-    this.name = "HttpError";
-    this.status = statusCode;
-    Object.defineProperty(this, "code", {
-      get() {
-        logOnce(new deprecation.Deprecation("[@octokit/request-error] `error.code` is deprecated, use `error.status`."));
-        return statusCode;
-      }
-
-    });
-    this.headers = options.headers || {}; // redact request credentials without mutating original request options
-
-    const requestCopy = Object.assign({}, options.request);
-
-    if (options.request.headers.authorization) {
-      requestCopy.headers = Object.assign({}, options.request.headers, {
-        authorization: options.request.headers.authorization.replace(/ .*$/, " [REDACTED]")
-      });
-    }
-
-    requestCopy.url = requestCopy.url // client_id & client_secret can be passed as URL query parameters to increase rate limit
-    // see https://developer.github.com/v3/#increasing-the-unauthenticated-rate-limit-for-oauth-applications
-    .replace(/\bclient_secret=\w+/g, "client_secret=[REDACTED]") // OAuth tokens can be passed as URL query parameters, although it is not recommended
-    // see https://developer.github.com/v3/#oauth2-token-sent-in-a-header
-    .replace(/\baccess_token=\w+/g, "access_token=[REDACTED]");
-    this.request = requestCopy;
-  }
-
-}
-
-exports.RequestError = RequestError;
-//# sourceMappingURL=index.js.map
-
-
-/***/ }),
-
 /***/ 8608:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
@@ -2471,9 +2349,9 @@ var endpoint = __nccwpck_require__(9440);
 var universalUserAgent = __nccwpck_require__(5030);
 var isPlainObject = __nccwpck_require__(3287);
 var nodeFetch = _interopDefault(__nccwpck_require__(467));
-var requestError = __nccwpck_require__(7450);
+var requestError = __nccwpck_require__(537);
 
-const VERSION = "5.4.14";
+const VERSION = "5.4.15";
 
 function getBufferResponse(response) {
   return response.arrayBuffer();
@@ -2493,7 +2371,9 @@ function fetchWrapper(requestOptions) {
     body: requestOptions.body,
     headers: requestOptions.headers,
     redirect: requestOptions.redirect
-  }, requestOptions.request)).then(response => {
+  }, // `requestOptions.request.agent` type is incompatible
+  // see https://github.com/octokit/types.ts/pull/264
+  requestOptions.request)).then(response => {
     url = response.url;
     status = response.status;
 
@@ -3518,7 +3398,7 @@ function _objectSpread2(target) {
   return target;
 }
 
-const VERSION = "3.2.0";
+const VERSION = "3.3.1";
 
 function addEventHandler(state, eventName, eventHandler) {
   if (Array.isArray(eventName)) {
@@ -3952,7 +3832,6 @@ async function middleware(app, options, request, response) {
       }
 
       const {
-        // @ts-expect-error scopes won't be set for GitHub Apps
         authentication: {
           token,
           scopes
@@ -5060,7 +4939,7 @@ var isPlainObject = __nccwpck_require__(3287);
 var nodeFetch = _interopDefault(__nccwpck_require__(467));
 var requestError = __nccwpck_require__(2434);
 
-const VERSION = "5.4.14";
+const VERSION = "5.4.15";
 
 function getBufferResponse(response) {
   return response.arrayBuffer();
@@ -5080,7 +4959,9 @@ function fetchWrapper(requestOptions) {
     body: requestOptions.body,
     headers: requestOptions.headers,
     redirect: requestOptions.redirect
-  }, requestOptions.request)).then(response => {
+  }, // `requestOptions.request.agent` type is incompatible
+  // see https://github.com/octokit/types.ts/pull/264
+  requestOptions.request)).then(response => {
     url = response.url;
     status = response.status;
 
@@ -5559,6 +5440,92 @@ exports.request = request;
 
 /***/ }),
 
+/***/ 9768:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+
+var crypto = __nccwpck_require__(6417);
+var buffer = __nccwpck_require__(4293);
+
+const VERSION = "1.0.0";
+
+var Algorithm;
+
+(function (Algorithm) {
+  Algorithm["SHA1"] = "sha1";
+  Algorithm["SHA256"] = "sha256";
+})(Algorithm || (Algorithm = {}));
+
+async function sign(options, payload) {
+  const {
+    secret,
+    algorithm
+  } = typeof options === "object" ? {
+    secret: options.secret,
+    algorithm: options.algorithm || Algorithm.SHA256
+  } : {
+    secret: options,
+    algorithm: Algorithm.SHA256
+  };
+
+  if (!secret || !payload) {
+    throw new TypeError("[@octokit/webhooks-methods] secret & payload required for sign()");
+  }
+
+  if (!Object.values(Algorithm).includes(algorithm)) {
+    throw new TypeError(`[@octokit/webhooks] Algorithm ${algorithm} is not supported. Must be  'sha1' or 'sha256'`);
+  }
+
+  payload = typeof payload === "string" ? payload : toNormalizedJsonString(payload);
+  return `${algorithm}=${crypto.createHmac(algorithm, secret).update(payload).digest("hex")}`;
+}
+
+function toNormalizedJsonString(payload) {
+  return JSON.stringify(payload).replace(/[^\\]\\u[\da-f]{4}/g, s => {
+    return s.substr(0, 3) + s.substr(3).toUpperCase();
+  });
+}
+
+sign.VERSION = VERSION;
+
+const getAlgorithm = signature => {
+  return signature.startsWith("sha256=") ? "sha256" : "sha1";
+};
+
+async function verify(secret, eventPayload, signature) {
+  if (!secret || !eventPayload || !signature) {
+    throw new TypeError("[@octokit/webhooks-methods] secret, eventPayload & signature required");
+  }
+
+  const signatureBuffer = buffer.Buffer.from(signature);
+  const algorithm = getAlgorithm(signature);
+  const verificationBuffer = buffer.Buffer.from(await sign({
+    secret,
+    algorithm
+  }, eventPayload));
+
+  if (signatureBuffer.length !== verificationBuffer.length) {
+    return false;
+  } // constant time comparison to prevent timing attachs
+  // https://stackoverflow.com/a/31096242/206879
+  // https://en.wikipedia.org/wiki/Timing_attack
+
+
+  return crypto.timingSafeEqual(signatureBuffer, verificationBuffer);
+}
+verify.VERSION = VERSION;
+
+exports.sign = sign;
+exports.verify = verify;
+//# sourceMappingURL=index.js.map
+
+
+/***/ }),
+
 /***/ 8513:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
@@ -5569,9 +5536,8 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
 
+var webhooksMethods = __nccwpck_require__(9768);
 var AggregateError = _interopDefault(__nccwpck_require__(1231));
-var crypto = __nccwpck_require__(6417);
-var buffer = __nccwpck_require__(4293);
 
 function _defineProperty(obj, key, value) {
   if (key in obj) {
@@ -5795,69 +5761,9 @@ function createEventHandler(options) {
   };
 }
 
-var Algorithm;
-
-(function (Algorithm) {
-  Algorithm["SHA1"] = "sha1";
-  Algorithm["SHA256"] = "sha256";
-})(Algorithm || (Algorithm = {}));
-
-function sign(options, payload) {
-  const {
-    secret,
-    algorithm
-  } = typeof options === "string" ? {
-    secret: options,
-    algorithm: Algorithm.SHA256
-  } : {
-    secret: options.secret,
-    algorithm: options.algorithm || Algorithm.SHA256
-  };
-
-  if (!secret || !payload) {
-    throw new TypeError("[@octokit/webhooks] secret & payload required");
-  }
-
-  if (!Object.values(Algorithm).includes(algorithm)) {
-    throw new TypeError(`[@octokit/webhooks] Algorithm ${algorithm} is not supported. Must be  'sha1' or 'sha256'`);
-  }
-
-  payload = typeof payload === "string" ? payload : toNormalizedJsonString(payload);
-  return `${algorithm}=${crypto.createHmac(algorithm, secret).update(payload).digest("hex")}`;
-}
-
-function toNormalizedJsonString(payload) {
-  return JSON.stringify(payload).replace(/[^\\]\\u[\da-f]{4}/g, s => {
-    return s.substr(0, 3) + s.substr(3).toUpperCase();
-  });
-}
-
-const getAlgorithm = signature => {
-  return signature.startsWith("sha256=") ? "sha256" : "sha1";
-};
-
-function verify(secret, eventPayload, signature) {
-  if (!secret || !eventPayload || !signature) {
-    throw new TypeError("[@octokit/webhooks] secret, eventPayload & signature required");
-  }
-
-  const signatureBuffer = buffer.Buffer.from(signature);
-  const algorithm = getAlgorithm(signature);
-  const verificationBuffer = buffer.Buffer.from(sign({
-    secret,
-    algorithm
-  }, eventPayload));
-
-  if (signatureBuffer.length !== verificationBuffer.length) {
-    return false;
-  }
-
-  return crypto.timingSafeEqual(signatureBuffer, verificationBuffer);
-}
-
-function verifyAndReceive(state, event) {
+async function verifyAndReceive(state, event) {
   // verify will validate that the secret is not undefined
-  const matchesSignature = verify(state.secret, event.payload, event.signature);
+  const matchesSignature = await webhooksMethods.verify(state.secret, event.payload, event.signature);
 
   if (!matchesSignature) {
     const error = new Error("[@octokit/webhooks] signature does not match event payload and secret");
@@ -5992,8 +5898,8 @@ class Webhooks {
       hooks: {},
       log: createLogger(options.log)
     };
-    this.sign = sign.bind(null, options.secret);
-    this.verify = verify.bind(null, options.secret);
+    this.sign = webhooksMethods.sign.bind(null, options.secret);
+    this.verify = webhooksMethods.verify.bind(null, options.secret);
     this.on = state.eventHandler.on;
     this.onAny = state.eventHandler.onAny;
     this.onError = state.eventHandler.onError;
@@ -6007,8 +5913,6 @@ class Webhooks {
 exports.Webhooks = Webhooks;
 exports.createEventHandler = createEventHandler;
 exports.createNodeMiddleware = createNodeMiddleware;
-exports.sign = sign;
-exports.verify = verify;
 //# sourceMappingURL=index.js.map
 
 
@@ -14068,8 +13972,9 @@ module.exports = require("zlib");;
 /******/ 	// The require function
 /******/ 	function __nccwpck_require__(moduleId) {
 /******/ 		// Check if module is in cache
-/******/ 		if(__webpack_module_cache__[moduleId]) {
-/******/ 			return __webpack_module_cache__[moduleId].exports;
+/******/ 		var cachedModule = __webpack_module_cache__[moduleId];
+/******/ 		if (cachedModule !== undefined) {
+/******/ 			return cachedModule.exports;
 /******/ 		}
 /******/ 		// Create a new module (and put it into the cache)
 /******/ 		var module = __webpack_module_cache__[moduleId] = {
@@ -14094,10 +13999,67 @@ module.exports = require("zlib");;
 /************************************************************************/
 /******/ 	/* webpack/runtime/compat */
 /******/ 	
-/******/ 	__nccwpck_require__.ab = __dirname + "/";/************************************************************************/
-/******/ 	// module exports must be returned from runtime so entry inlining is disabled
-/******/ 	// startup
-/******/ 	// Load entry module and return exports
-/******/ 	return __nccwpck_require__(2932);
+/******/ 	if (typeof __nccwpck_require__ !== 'undefined') __nccwpck_require__.ab = __dirname + "/";/************************************************************************/
+var __webpack_exports__ = {};
+// This entry need to be wrapped in an IIFE because it need to be isolated against other modules in the chunk.
+(() => {
+const { inspect } = __nccwpck_require__(1669);
+
+const core = __nccwpck_require__(2186);
+const { App } = __nccwpck_require__(4389);
+
+const eventPayload = require(process.env.TEST_GITHUB_EVENT_PATH ||
+  process.env.GITHUB_EVENT_PATH);
+
+main();
+
+async function main() {
+  try {
+    const app = new App({
+      appId: +core.getInput("app_id"),
+      privateKey: core.getInput("private_key"),
+    });
+    const eventType =
+      core.getInput("dispatch_event_type") ||
+      `${process.env.GITHUB_REPOSITORY.toLowerCase()} release`;
+
+    core.info(`ℹ️  Repository dispatch event type: "${eventType}"`);
+    core.debug(
+      `ℹ️  event client payload: ${inspect(eventPayload, { depth: Infinity })}`
+    );
+
+    await app.eachRepository(async ({ octokit, repository }) => {
+      const owner = repository.owner.login;
+      const repoUrl = repository.private
+        ? `${owner}/[private]`
+        : repository.html_url;
+
+      core.debug(`ℹ️  Dispatching event for ${repoUrl} (id: ${repository.id})`);
+      try {
+        await octokit.request("POST /repos/{owner}/{repo}/dispatches", {
+          owner,
+          repo: repository.name,
+          event_type: eventType,
+          client_payload: eventPayload,
+        });
+
+        core.info(
+          `✅  Event dispatched successfully for ${repoUrl} (id: ${repository.id})`
+        );
+      } catch (error) {
+        core.warning(
+          `⚠️  Dispatch error: ${inspect(error, { depth: Infinity })}`
+        );
+      }
+    });
+  } catch (error) {
+    core.debug(inspect(error, { depth: Infinity }));
+    core.setFailed(error.message);
+  }
+}
+
+})();
+
+module.exports = __webpack_exports__;
 /******/ })()
 ;
