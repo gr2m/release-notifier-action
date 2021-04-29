@@ -81,7 +81,7 @@ jobs:
 
 ## How it works
 
-Each time you create, edit, or delete a release on your repository, the action will load all installations using the credentials you provided. For each installation, the action dispatch creates a [repository dispatch event](https://docs.github.com/en/free-pro-team@latest/rest/reference/repos#create-a-repository-dispatch-event) and sets the event typo to what you configured in `inputs.dispatchEventType`.
+Each time you create, edit, or delete a release on your repository, the action will load all installations using the credentials you provided. For each installation, the action dispatch creates a [repository dispatch event](https://docs.github.com/en/free-pro-team@latest/rest/reference/repos#create-a-repository-dispatch-event) and sets the event type to what you configured in `inputs.dispatchEventType`.
 
 ## License
 
