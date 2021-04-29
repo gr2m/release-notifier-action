@@ -24,7 +24,7 @@ Once you are done, generate & download a private key. In your repository, create
 
 ## Usage
 
-Notify users only when a release was published. The [repository dispatch event type](https://docs.github.com/en/free-pro-team@latest/rest/reference/repos#create-a-repository-dispatch-event) is set to `[current repositories full name] release` (e.g. `gr2m/release-notifire action`)
+Notify repositories only when a release was published. The [repository dispatch event type](https://docs.github.com/en/free-pro-team@latest/rest/reference/repos#create-a-repository-dispatch-event) is set to `[current repositories full name] release` (e.g. `gr2m/release-notifire action`)
 
 ```yml
 name: Release Notification
@@ -43,7 +43,7 @@ jobs:
           private_key: ${{ secrets.APP_PRIVATE_KEY }}
 ```
 
-If you want to notify users for all [release activity types](https://docs.github.com/en/free-pro-team@latest/actions/reference/events-that-trigger-workflows#release), you can do
+If you want to notify repositories for all [release activity types](https://docs.github.com/en/free-pro-team@latest/actions/reference/events-that-trigger-workflows#release), you can do
 
 ```yml
 name: Release Notification
