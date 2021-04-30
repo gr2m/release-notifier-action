@@ -11,7 +11,7 @@
 In order to use the action, you have to [register a GitHub app](https://github.com/settings/apps/new).
 
 - `GitHub App name`: set to something like `<Your Project> Release Notifier`
-- `Description`: copy/paste most of this repository's [Notifier app](https://github.com/settings/installations/12807923). Make sure to replace `release-notifier-release` with `<your-project>-release`
+- `Description`: copy/paste most of this repository's [Notifier app](https://github.com/apps/release-notifier-release-notifier). Make sure to replace `release-notifier-release` with `<your-project>-release`
 - `Homepage URL`: your repository URL
 - `Webhook`: remove the check from `[ ] Active`
 - `Repository permissions`: Enable Read & Write access for `Contents`
