@@ -134,7 +134,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getState = exports.saveState = exports.group = exports.endGroup = exports.startGroup = exports.info = exports.warning = exports.error = exports.debug = exports.isDebug = exports.setFailed = exports.setCommandEcho = exports.setOutput = exports.getBooleanInput = exports.getInput = exports.addPath = exports.setSecret = exports.exportVariable = exports.ExitCode = void 0;
+exports.getState = exports.saveState = exports.group = exports.endGroup = exports.startGroup = exports.info = exports.warning = exports.error = exports.debug = exports.isDebug = exports.setFailed = exports.setCommandEcho = exports.setOutput = exports.getBooleanInput = exports.getMultilineInput = exports.getInput = exports.addPath = exports.setSecret = exports.exportVariable = exports.ExitCode = void 0;
 const command_1 = __nccwpck_require__(7351);
 const file_command_1 = __nccwpck_require__(717);
 const utils_1 = __nccwpck_require__(5278);
@@ -220,6 +220,21 @@ function getInput(name, options) {
     return val.trim();
 }
 exports.getInput = getInput;
+/**
+ * Gets the values of an multiline input.  Each value is also trimmed.
+ *
+ * @param     name     name of the input to get
+ * @param     options  optional. See InputOptions.
+ * @returns   string[]
+ *
+ */
+function getMultilineInput(name, options) {
+    const inputs = getInput(name, options)
+        .split('\n')
+        .filter(x => x !== '');
+    return inputs;
+}
+exports.getMultilineInput = getMultilineInput;
 /**
  * Gets the input value of the boolean type in the YAML 1.2 "core schema" specification.
  * Support boolean input list: `true | True | TRUE | false | False | FALSE` .
@@ -653,7 +668,7 @@ function _defineProperty(obj, key, value) {
   return obj;
 }
 
-const VERSION = "12.0.3";
+const VERSION = "12.0.4";
 
 function webhooks(appOctokit, options // Explict return type for better debugability and performance,
 // see https://github.com/octokit/app.js/pull/201
@@ -1027,7 +1042,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
 
 var universalUserAgent = __nccwpck_require__(5030);
-var request = __nccwpck_require__(6234);
+var request = __nccwpck_require__(7052);
 var authOauthApp = __nccwpck_require__(8459);
 var deprecation = __nccwpck_require__(8932);
 var universalGithubAppJwt = __nccwpck_require__(4419);
@@ -1128,17 +1143,25 @@ async function getAppAuthentication({
   privateKey,
   timeDifference
 }) {
-  const appAuthentication = await universalGithubAppJwt.githubAppJwt({
-    id: +appId,
-    privateKey,
-    now: timeDifference && Math.floor(Date.now() / 1000) + timeDifference
-  });
-  return {
-    type: "app",
-    token: appAuthentication.token,
-    appId: appAuthentication.appId,
-    expiresAt: new Date(appAuthentication.expiration * 1000).toISOString()
-  };
+  try {
+    const appAuthentication = await universalGithubAppJwt.githubAppJwt({
+      id: +appId,
+      privateKey,
+      now: timeDifference && Math.floor(Date.now() / 1000) + timeDifference
+    });
+    return {
+      type: "app",
+      token: appAuthentication.token,
+      appId: appAuthentication.appId,
+      expiresAt: new Date(appAuthentication.expiration * 1000).toISOString()
+    };
+  } catch (error) {
+    if (privateKey === "-----BEGIN RSA PRIVATE KEY-----") {
+      throw new Error("The 'privateKey` option contains only the first line '-----BEGIN RSA PRIVATE KEY-----'. If you are setting it using a `.env` file, make sure it is set on a single line with newlines replaced by '\n'");
+    } else {
+      throw error;
+    }
+  }
 }
 
 // https://github.com/isaacs/node-lru-cache#readme
@@ -1287,10 +1310,8 @@ async function getInstallationAuthentication(state, options, customRequest) {
       token,
       expires_at: expiresAt,
       repositories,
-      permissions,
-      // @ts-ignore
-      repository_selection: repositorySelection,
-      // @ts-ignore
+      permissions: permissionsOptional,
+      repository_selection: repositorySelectionOptional,
       single_file: singleFileName
     }
   } = await request("POST /app/installations/{installation_id}/access_tokens", {
@@ -1305,6 +1326,12 @@ async function getInstallationAuthentication(state, options, customRequest) {
       authorization: `bearer ${appAuthentication.token}`
     }
   });
+  /* istanbul ignore next - permissions are optional per OpenAPI spec, but we think that is incorrect */
+
+  const permissions = permissionsOptional || {};
+  /* istanbul ignore next - repositorySelection are optional per OpenAPI spec, but we think that is incorrect */
+
+  const repositorySelection = repositorySelectionOptional || "all";
   const repositoryIds = repositories ? repositories.map(r => r.id) : void 0;
   const repositoryNames = repositories ? repositories.map(repo => repo.name) : void 0;
   const createdAt = new Date().toISOString();
@@ -1361,7 +1388,7 @@ async function auth(state, authOptions) {
   }
 }
 
-const PATHS = ["/app", "/app/hook/config", "/app/installations", "/app/installations/{installation_id}", "/app/installations/{installation_id}/access_tokens", "/app/installations/{installation_id}/suspended", "/marketplace_listing/accounts/{account_id}", "/marketplace_listing/plan", "/marketplace_listing/plans", "/marketplace_listing/plans/{plan_id}/accounts", "/marketplace_listing/stubbed/accounts/{account_id}", "/marketplace_listing/stubbed/plan", "/marketplace_listing/stubbed/plans", "/marketplace_listing/stubbed/plans/{plan_id}/accounts", "/orgs/{org}/installation", "/repos/{owner}/{repo}/installation", "/users/{username}/installation"]; // CREDIT: Simon Grondin (https://github.com/SGrondin)
+const PATHS = ["/app", "/app/hook/config", "/app/hook/deliveries", "/app/hook/deliveries/{delivery_id}", "/app/hook/deliveries/{delivery_id}/attempts", "/app/installations", "/app/installations/{installation_id}", "/app/installations/{installation_id}/access_tokens", "/app/installations/{installation_id}/suspended", "/marketplace_listing/accounts/{account_id}", "/marketplace_listing/plan", "/marketplace_listing/plans", "/marketplace_listing/plans/{plan_id}/accounts", "/marketplace_listing/stubbed/accounts/{account_id}", "/marketplace_listing/stubbed/plan", "/marketplace_listing/stubbed/plans", "/marketplace_listing/stubbed/plans/{plan_id}/accounts", "/orgs/{org}/installation", "/repos/{owner}/{repo}/installation", "/users/{username}/installation"]; // CREDIT: Simon Grondin (https://github.com/SGrondin)
 // https://github.com/octokit/plugin-throttling.js/blob/45c5d7f13b8af448a9dbca468d9c9150a73b3948/lib/route-matcher.js
 
 function routeMatcher(paths) {
@@ -1402,7 +1429,11 @@ function isNotTimeSkewError(error) {
 
 async function hook(state, request, route, parameters) {
   const endpoint = request.endpoint.merge(route, parameters);
-  const url = endpoint.url;
+  const url = endpoint.url; // Do not intercept request to retrieve a new token
+
+  if (/\/login\/oauth\/access_token$/.test(url)) {
+    return request(endpoint);
+  }
 
   if (requiresAppAuth(url.replace(request.endpoint.DEFAULTS.baseUrl, ""))) {
     const {
@@ -1422,11 +1453,11 @@ async function hook(state, request, route, parameters) {
       // Throw the error to be handled upstream.
 
 
-      if (typeof error.headers.date === "undefined") {
+      if (typeof error.response.headers.date === "undefined") {
         throw error;
       }
 
-      const diff = Math.floor((Date.parse(error.headers.date) - Date.parse(new Date().toString())) / 1000);
+      const diff = Math.floor((Date.parse(error.response.headers.date) - Date.parse(new Date().toString())) / 1000);
       state.log.warn(error.message);
       state.log.warn(`[@octokit/auth-app] GitHub API time and system time are different by ${diff} seconds. Retrying request with the difference accounted for.`);
       const {
@@ -1491,7 +1522,7 @@ async function sendRequestWithRetries(state, request, options, createdAt, retrie
   }
 }
 
-const VERSION = "3.4.1";
+const VERSION = "3.6.0";
 
 function createAppAuth(options) {
   if (!options.appId) {
@@ -1541,6 +1572,273 @@ Object.defineProperty(exports, "createOAuthUserAuth", ({
   }
 }));
 exports.createAppAuth = createAppAuth;
+//# sourceMappingURL=index.js.map
+
+
+/***/ }),
+
+/***/ 5634:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+
+function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
+
+var deprecation = __nccwpck_require__(8932);
+var once = _interopDefault(__nccwpck_require__(1223));
+
+const logOnceCode = once(deprecation => console.warn(deprecation));
+const logOnceHeaders = once(deprecation => console.warn(deprecation));
+/**
+ * Error with extra properties to help with debugging
+ */
+
+class RequestError extends Error {
+  constructor(message, statusCode, options) {
+    super(message); // Maintains proper stack trace (only available on V8)
+
+    /* istanbul ignore next */
+
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, this.constructor);
+    }
+
+    this.name = "HttpError";
+    this.status = statusCode;
+    let headers;
+
+    if ("headers" in options && typeof options.headers !== "undefined") {
+      headers = options.headers;
+    }
+
+    if ("response" in options) {
+      this.response = options.response;
+      headers = options.response.headers;
+    } // redact request credentials without mutating original request options
+
+
+    const requestCopy = Object.assign({}, options.request);
+
+    if (options.request.headers.authorization) {
+      requestCopy.headers = Object.assign({}, options.request.headers, {
+        authorization: options.request.headers.authorization.replace(/ .*$/, " [REDACTED]")
+      });
+    }
+
+    requestCopy.url = requestCopy.url // client_id & client_secret can be passed as URL query parameters to increase rate limit
+    // see https://developer.github.com/v3/#increasing-the-unauthenticated-rate-limit-for-oauth-applications
+    .replace(/\bclient_secret=\w+/g, "client_secret=[REDACTED]") // OAuth tokens can be passed as URL query parameters, although it is not recommended
+    // see https://developer.github.com/v3/#oauth2-token-sent-in-a-header
+    .replace(/\baccess_token=\w+/g, "access_token=[REDACTED]");
+    this.request = requestCopy; // deprecations
+
+    Object.defineProperty(this, "code", {
+      get() {
+        logOnceCode(new deprecation.Deprecation("[@octokit/request-error] `error.code` is deprecated, use `error.status`."));
+        return statusCode;
+      }
+
+    });
+    Object.defineProperty(this, "headers", {
+      get() {
+        logOnceHeaders(new deprecation.Deprecation("[@octokit/request-error] `error.headers` is deprecated, use `error.response.headers`."));
+        return headers || {};
+      }
+
+    });
+  }
+
+}
+
+exports.RequestError = RequestError;
+//# sourceMappingURL=index.js.map
+
+
+/***/ }),
+
+/***/ 7052:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+
+function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
+
+var endpoint = __nccwpck_require__(9440);
+var universalUserAgent = __nccwpck_require__(5030);
+var isPlainObject = __nccwpck_require__(3287);
+var nodeFetch = _interopDefault(__nccwpck_require__(467));
+var requestError = __nccwpck_require__(5634);
+
+const VERSION = "5.6.1";
+
+function getBufferResponse(response) {
+  return response.arrayBuffer();
+}
+
+function fetchWrapper(requestOptions) {
+  const log = requestOptions.request && requestOptions.request.log ? requestOptions.request.log : console;
+
+  if (isPlainObject.isPlainObject(requestOptions.body) || Array.isArray(requestOptions.body)) {
+    requestOptions.body = JSON.stringify(requestOptions.body);
+  }
+
+  let headers = {};
+  let status;
+  let url;
+  const fetch = requestOptions.request && requestOptions.request.fetch || nodeFetch;
+  return fetch(requestOptions.url, Object.assign({
+    method: requestOptions.method,
+    body: requestOptions.body,
+    headers: requestOptions.headers,
+    redirect: requestOptions.redirect
+  }, // `requestOptions.request.agent` type is incompatible
+  // see https://github.com/octokit/types.ts/pull/264
+  requestOptions.request)).then(async response => {
+    url = response.url;
+    status = response.status;
+
+    for (const keyAndValue of response.headers) {
+      headers[keyAndValue[0]] = keyAndValue[1];
+    }
+
+    if ("deprecation" in headers) {
+      const matches = headers.link && headers.link.match(/<([^>]+)>; rel="deprecation"/);
+      const deprecationLink = matches && matches.pop();
+      log.warn(`[@octokit/request] "${requestOptions.method} ${requestOptions.url}" is deprecated. It is scheduled to be removed on ${headers.sunset}${deprecationLink ? `. See ${deprecationLink}` : ""}`);
+    }
+
+    if (status === 204 || status === 205) {
+      return;
+    } // GitHub API returns 200 for HEAD requests
+
+
+    if (requestOptions.method === "HEAD") {
+      if (status < 400) {
+        return;
+      }
+
+      throw new requestError.RequestError(response.statusText, status, {
+        response: {
+          url,
+          status,
+          headers,
+          data: undefined
+        },
+        request: requestOptions
+      });
+    }
+
+    if (status === 304) {
+      throw new requestError.RequestError("Not modified", status, {
+        response: {
+          url,
+          status,
+          headers,
+          data: await getResponseData(response)
+        },
+        request: requestOptions
+      });
+    }
+
+    if (status >= 400) {
+      const data = await getResponseData(response);
+      const error = new requestError.RequestError(toErrorMessage(data), status, {
+        response: {
+          url,
+          status,
+          headers,
+          data
+        },
+        request: requestOptions
+      });
+      throw error;
+    }
+
+    return getResponseData(response);
+  }).then(data => {
+    return {
+      status,
+      url,
+      headers,
+      data
+    };
+  }).catch(error => {
+    if (error instanceof requestError.RequestError) throw error;
+    throw new requestError.RequestError(error.message, 500, {
+      request: requestOptions
+    });
+  });
+}
+
+async function getResponseData(response) {
+  const contentType = response.headers.get("content-type");
+
+  if (/application\/json/.test(contentType)) {
+    return response.json();
+  }
+
+  if (!contentType || /^text\/|charset=utf-8$/.test(contentType)) {
+    return response.text();
+  }
+
+  return getBufferResponse(response);
+}
+
+function toErrorMessage(data) {
+  if (typeof data === "string") return data; // istanbul ignore else - just in case
+
+  if ("message" in data) {
+    if (Array.isArray(data.errors)) {
+      return `${data.message}: ${data.errors.map(JSON.stringify).join(", ")}`;
+    }
+
+    return data.message;
+  } // istanbul ignore next - just in case
+
+
+  return `Unknown error: ${JSON.stringify(data)}`;
+}
+
+function withDefaults(oldEndpoint, newDefaults) {
+  const endpoint = oldEndpoint.defaults(newDefaults);
+
+  const newApi = function (route, parameters) {
+    const endpointOptions = endpoint.merge(route, parameters);
+
+    if (!endpointOptions.request || !endpointOptions.request.hook) {
+      return fetchWrapper(endpoint.parse(endpointOptions));
+    }
+
+    const request = (route, parameters) => {
+      return fetchWrapper(endpoint.parse(endpoint.merge(route, parameters)));
+    };
+
+    Object.assign(request, {
+      endpoint,
+      defaults: withDefaults.bind(null, endpoint)
+    });
+    return endpointOptions.request.hook(request, endpointOptions);
+  };
+
+  return Object.assign(newApi, {
+    endpoint,
+    defaults: withDefaults.bind(null, endpoint)
+  });
+}
+
+const request = withDefaults(endpoint.endpoint, {
+  headers: {
+    "user-agent": `octokit-request.js/${VERSION} ${universalUserAgent.getUserAgent()}`
+  }
+});
+
+exports.request = request;
 //# sourceMappingURL=index.js.map
 
 
@@ -1989,6 +2287,88 @@ exports.createOAuthDeviceAuth = createOAuthDeviceAuth;
 
 /***/ }),
 
+/***/ 4384:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+
+function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
+
+var deprecation = __nccwpck_require__(8932);
+var once = _interopDefault(__nccwpck_require__(1223));
+
+const logOnceCode = once(deprecation => console.warn(deprecation));
+const logOnceHeaders = once(deprecation => console.warn(deprecation));
+/**
+ * Error with extra properties to help with debugging
+ */
+
+class RequestError extends Error {
+  constructor(message, statusCode, options) {
+    super(message); // Maintains proper stack trace (only available on V8)
+
+    /* istanbul ignore next */
+
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, this.constructor);
+    }
+
+    this.name = "HttpError";
+    this.status = statusCode;
+    let headers;
+
+    if ("headers" in options && typeof options.headers !== "undefined") {
+      headers = options.headers;
+    }
+
+    if ("response" in options) {
+      this.response = options.response;
+      headers = options.response.headers;
+    } // redact request credentials without mutating original request options
+
+
+    const requestCopy = Object.assign({}, options.request);
+
+    if (options.request.headers.authorization) {
+      requestCopy.headers = Object.assign({}, options.request.headers, {
+        authorization: options.request.headers.authorization.replace(/ .*$/, " [REDACTED]")
+      });
+    }
+
+    requestCopy.url = requestCopy.url // client_id & client_secret can be passed as URL query parameters to increase rate limit
+    // see https://developer.github.com/v3/#increasing-the-unauthenticated-rate-limit-for-oauth-applications
+    .replace(/\bclient_secret=\w+/g, "client_secret=[REDACTED]") // OAuth tokens can be passed as URL query parameters, although it is not recommended
+    // see https://developer.github.com/v3/#oauth2-token-sent-in-a-header
+    .replace(/\baccess_token=\w+/g, "access_token=[REDACTED]");
+    this.request = requestCopy; // deprecations
+
+    Object.defineProperty(this, "code", {
+      get() {
+        logOnceCode(new deprecation.Deprecation("[@octokit/request-error] `error.code` is deprecated, use `error.status`."));
+        return statusCode;
+      }
+
+    });
+    Object.defineProperty(this, "headers", {
+      get() {
+        logOnceHeaders(new deprecation.Deprecation("[@octokit/request-error] `error.headers` is deprecated, use `error.response.headers`."));
+        return headers || {};
+      }
+
+    });
+  }
+
+}
+
+exports.RequestError = RequestError;
+//# sourceMappingURL=index.js.map
+
+
+/***/ }),
+
 /***/ 4847:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
@@ -2003,9 +2383,9 @@ var endpoint = __nccwpck_require__(9440);
 var universalUserAgent = __nccwpck_require__(5030);
 var isPlainObject = __nccwpck_require__(3287);
 var nodeFetch = _interopDefault(__nccwpck_require__(467));
-var requestError = __nccwpck_require__(537);
+var requestError = __nccwpck_require__(4384);
 
-const VERSION = "5.5.0";
+const VERSION = "5.6.1";
 
 function getBufferResponse(response) {
   return response.arrayBuffer();
@@ -2029,7 +2409,7 @@ function fetchWrapper(requestOptions) {
     redirect: requestOptions.redirect
   }, // `requestOptions.request.agent` type is incompatible
   // see https://github.com/octokit/types.ts/pull/264
-  requestOptions.request)).then(response => {
+  requestOptions.request)).then(async response => {
     url = response.url;
     status = response.status;
 
@@ -2054,49 +2434,43 @@ function fetchWrapper(requestOptions) {
       }
 
       throw new requestError.RequestError(response.statusText, status, {
-        headers,
+        response: {
+          url,
+          status,
+          headers,
+          data: undefined
+        },
         request: requestOptions
       });
     }
 
     if (status === 304) {
       throw new requestError.RequestError("Not modified", status, {
-        headers,
+        response: {
+          url,
+          status,
+          headers,
+          data: await getResponseData(response)
+        },
         request: requestOptions
       });
     }
 
     if (status >= 400) {
-      return response.text().then(message => {
-        const error = new requestError.RequestError(message, status, {
+      const data = await getResponseData(response);
+      const error = new requestError.RequestError(toErrorMessage(data), status, {
+        response: {
+          url,
+          status,
           headers,
-          request: requestOptions
-        });
-
-        try {
-          let responseBody = JSON.parse(error.message);
-          Object.assign(error, responseBody);
-          let errors = responseBody.errors; // Assumption `errors` would always be in Array format
-
-          error.message = error.message + ": " + errors.map(JSON.stringify).join(", ");
-        } catch (e) {// ignore, see octokit/rest.js#684
-        }
-
-        throw error;
+          data
+        },
+        request: requestOptions
       });
+      throw error;
     }
 
-    const contentType = response.headers.get("content-type");
-
-    if (/application\/json/.test(contentType)) {
-      return response.json();
-    }
-
-    if (!contentType || /^text\/|charset=utf-8$/.test(contentType)) {
-      return response.text();
-    }
-
-    return getBufferResponse(response);
+    return getResponseData(response);
   }).then(data => {
     return {
       status,
@@ -2105,15 +2479,40 @@ function fetchWrapper(requestOptions) {
       data
     };
   }).catch(error => {
-    if (error instanceof requestError.RequestError) {
-      throw error;
-    }
-
+    if (error instanceof requestError.RequestError) throw error;
     throw new requestError.RequestError(error.message, 500, {
-      headers,
       request: requestOptions
     });
   });
+}
+
+async function getResponseData(response) {
+  const contentType = response.headers.get("content-type");
+
+  if (/application\/json/.test(contentType)) {
+    return response.json();
+  }
+
+  if (!contentType || /^text\/|charset=utf-8$/.test(contentType)) {
+    return response.text();
+  }
+
+  return getBufferResponse(response);
+}
+
+function toErrorMessage(data) {
+  if (typeof data === "string") return data; // istanbul ignore else - just in case
+
+  if ("message" in data) {
+    if (Array.isArray(data.errors)) {
+      return `${data.message}: ${data.errors.map(JSON.stringify).join(", ")}`;
+    }
+
+    return data.message;
+  } // istanbul ignore next - just in case
+
+
+  return `Unknown error: ${JSON.stringify(data)}`;
 }
 
 function withDefaults(oldEndpoint, newDefaults) {
@@ -2171,29 +2570,18 @@ var authOauthDevice = __nccwpck_require__(4344);
 var oauthMethods = __nccwpck_require__(8445);
 var btoa = _interopDefault(__nccwpck_require__(2358));
 
-function _defineProperty(obj, key, value) {
-  if (key in obj) {
-    Object.defineProperty(obj, key, {
-      value: value,
-      enumerable: true,
-      configurable: true,
-      writable: true
-    });
-  } else {
-    obj[key] = value;
-  }
-
-  return obj;
-}
-
 function ownKeys(object, enumerableOnly) {
   var keys = Object.keys(object);
 
   if (Object.getOwnPropertySymbols) {
     var symbols = Object.getOwnPropertySymbols(object);
-    if (enumerableOnly) symbols = symbols.filter(function (sym) {
-      return Object.getOwnPropertyDescriptor(object, sym).enumerable;
-    });
+
+    if (enumerableOnly) {
+      symbols = symbols.filter(function (sym) {
+        return Object.getOwnPropertyDescriptor(object, sym).enumerable;
+      });
+    }
+
     keys.push.apply(keys, symbols);
   }
 
@@ -2218,6 +2606,21 @@ function _objectSpread2(target) {
   }
 
   return target;
+}
+
+function _defineProperty(obj, key, value) {
+  if (key in obj) {
+    Object.defineProperty(obj, key, {
+      value: value,
+      enumerable: true,
+      configurable: true,
+      writable: true
+    });
+  } else {
+    obj[key] = value;
+  }
+
+  return obj;
 }
 
 function _objectWithoutPropertiesLoose(source, excluded) {
@@ -2256,7 +2659,7 @@ function _objectWithoutProperties(source, excluded) {
   return target;
 }
 
-const VERSION = "1.2.4";
+const VERSION = "1.3.0";
 
 async function getAuthentication(state) {
   // handle code exchange form OAuth Web Flow
@@ -2450,6 +2853,7 @@ async function hook(state, request, route, parameters = {}) {
   return request(endpoint);
 }
 
+const _excluded = ["clientId", "clientSecret", "clientType", "request"];
 function createOAuthUserAuth(_ref) {
   let {
     clientId,
@@ -2461,7 +2865,7 @@ function createOAuthUserAuth(_ref) {
       }
     })
   } = _ref,
-      strategyOptions = _objectWithoutProperties(_ref, ["clientId", "clientSecret", "clientType", "request"]);
+      strategyOptions = _objectWithoutProperties(_ref, _excluded);
 
   const state = Object.assign({
     clientType,
@@ -2485,6 +2889,88 @@ exports.requiresBasicAuth = requiresBasicAuth;
 
 /***/ }),
 
+/***/ 7450:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+
+function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
+
+var deprecation = __nccwpck_require__(8932);
+var once = _interopDefault(__nccwpck_require__(1223));
+
+const logOnceCode = once(deprecation => console.warn(deprecation));
+const logOnceHeaders = once(deprecation => console.warn(deprecation));
+/**
+ * Error with extra properties to help with debugging
+ */
+
+class RequestError extends Error {
+  constructor(message, statusCode, options) {
+    super(message); // Maintains proper stack trace (only available on V8)
+
+    /* istanbul ignore next */
+
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, this.constructor);
+    }
+
+    this.name = "HttpError";
+    this.status = statusCode;
+    let headers;
+
+    if ("headers" in options && typeof options.headers !== "undefined") {
+      headers = options.headers;
+    }
+
+    if ("response" in options) {
+      this.response = options.response;
+      headers = options.response.headers;
+    } // redact request credentials without mutating original request options
+
+
+    const requestCopy = Object.assign({}, options.request);
+
+    if (options.request.headers.authorization) {
+      requestCopy.headers = Object.assign({}, options.request.headers, {
+        authorization: options.request.headers.authorization.replace(/ .*$/, " [REDACTED]")
+      });
+    }
+
+    requestCopy.url = requestCopy.url // client_id & client_secret can be passed as URL query parameters to increase rate limit
+    // see https://developer.github.com/v3/#increasing-the-unauthenticated-rate-limit-for-oauth-applications
+    .replace(/\bclient_secret=\w+/g, "client_secret=[REDACTED]") // OAuth tokens can be passed as URL query parameters, although it is not recommended
+    // see https://developer.github.com/v3/#oauth2-token-sent-in-a-header
+    .replace(/\baccess_token=\w+/g, "access_token=[REDACTED]");
+    this.request = requestCopy; // deprecations
+
+    Object.defineProperty(this, "code", {
+      get() {
+        logOnceCode(new deprecation.Deprecation("[@octokit/request-error] `error.code` is deprecated, use `error.status`."));
+        return statusCode;
+      }
+
+    });
+    Object.defineProperty(this, "headers", {
+      get() {
+        logOnceHeaders(new deprecation.Deprecation("[@octokit/request-error] `error.headers` is deprecated, use `error.response.headers`."));
+        return headers || {};
+      }
+
+    });
+  }
+
+}
+
+exports.RequestError = RequestError;
+//# sourceMappingURL=index.js.map
+
+
+/***/ }),
+
 /***/ 8608:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
@@ -2499,9 +2985,9 @@ var endpoint = __nccwpck_require__(9440);
 var universalUserAgent = __nccwpck_require__(5030);
 var isPlainObject = __nccwpck_require__(3287);
 var nodeFetch = _interopDefault(__nccwpck_require__(467));
-var requestError = __nccwpck_require__(537);
+var requestError = __nccwpck_require__(7450);
 
-const VERSION = "5.5.0";
+const VERSION = "5.6.1";
 
 function getBufferResponse(response) {
   return response.arrayBuffer();
@@ -2525,7 +3011,7 @@ function fetchWrapper(requestOptions) {
     redirect: requestOptions.redirect
   }, // `requestOptions.request.agent` type is incompatible
   // see https://github.com/octokit/types.ts/pull/264
-  requestOptions.request)).then(response => {
+  requestOptions.request)).then(async response => {
     url = response.url;
     status = response.status;
 
@@ -2550,49 +3036,43 @@ function fetchWrapper(requestOptions) {
       }
 
       throw new requestError.RequestError(response.statusText, status, {
-        headers,
+        response: {
+          url,
+          status,
+          headers,
+          data: undefined
+        },
         request: requestOptions
       });
     }
 
     if (status === 304) {
       throw new requestError.RequestError("Not modified", status, {
-        headers,
+        response: {
+          url,
+          status,
+          headers,
+          data: await getResponseData(response)
+        },
         request: requestOptions
       });
     }
 
     if (status >= 400) {
-      return response.text().then(message => {
-        const error = new requestError.RequestError(message, status, {
+      const data = await getResponseData(response);
+      const error = new requestError.RequestError(toErrorMessage(data), status, {
+        response: {
+          url,
+          status,
           headers,
-          request: requestOptions
-        });
-
-        try {
-          let responseBody = JSON.parse(error.message);
-          Object.assign(error, responseBody);
-          let errors = responseBody.errors; // Assumption `errors` would always be in Array format
-
-          error.message = error.message + ": " + errors.map(JSON.stringify).join(", ");
-        } catch (e) {// ignore, see octokit/rest.js#684
-        }
-
-        throw error;
+          data
+        },
+        request: requestOptions
       });
+      throw error;
     }
 
-    const contentType = response.headers.get("content-type");
-
-    if (/application\/json/.test(contentType)) {
-      return response.json();
-    }
-
-    if (!contentType || /^text\/|charset=utf-8$/.test(contentType)) {
-      return response.text();
-    }
-
-    return getBufferResponse(response);
+    return getResponseData(response);
   }).then(data => {
     return {
       status,
@@ -2601,15 +3081,40 @@ function fetchWrapper(requestOptions) {
       data
     };
   }).catch(error => {
-    if (error instanceof requestError.RequestError) {
-      throw error;
-    }
-
+    if (error instanceof requestError.RequestError) throw error;
     throw new requestError.RequestError(error.message, 500, {
-      headers,
       request: requestOptions
     });
   });
+}
+
+async function getResponseData(response) {
+  const contentType = response.headers.get("content-type");
+
+  if (/application\/json/.test(contentType)) {
+    return response.json();
+  }
+
+  if (!contentType || /^text\/|charset=utf-8$/.test(contentType)) {
+    return response.text();
+  }
+
+  return getBufferResponse(response);
+}
+
+function toErrorMessage(data) {
+  if (typeof data === "string") return data; // istanbul ignore else - just in case
+
+  if ("message" in data) {
+    if (Array.isArray(data.errors)) {
+      return `${data.message}: ${data.errors.map(JSON.stringify).join(", ")}`;
+    }
+
+    return data.message;
+  } // istanbul ignore next - just in case
+
+
+  return `Unknown error: ${JSON.stringify(data)}`;
 }
 
 function withDefaults(oldEndpoint, newDefaults) {
@@ -2730,11 +3235,11 @@ function isRateLimitError(error) {
   /* istanbul ignore if */
 
 
-  if (!error.headers) {
+  if (!error.response) {
     return false;
   }
 
-  return error.headers["x-ratelimit-remaining"] === "0";
+  return error.response.headers["x-ratelimit-remaining"] === "0";
 }
 
 const REGEX_ABUSE_LIMIT_MESSAGE = /\babuse\b/i;
@@ -2803,7 +3308,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 var universalUserAgent = __nccwpck_require__(5030);
 var beforeAfterHook = __nccwpck_require__(3682);
-var request = __nccwpck_require__(6234);
+var request = __nccwpck_require__(6039);
 var graphql = __nccwpck_require__(8467);
 var authToken = __nccwpck_require__(334);
 
@@ -2843,8 +3348,9 @@ function _objectWithoutProperties(source, excluded) {
   return target;
 }
 
-const VERSION = "3.4.0";
+const VERSION = "3.5.1";
 
+const _excluded = ["authStrategy"];
 class Octokit {
   constructor(options = {}) {
     const hook = new beforeAfterHook.Collection();
@@ -2906,7 +3412,7 @@ class Octokit {
       const {
         authStrategy
       } = options,
-            otherOptions = _objectWithoutProperties(options, ["authStrategy"]);
+            otherOptions = _objectWithoutProperties(options, _excluded);
 
       const auth = authStrategy(Object.assign({
         request: this.request,
@@ -2971,6 +3477,273 @@ Octokit.VERSION = VERSION;
 Octokit.plugins = [];
 
 exports.Octokit = Octokit;
+//# sourceMappingURL=index.js.map
+
+
+/***/ }),
+
+/***/ 9910:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+
+function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
+
+var deprecation = __nccwpck_require__(8932);
+var once = _interopDefault(__nccwpck_require__(1223));
+
+const logOnceCode = once(deprecation => console.warn(deprecation));
+const logOnceHeaders = once(deprecation => console.warn(deprecation));
+/**
+ * Error with extra properties to help with debugging
+ */
+
+class RequestError extends Error {
+  constructor(message, statusCode, options) {
+    super(message); // Maintains proper stack trace (only available on V8)
+
+    /* istanbul ignore next */
+
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, this.constructor);
+    }
+
+    this.name = "HttpError";
+    this.status = statusCode;
+    let headers;
+
+    if ("headers" in options && typeof options.headers !== "undefined") {
+      headers = options.headers;
+    }
+
+    if ("response" in options) {
+      this.response = options.response;
+      headers = options.response.headers;
+    } // redact request credentials without mutating original request options
+
+
+    const requestCopy = Object.assign({}, options.request);
+
+    if (options.request.headers.authorization) {
+      requestCopy.headers = Object.assign({}, options.request.headers, {
+        authorization: options.request.headers.authorization.replace(/ .*$/, " [REDACTED]")
+      });
+    }
+
+    requestCopy.url = requestCopy.url // client_id & client_secret can be passed as URL query parameters to increase rate limit
+    // see https://developer.github.com/v3/#increasing-the-unauthenticated-rate-limit-for-oauth-applications
+    .replace(/\bclient_secret=\w+/g, "client_secret=[REDACTED]") // OAuth tokens can be passed as URL query parameters, although it is not recommended
+    // see https://developer.github.com/v3/#oauth2-token-sent-in-a-header
+    .replace(/\baccess_token=\w+/g, "access_token=[REDACTED]");
+    this.request = requestCopy; // deprecations
+
+    Object.defineProperty(this, "code", {
+      get() {
+        logOnceCode(new deprecation.Deprecation("[@octokit/request-error] `error.code` is deprecated, use `error.status`."));
+        return statusCode;
+      }
+
+    });
+    Object.defineProperty(this, "headers", {
+      get() {
+        logOnceHeaders(new deprecation.Deprecation("[@octokit/request-error] `error.headers` is deprecated, use `error.response.headers`."));
+        return headers || {};
+      }
+
+    });
+  }
+
+}
+
+exports.RequestError = RequestError;
+//# sourceMappingURL=index.js.map
+
+
+/***/ }),
+
+/***/ 6039:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+
+function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
+
+var endpoint = __nccwpck_require__(9440);
+var universalUserAgent = __nccwpck_require__(5030);
+var isPlainObject = __nccwpck_require__(3287);
+var nodeFetch = _interopDefault(__nccwpck_require__(467));
+var requestError = __nccwpck_require__(9910);
+
+const VERSION = "5.6.1";
+
+function getBufferResponse(response) {
+  return response.arrayBuffer();
+}
+
+function fetchWrapper(requestOptions) {
+  const log = requestOptions.request && requestOptions.request.log ? requestOptions.request.log : console;
+
+  if (isPlainObject.isPlainObject(requestOptions.body) || Array.isArray(requestOptions.body)) {
+    requestOptions.body = JSON.stringify(requestOptions.body);
+  }
+
+  let headers = {};
+  let status;
+  let url;
+  const fetch = requestOptions.request && requestOptions.request.fetch || nodeFetch;
+  return fetch(requestOptions.url, Object.assign({
+    method: requestOptions.method,
+    body: requestOptions.body,
+    headers: requestOptions.headers,
+    redirect: requestOptions.redirect
+  }, // `requestOptions.request.agent` type is incompatible
+  // see https://github.com/octokit/types.ts/pull/264
+  requestOptions.request)).then(async response => {
+    url = response.url;
+    status = response.status;
+
+    for (const keyAndValue of response.headers) {
+      headers[keyAndValue[0]] = keyAndValue[1];
+    }
+
+    if ("deprecation" in headers) {
+      const matches = headers.link && headers.link.match(/<([^>]+)>; rel="deprecation"/);
+      const deprecationLink = matches && matches.pop();
+      log.warn(`[@octokit/request] "${requestOptions.method} ${requestOptions.url}" is deprecated. It is scheduled to be removed on ${headers.sunset}${deprecationLink ? `. See ${deprecationLink}` : ""}`);
+    }
+
+    if (status === 204 || status === 205) {
+      return;
+    } // GitHub API returns 200 for HEAD requests
+
+
+    if (requestOptions.method === "HEAD") {
+      if (status < 400) {
+        return;
+      }
+
+      throw new requestError.RequestError(response.statusText, status, {
+        response: {
+          url,
+          status,
+          headers,
+          data: undefined
+        },
+        request: requestOptions
+      });
+    }
+
+    if (status === 304) {
+      throw new requestError.RequestError("Not modified", status, {
+        response: {
+          url,
+          status,
+          headers,
+          data: await getResponseData(response)
+        },
+        request: requestOptions
+      });
+    }
+
+    if (status >= 400) {
+      const data = await getResponseData(response);
+      const error = new requestError.RequestError(toErrorMessage(data), status, {
+        response: {
+          url,
+          status,
+          headers,
+          data
+        },
+        request: requestOptions
+      });
+      throw error;
+    }
+
+    return getResponseData(response);
+  }).then(data => {
+    return {
+      status,
+      url,
+      headers,
+      data
+    };
+  }).catch(error => {
+    if (error instanceof requestError.RequestError) throw error;
+    throw new requestError.RequestError(error.message, 500, {
+      request: requestOptions
+    });
+  });
+}
+
+async function getResponseData(response) {
+  const contentType = response.headers.get("content-type");
+
+  if (/application\/json/.test(contentType)) {
+    return response.json();
+  }
+
+  if (!contentType || /^text\/|charset=utf-8$/.test(contentType)) {
+    return response.text();
+  }
+
+  return getBufferResponse(response);
+}
+
+function toErrorMessage(data) {
+  if (typeof data === "string") return data; // istanbul ignore else - just in case
+
+  if ("message" in data) {
+    if (Array.isArray(data.errors)) {
+      return `${data.message}: ${data.errors.map(JSON.stringify).join(", ")}`;
+    }
+
+    return data.message;
+  } // istanbul ignore next - just in case
+
+
+  return `Unknown error: ${JSON.stringify(data)}`;
+}
+
+function withDefaults(oldEndpoint, newDefaults) {
+  const endpoint = oldEndpoint.defaults(newDefaults);
+
+  const newApi = function (route, parameters) {
+    const endpointOptions = endpoint.merge(route, parameters);
+
+    if (!endpointOptions.request || !endpointOptions.request.hook) {
+      return fetchWrapper(endpoint.parse(endpointOptions));
+    }
+
+    const request = (route, parameters) => {
+      return fetchWrapper(endpoint.parse(endpoint.merge(route, parameters)));
+    };
+
+    Object.assign(request, {
+      endpoint,
+      defaults: withDefaults.bind(null, endpoint)
+    });
+    return endpointOptions.request.hook(request, endpointOptions);
+  };
+
+  return Object.assign(newApi, {
+    endpoint,
+    defaults: withDefaults.bind(null, endpoint)
+  });
+}
+
+const request = withDefaults(endpoint.endpoint, {
+  headers: {
+    "user-agent": `octokit-request.js/${VERSION} ${universalUserAgent.getUserAgent()}`
+  }
+});
+
+exports.request = request;
 //# sourceMappingURL=index.js.map
 
 
@@ -3561,7 +4334,7 @@ function _defineProperty(obj, key, value) {
   return obj;
 }
 
-const VERSION = "3.3.3";
+const VERSION = "3.5.1";
 
 function addEventHandler(state, eventName, eventHandler) {
   if (Array.isArray(eventName)) {
@@ -3583,34 +4356,6 @@ const OAuthAppOctokit = core.Octokit.defaults({
   userAgent: `octokit-oauth-app.js/${VERSION} ${universalUserAgent.getUserAgent()}`
 });
 
-async function getUserOctokitWithState(state, options) {
-  return state.octokit.auth(_objectSpread2(_objectSpread2({
-    type: "oauth-user"
-  }, options), {}, {
-    factory(options) {
-      return new state.Octokit({
-        authStrategy: authOauthUser.createOAuthUserAuth,
-        auth: options
-      });
-    }
-
-  }));
-}
-
-function getWebFlowAuthorizationUrlWithState(state, options) {
-  const optionsWithDefaults = _objectSpread2(_objectSpread2({
-    clientId: state.clientId,
-    request: state.octokit.request
-  }, options), {}, {
-    allowSignup: options.allowSignup || state.allowSignup,
-    scopes: options.scopes || state.defaultScopes
-  });
-
-  return OAuthMethods.getWebFlowAuthorizationUrl(_objectSpread2({
-    clientType: state.clientType
-  }, optionsWithDefaults));
-}
-
 async function emitEvent(state, context) {
   const {
     name,
@@ -3628,6 +4373,46 @@ async function emitEvent(state, context) {
       await eventHandler(context);
     }
   }
+}
+
+async function getUserOctokitWithState(state, options) {
+  return state.octokit.auth(_objectSpread2(_objectSpread2({
+    type: "oauth-user"
+  }, options), {}, {
+    async factory(options) {
+      const octokit = new state.Octokit({
+        authStrategy: authOauthUser.createOAuthUserAuth,
+        auth: options
+      });
+      const authentication = await octokit.auth({
+        type: "get"
+      });
+      await emitEvent(state, {
+        name: "token",
+        action: "created",
+        token: authentication.token,
+        scopes: authentication.scopes,
+        authentication,
+        octokit
+      });
+      return octokit;
+    }
+
+  }));
+}
+
+function getWebFlowAuthorizationUrlWithState(state, options) {
+  const optionsWithDefaults = _objectSpread2(_objectSpread2({
+    clientId: state.clientId,
+    request: state.octokit.request
+  }, options), {}, {
+    allowSignup: options.allowSignup || state.allowSignup,
+    scopes: options.scopes || state.defaultScopes
+  });
+
+  return OAuthMethods.getWebFlowAuthorizationUrl(_objectSpread2({
+    clientType: state.clientType
+  }, optionsWithDefaults));
 }
 
 async function createTokenWithState(state, options) {
@@ -3660,13 +4445,18 @@ async function createTokenWithState(state, options) {
 }
 
 async function checkTokenWithState(state, options) {
-  return await OAuthMethods.checkToken(_objectSpread2({
+  const result = await OAuthMethods.checkToken(_objectSpread2({
     // @ts-expect-error not worth the extra code to appease TS
     clientType: state.clientType,
     clientId: state.clientId,
     clientSecret: state.clientSecret,
     request: state.octokit.request
   }, options));
+  Object.assign(result.authentication, {
+    type: "token",
+    tokenType: "oauth"
+  });
+  return result;
 }
 
 async function resetTokenWithState(state, options) {
@@ -3680,15 +4470,16 @@ async function resetTokenWithState(state, options) {
     const response = await OAuthMethods.resetToken(_objectSpread2({
       clientType: "oauth-app"
     }, optionsWithDefaults));
+    const authentication = Object.assign(response.authentication, {
+      type: "token",
+      tokenType: "oauth"
+    });
     await emitEvent(state, {
       name: "token",
       action: "reset",
       token: response.authentication.token,
       scopes: response.authentication.scopes || undefined,
-      authentication: _objectSpread2({
-        type: "token",
-        tokenType: "oauth"
-      }, response.authentication),
+      authentication: authentication,
       octokit: new state.Octokit({
         authStrategy: authOauthUser.createOAuthUserAuth,
         auth: {
@@ -3700,20 +4491,23 @@ async function resetTokenWithState(state, options) {
         }
       })
     });
-    return response;
+    return _objectSpread2(_objectSpread2({}, response), {}, {
+      authentication
+    });
   }
 
   const response = await OAuthMethods.resetToken(_objectSpread2({
     clientType: "github-app"
   }, optionsWithDefaults));
+  const authentication = Object.assign(response.authentication, {
+    type: "token",
+    tokenType: "oauth"
+  });
   await emitEvent(state, {
     name: "token",
     action: "reset",
     token: response.authentication.token,
-    authentication: _objectSpread2({
-      type: "token",
-      tokenType: "oauth"
-    }, response.authentication),
+    authentication: authentication,
     octokit: new state.Octokit({
       authStrategy: authOauthUser.createOAuthUserAuth,
       auth: {
@@ -3724,7 +4518,9 @@ async function resetTokenWithState(state, options) {
       }
     })
   });
-  return response;
+  return _objectSpread2(_objectSpread2({}, response), {}, {
+    authentication
+  });
 }
 
 async function refreshTokenWithState(state, options) {
@@ -3739,14 +4535,15 @@ async function refreshTokenWithState(state, options) {
     request: state.octokit.request,
     refreshToken: options.refreshToken
   });
+  const authentication = Object.assign(response.authentication, {
+    type: "token",
+    tokenType: "oauth"
+  });
   await emitEvent(state, {
     name: "token",
     action: "refreshed",
     token: response.authentication.token,
-    authentication: _objectSpread2({
-      type: "token",
-      tokenType: "oauth"
-    }, response.authentication),
+    authentication: authentication,
     octokit: new state.Octokit({
       authStrategy: authOauthUser.createOAuthUserAuth,
       auth: {
@@ -3757,7 +4554,9 @@ async function refreshTokenWithState(state, options) {
       }
     })
   });
-  return response;
+  return _objectSpread2(_objectSpread2({}, response), {}, {
+    authentication
+  });
 }
 
 async function scopeTokenWithState(state, options) {
@@ -3771,14 +4570,15 @@ async function scopeTokenWithState(state, options) {
     clientSecret: state.clientSecret,
     request: state.octokit.request
   }, options));
+  const authentication = Object.assign(response.authentication, {
+    type: "token",
+    tokenType: "oauth"
+  });
   await emitEvent(state, {
     name: "token",
     action: "scoped",
     token: response.authentication.token,
-    authentication: _objectSpread2({
-      type: "token",
-      tokenType: "oauth"
-    }, response.authentication),
+    authentication: authentication,
     octokit: new state.Octokit({
       authStrategy: authOauthUser.createOAuthUserAuth,
       auth: {
@@ -3789,7 +4589,9 @@ async function scopeTokenWithState(state, options) {
       }
     })
   });
-  return response;
+  return _objectSpread2(_objectSpread2({}, response), {}, {
+    authentication
+  });
 }
 
 async function deleteTokenWithState(state, options) {
@@ -3857,110 +4659,124 @@ async function deleteAuthorizationWithState(state, options) {
   return response;
 }
 
-// @ts-ignore remove once Node 10 is out maintenance. Replace with Object.fromEntries
-async function parseRequest(request) {
+function parseRequest(request) {
+  const {
+    method,
+    url,
+    headers
+  } = request;
+
+  async function text() {
+    const text = await new Promise((resolve, reject) => {
+      let bodyChunks = [];
+      request.on("error", reject).on("data", chunk => bodyChunks.push(chunk)).on("end", () => resolve(Buffer.concat(bodyChunks).toString()));
+    });
+    return text;
+  }
+
+  return {
+    method,
+    url,
+    headers,
+    text
+  };
+}
+
+function sendResponse(octokitResponse, response) {
+  response.writeHead(octokitResponse.status, octokitResponse.headers);
+  response.end(octokitResponse.text);
+}
+
+function onUnhandledRequestDefault(request) {
+  return {
+    status: 404,
+    headers: {
+      "content-type": "application/json"
+    },
+    text: JSON.stringify({
+      error: `Unknown route: ${request.method} ${request.url}`
+    })
+  };
+}
+
+async function handleRequest(app, {
+  pathPrefix = "/api/github/oauth"
+}, request) {
+  if (request.method === "OPTIONS") {
+    return {
+      status: 200,
+      headers: {
+        "access-control-allow-origin": "*",
+        "access-control-allow-methods": "*",
+        "access-control-allow-headers": "Content-Type, User-Agent, Authorization"
+      }
+    };
+  } // request.url may include ?query parameters which we don't want for `route`
+  // hence the workaround using new URL()
+
+
+  const {
+    pathname
+  } = new URL(request.url, "http://localhost");
+  const route = [request.method, pathname].join(" ");
+  const routes = {
+    getLogin: `GET ${pathPrefix}/login`,
+    getCallback: `GET ${pathPrefix}/callback`,
+    createToken: `POST ${pathPrefix}/token`,
+    getToken: `GET ${pathPrefix}/token`,
+    patchToken: `PATCH ${pathPrefix}/token`,
+    patchRefreshToken: `PATCH ${pathPrefix}/refresh-token`,
+    scopeToken: `POST ${pathPrefix}/token/scoped`,
+    deleteToken: `DELETE ${pathPrefix}/token`,
+    deleteGrant: `DELETE ${pathPrefix}/grant`
+  }; // handle unknown routes
+
+  if (!Object.values(routes).includes(route)) {
+    return null;
+  }
+
+  let json;
+
+  try {
+    const text = await request.text();
+    json = text ? JSON.parse(text) : {};
+  } catch (error) {
+    return {
+      status: 400,
+      headers: {
+        "content-type": "application/json",
+        "access-control-allow-origin": "*"
+      },
+      text: JSON.stringify({
+        error: "[@octokit/oauth-app] request error"
+      })
+    };
+  }
+
   const {
     searchParams
   } = new URL(request.url, "http://localhost");
   const query = fromEntries(searchParams);
   const headers = request.headers;
 
-  if (!["POST", "PATCH"].includes(request.method)) {
-    return {
-      headers,
-      query
-    };
-  }
-
-  return new Promise((resolve, reject) => {
-    let bodyChunks = [];
-    request.on("error", reject).on("data", chunk => bodyChunks.push(chunk)).on("end", async () => {
-      const bodyString = Buffer.concat(bodyChunks).toString();
-      if (!bodyString) return resolve({
-        headers,
-        query
-      });
-
-      try {
-        resolve({
-          headers,
-          query,
-          body: JSON.parse(bodyString)
-        });
-      } catch (error) {
-        reject(error);
-      }
-    });
-  });
-}
-
-async function middleware(app, options, request, response, next) {
-  // request.url mayb include ?query parameters which we don't want for `route`
-  // hence the workaround using new URL()
-  const {
-    pathname
-  } = new URL(request.url, "http://localhost");
-  const route = [request.method, pathname].join(" ");
-  const routes = {
-    getLogin: `GET ${options.pathPrefix}/login`,
-    getCallback: `GET ${options.pathPrefix}/callback`,
-    createToken: `POST ${options.pathPrefix}/token`,
-    getToken: `GET ${options.pathPrefix}/token`,
-    patchToken: `PATCH ${options.pathPrefix}/token`,
-    patchRefreshToken: `PATCH ${options.pathPrefix}/refresh-token`,
-    scopeToken: `POST ${options.pathPrefix}/token/scoped`,
-    deleteToken: `DELETE ${options.pathPrefix}/token`,
-    deleteGrant: `DELETE ${options.pathPrefix}/grant`
-  }; // handle unknown routes
-
-  if (!Object.values(routes).includes(route)) {
-    const isExpressMiddleware = typeof next === "function";
-
-    if (isExpressMiddleware) {
-      // @ts-ignore `next` must be a function as we check two lines above
-      return next();
-    } else {
-      return options.onUnhandledRequest(request, response);
-    }
-  }
-
-  let parsedRequest;
-
-  try {
-    parsedRequest = await parseRequest(request);
-  } catch (error) {
-    response.writeHead(400, {
-      "content-type": "application/json"
-    });
-    return response.end(JSON.stringify({
-      error: "[@octokit/oauth-app] request error"
-    }));
-  }
-
-  const {
-    headers,
-    query,
-    body = {}
-  } = parsedRequest;
-
   try {
     var _headers$authorizatio6;
 
     if (route === routes.getLogin) {
-      var _query$scopes;
-
       const {
         url
       } = app.getWebFlowAuthorizationUrl({
         state: query.state,
-        scopes: (_query$scopes = query.scopes) === null || _query$scopes === void 0 ? void 0 : _query$scopes.split(","),
-        allowSignup: query.allowSignup,
+        scopes: query.scopes ? query.scopes.split(",") : undefined,
+        allowSignup: query.allowSignup !== "false",
         redirectUrl: query.redirectUrl
       });
-      response.writeHead(302, {
-        location: url
-      });
-      return response.end();
+      return {
+        status: 302,
+        headers: {
+          location: url
+        }
+      };
     }
 
     if (route === routes.getCallback) {
@@ -3980,13 +4796,15 @@ async function middleware(app, options, request, response, next) {
         state: query.state,
         code: query.code
       });
-      response.writeHead(200, {
-        "content-type": "text/html"
-      });
-      response.write(`<h1>Token created successfull</h1>
+      return {
+        status: 200,
+        headers: {
+          "content-type": "text/html"
+        },
+        text: `<h1>Token created successfull</h1>
     
-<p>Your token is: <strong>${token}</strong>. Copy it now as it cannot be shown again.</p>`);
-      return response.end();
+<p>Your token is: <strong>${token}</strong>. Copy it now as it cannot be shown again.</p>`
+      };
     }
 
     if (route === routes.createToken) {
@@ -3994,29 +4812,27 @@ async function middleware(app, options, request, response, next) {
         state: oauthState,
         code,
         redirectUrl
-      } = body;
+      } = json;
 
       if (!oauthState || !code) {
         throw new Error('[@octokit/oauth-app] Both "code" & "state" parameters are required');
       }
 
-      const {
-        authentication: {
-          token,
-          scopes
-        }
-      } = await app.createToken({
+      const result = await app.createToken({
         state: oauthState,
         code,
         redirectUrl
-      });
-      response.writeHead(201, {
-        "content-type": "application/json"
-      });
-      return response.end(JSON.stringify({
-        token,
-        scopes
-      }));
+      }); // @ts-ignore
+
+      delete result.authentication.clientSecret;
+      return {
+        status: 201,
+        headers: {
+          "content-type": "application/json",
+          "access-control-allow-origin": "*"
+        },
+        text: JSON.stringify(result)
+      };
     }
 
     if (route === routes.getToken) {
@@ -4030,11 +4846,17 @@ async function middleware(app, options, request, response, next) {
 
       const result = await app.checkToken({
         token
-      });
-      response.writeHead(200, {
-        "content-type": "application/json"
-      });
-      return response.end(JSON.stringify(result));
+      }); // @ts-ignore
+
+      delete result.authentication.clientSecret;
+      return {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "access-control-allow-origin": "*"
+        },
+        text: JSON.stringify(result)
+      };
     }
 
     if (route === routes.patchToken) {
@@ -4048,11 +4870,17 @@ async function middleware(app, options, request, response, next) {
 
       const result = await app.resetToken({
         token
-      });
-      response.writeHead(200, {
-        "content-type": "application/json"
-      });
-      return response.end(JSON.stringify(result));
+      }); // @ts-ignore
+
+      delete result.authentication.clientSecret;
+      return {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "access-control-allow-origin": "*"
+        },
+        text: JSON.stringify(result)
+      };
     }
 
     if (route === routes.patchRefreshToken) {
@@ -4066,7 +4894,7 @@ async function middleware(app, options, request, response, next) {
 
       const {
         refreshToken
-      } = body;
+      } = json;
 
       if (!refreshToken) {
         throw new Error("[@octokit/oauth-app] refreshToken must be sent in request body");
@@ -4074,11 +4902,17 @@ async function middleware(app, options, request, response, next) {
 
       const result = await app.refreshToken({
         refreshToken
-      });
-      response.writeHead(200, {
-        "content-type": "application/json"
-      });
-      return response.end(JSON.stringify(result));
+      }); // @ts-ignore
+
+      delete result.authentication.clientSecret;
+      return {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "access-control-allow-origin": "*"
+        },
+        text: JSON.stringify(result)
+      };
     }
 
     if (route === routes.scopeToken) {
@@ -4092,11 +4926,17 @@ async function middleware(app, options, request, response, next) {
 
       const result = await app.scopeToken(_objectSpread2({
         token
-      }, body));
-      response.writeHead(200, {
-        "content-type": "application/json"
-      });
-      return response.end(JSON.stringify(result));
+      }, json)); // @ts-ignore
+
+      delete result.authentication.clientSecret;
+      return {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "access-control-allow-origin": "*"
+        },
+        text: JSON.stringify(result)
+      };
     }
 
     if (route === routes.deleteToken) {
@@ -4111,8 +4951,12 @@ async function middleware(app, options, request, response, next) {
       await app.deleteToken({
         token
       });
-      response.writeHead(204);
-      return response.end();
+      return {
+        status: 204,
+        headers: {
+          "access-control-allow-origin": "*"
+        }
+      };
     } // route === routes.deleteGrant
 
 
@@ -4125,35 +4969,87 @@ async function middleware(app, options, request, response, next) {
     await app.deleteAuthorization({
       token
     });
-    response.writeHead(204);
-    return response.end();
+    return {
+      status: 204,
+      headers: {
+        "access-control-allow-origin": "*"
+      }
+    };
   } catch (error) {
-    response.writeHead(400, {
-      "content-type": "application/json"
-    });
-    response.end(JSON.stringify({
-      error: error.message
-    }));
+    return {
+      status: 400,
+      headers: {
+        "content-type": "application/json",
+        "access-control-allow-origin": "*"
+      },
+      text: JSON.stringify({
+        error: error.message
+      })
+    };
   }
 }
 
-function onUnhandledRequestDefault(request, response) {
-  response.writeHead(404, {
-    "content-type": "application/json"
-  });
-  response.end(JSON.stringify({
-    error: `Unknown route: ${request.method} ${request.url}`
-  }));
+function onUnhandledRequestDefaultNode(request, response) {
+  const octokitRequest = parseRequest(request);
+  const octokitResponse = onUnhandledRequestDefault(octokitRequest);
+  sendResponse(octokitResponse, response);
 }
 
 function createNodeMiddleware(app, {
-  pathPrefix = "/api/github/oauth",
-  onUnhandledRequest = onUnhandledRequestDefault
+  pathPrefix,
+  onUnhandledRequest = onUnhandledRequestDefaultNode
 } = {}) {
-  return middleware.bind(null, app, {
-    pathPrefix,
-    onUnhandledRequest
+  return async function (request, response, next) {
+    const octokitRequest = parseRequest(request);
+    const octokitResponse = await handleRequest(app, {
+      pathPrefix
+    }, octokitRequest);
+
+    if (octokitResponse) {
+      sendResponse(octokitResponse, response);
+    } else if (typeof next === "function") {
+      next();
+    } else {
+      onUnhandledRequest(request, response);
+    }
+  };
+}
+
+function parseRequest$1(request) {
+  // @ts-ignore Worker environment supports fromEntries/entries.
+  const headers = Object.fromEntries(request.headers.entries());
+  return {
+    method: request.method,
+    url: request.url,
+    headers,
+    text: () => request.text()
+  };
+}
+
+function sendResponse$1(octokitResponse) {
+  return new Response(octokitResponse.text, {
+    status: octokitResponse.status,
+    headers: octokitResponse.headers
   });
+}
+
+async function onUnhandledRequestDefaultCloudflare(request) {
+  const octokitRequest = parseRequest$1(request);
+  const octokitResponse = onUnhandledRequestDefault(octokitRequest);
+  return sendResponse$1(octokitResponse);
+}
+
+function createCloudflareHandler(app, {
+  pathPrefix,
+  onUnhandledRequest = onUnhandledRequestDefaultCloudflare
+} = {}) {
+  return async function (request) {
+    const octokitRequest = parseRequest$1(request);
+    const octokitResponse = await handleRequest(app, {
+      pathPrefix
+    }, octokitRequest);
+    return octokitResponse ? sendResponse$1(octokitResponse) : await onUnhandledRequest(request);
+  };
 }
 
 class OAuthApp {
@@ -4209,6 +5105,7 @@ class OAuthApp {
 OAuthApp.VERSION = VERSION;
 
 exports.OAuthApp = OAuthApp;
+exports.createCloudflareHandler = createCloudflareHandler;
 exports.createNodeMiddleware = createNodeMiddleware;
 //# sourceMappingURL=index.js.map
 
@@ -4266,7 +5163,7 @@ function urlBuilderAuthorize(base, options) {
   .map(key => [map[key], `${options[key]}`]) // Finally, build the URL
   .forEach(([key, value], index) => {
     url += index === 0 ? `?` : "&";
-    url += `${key}=${value}`;
+    url += `${key}=${encodeURIComponent(value)}`;
   });
   return url;
 }
@@ -4292,7 +5189,7 @@ var request = __nccwpck_require__(3315);
 var requestError = __nccwpck_require__(2434);
 var btoa = _interopDefault(__nccwpck_require__(2358));
 
-const VERSION = "1.2.3";
+const VERSION = "1.2.4";
 
 function ownKeys(object, enumerableOnly) {
   var keys = Object.keys(object);
@@ -4410,11 +5307,12 @@ async function oauthRequest(request, route, parameters) {
   return response;
 }
 
+const _excluded = ["request"];
 function getWebFlowAuthorizationUrl(_ref) {
   let {
     request: request$1 = request.request
   } = _ref,
-      options = _objectWithoutProperties(_ref, ["request"]);
+      options = _objectWithoutProperties(_ref, _excluded);
 
   const baseUrl = requestToOAuthBaseUrl(request$1); // @ts-expect-error TypeScript wants `clientType` to be set explicitly ¯\_(ツ)_/¯
 
@@ -4570,6 +5468,7 @@ function toTimestamp$2(apiTimeInMs, expirationInSeconds) {
   return new Date(apiTimeInMs + expirationInSeconds * 1000).toISOString();
 }
 
+const _excluded$1 = ["request", "clientType", "clientId", "clientSecret", "token"];
 async function scopeToken(options) {
   const {
     request: request$1,
@@ -4578,7 +5477,7 @@ async function scopeToken(options) {
     clientSecret,
     token
   } = options,
-        requestOptions = _objectWithoutProperties(options, ["request", "clientType", "clientId", "clientSecret", "token"]);
+        requestOptions = _objectWithoutProperties(options, _excluded$1);
 
   const response = await (request$1 ||
   /* istanbul ignore next: we always pass a custom request in tests */
@@ -4686,7 +5585,8 @@ function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'defau
 var deprecation = __nccwpck_require__(8932);
 var once = _interopDefault(__nccwpck_require__(1223));
 
-const logOnce = once(deprecation => console.warn(deprecation));
+const logOnceCode = once(deprecation => console.warn(deprecation));
+const logOnceHeaders = once(deprecation => console.warn(deprecation));
 /**
  * Error with extra properties to help with debugging
  */
@@ -4703,14 +5603,17 @@ class RequestError extends Error {
 
     this.name = "HttpError";
     this.status = statusCode;
-    Object.defineProperty(this, "code", {
-      get() {
-        logOnce(new deprecation.Deprecation("[@octokit/request-error] `error.code` is deprecated, use `error.status`."));
-        return statusCode;
-      }
+    let headers;
 
-    });
-    this.headers = options.headers || {}; // redact request credentials without mutating original request options
+    if ("headers" in options && typeof options.headers !== "undefined") {
+      headers = options.headers;
+    }
+
+    if ("response" in options) {
+      this.response = options.response;
+      headers = options.response.headers;
+    } // redact request credentials without mutating original request options
+
 
     const requestCopy = Object.assign({}, options.request);
 
@@ -4725,7 +5628,22 @@ class RequestError extends Error {
     .replace(/\bclient_secret=\w+/g, "client_secret=[REDACTED]") // OAuth tokens can be passed as URL query parameters, although it is not recommended
     // see https://developer.github.com/v3/#oauth2-token-sent-in-a-header
     .replace(/\baccess_token=\w+/g, "access_token=[REDACTED]");
-    this.request = requestCopy;
+    this.request = requestCopy; // deprecations
+
+    Object.defineProperty(this, "code", {
+      get() {
+        logOnceCode(new deprecation.Deprecation("[@octokit/request-error] `error.code` is deprecated, use `error.status`."));
+        return statusCode;
+      }
+
+    });
+    Object.defineProperty(this, "headers", {
+      get() {
+        logOnceHeaders(new deprecation.Deprecation("[@octokit/request-error] `error.headers` is deprecated, use `error.response.headers`."));
+        return headers || {};
+      }
+
+    });
   }
 
 }
@@ -4752,7 +5670,7 @@ var isPlainObject = __nccwpck_require__(3287);
 var nodeFetch = _interopDefault(__nccwpck_require__(467));
 var requestError = __nccwpck_require__(2434);
 
-const VERSION = "5.5.0";
+const VERSION = "5.6.1";
 
 function getBufferResponse(response) {
   return response.arrayBuffer();
@@ -4776,7 +5694,7 @@ function fetchWrapper(requestOptions) {
     redirect: requestOptions.redirect
   }, // `requestOptions.request.agent` type is incompatible
   // see https://github.com/octokit/types.ts/pull/264
-  requestOptions.request)).then(response => {
+  requestOptions.request)).then(async response => {
     url = response.url;
     status = response.status;
 
@@ -4801,49 +5719,43 @@ function fetchWrapper(requestOptions) {
       }
 
       throw new requestError.RequestError(response.statusText, status, {
-        headers,
+        response: {
+          url,
+          status,
+          headers,
+          data: undefined
+        },
         request: requestOptions
       });
     }
 
     if (status === 304) {
       throw new requestError.RequestError("Not modified", status, {
-        headers,
+        response: {
+          url,
+          status,
+          headers,
+          data: await getResponseData(response)
+        },
         request: requestOptions
       });
     }
 
     if (status >= 400) {
-      return response.text().then(message => {
-        const error = new requestError.RequestError(message, status, {
+      const data = await getResponseData(response);
+      const error = new requestError.RequestError(toErrorMessage(data), status, {
+        response: {
+          url,
+          status,
           headers,
-          request: requestOptions
-        });
-
-        try {
-          let responseBody = JSON.parse(error.message);
-          Object.assign(error, responseBody);
-          let errors = responseBody.errors; // Assumption `errors` would always be in Array format
-
-          error.message = error.message + ": " + errors.map(JSON.stringify).join(", ");
-        } catch (e) {// ignore, see octokit/rest.js#684
-        }
-
-        throw error;
+          data
+        },
+        request: requestOptions
       });
+      throw error;
     }
 
-    const contentType = response.headers.get("content-type");
-
-    if (/application\/json/.test(contentType)) {
-      return response.json();
-    }
-
-    if (!contentType || /^text\/|charset=utf-8$/.test(contentType)) {
-      return response.text();
-    }
-
-    return getBufferResponse(response);
+    return getResponseData(response);
   }).then(data => {
     return {
       status,
@@ -4852,15 +5764,40 @@ function fetchWrapper(requestOptions) {
       data
     };
   }).catch(error => {
-    if (error instanceof requestError.RequestError) {
-      throw error;
-    }
-
+    if (error instanceof requestError.RequestError) throw error;
     throw new requestError.RequestError(error.message, 500, {
-      headers,
       request: requestOptions
     });
   });
+}
+
+async function getResponseData(response) {
+  const contentType = response.headers.get("content-type");
+
+  if (/application\/json/.test(contentType)) {
+    return response.json();
+  }
+
+  if (!contentType || /^text\/|charset=utf-8$/.test(contentType)) {
+    return response.text();
+  }
+
+  return getBufferResponse(response);
+}
+
+function toErrorMessage(data) {
+  if (typeof data === "string") return data; // istanbul ignore else - just in case
+
+  if ("message" in data) {
+    if (Array.isArray(data.errors)) {
+      return `${data.message}: ${data.errors.map(JSON.stringify).join(", ")}`;
+    }
+
+    return data.message;
+  } // istanbul ignore next - just in case
+
+
+  return `Unknown error: ${JSON.stringify(data)}`;
 }
 
 function withDefaults(oldEndpoint, newDefaults) {
@@ -5284,7 +6221,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 var crypto = __nccwpck_require__(6417);
 var buffer = __nccwpck_require__(4293);
 
-const VERSION = "1.0.0";
+const VERSION = "2.0.0";
 
 var Algorithm;
 
@@ -5313,16 +6250,8 @@ async function sign(options, payload) {
     throw new TypeError(`[@octokit/webhooks] Algorithm ${algorithm} is not supported. Must be  'sha1' or 'sha256'`);
   }
 
-  payload = typeof payload === "string" ? payload : toNormalizedJsonString(payload);
   return `${algorithm}=${crypto.createHmac(algorithm, secret).update(payload).digest("hex")}`;
 }
-
-function toNormalizedJsonString(payload) {
-  return JSON.stringify(payload).replace(/[^\\]\\u[\da-f]{4}/g, s => {
-    return s.substr(0, 3) + s.substr(3).toUpperCase();
-  });
-}
-
 sign.VERSION = VERSION;
 
 const getAlgorithm = signature => {
@@ -5369,8 +6298,8 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
 
-var webhooksMethods = __nccwpck_require__(9768);
 var AggregateError = _interopDefault(__nccwpck_require__(1231));
+var webhooksMethods = __nccwpck_require__(9768);
 
 function ownKeys(object, enumerableOnly) {
   var keys = Object.keys(object);
@@ -5434,7 +6363,7 @@ const createLogger = logger => _objectSpread2({
 
 // THIS FILE IS GENERATED - DO NOT EDIT DIRECTLY
 // make edits in scripts/generate-types.ts
-const emitterEventNames = ["check_run", "check_run.completed", "check_run.created", "check_run.requested_action", "check_run.rerequested", "check_suite", "check_suite.completed", "check_suite.requested", "check_suite.rerequested", "code_scanning_alert", "code_scanning_alert.appeared_in_branch", "code_scanning_alert.closed_by_user", "code_scanning_alert.created", "code_scanning_alert.fixed", "code_scanning_alert.reopened", "code_scanning_alert.reopened_by_user", "commit_comment", "commit_comment.created", "content_reference", "content_reference.created", "create", "delete", "deploy_key", "deploy_key.created", "deploy_key.deleted", "deployment", "deployment.created", "deployment_status", "deployment_status.created", "discussion", "discussion.answered", "discussion.category_changed", "discussion.created", "discussion.deleted", "discussion.edited", "discussion.locked", "discussion.pinned", "discussion.transferred", "discussion.unanswered", "discussion.unlocked", "discussion.unpinned", "discussion_comment", "discussion_comment.created", "discussion_comment.deleted", "discussion_comment.edited", "fork", "github_app_authorization", "github_app_authorization.revoked", "gollum", "installation", "installation.created", "installation.deleted", "installation.new_permissions_accepted", "installation.suspend", "installation.unsuspend", "installation_repositories", "installation_repositories.added", "installation_repositories.removed", "issue_comment", "issue_comment.created", "issue_comment.deleted", "issue_comment.edited", "issues", "issues.assigned", "issues.closed", "issues.deleted", "issues.demilestoned", "issues.edited", "issues.labeled", "issues.locked", "issues.milestoned", "issues.opened", "issues.pinned", "issues.reopened", "issues.transferred", "issues.unassigned", "issues.unlabeled", "issues.unlocked", "issues.unpinned", "label", "label.created", "label.deleted", "label.edited", "marketplace_purchase", "marketplace_purchase.cancelled", "marketplace_purchase.changed", "marketplace_purchase.pending_change", "marketplace_purchase.pending_change_cancelled", "marketplace_purchase.purchased", "member", "member.added", "member.edited", "member.removed", "membership", "membership.added", "membership.removed", "meta", "meta.deleted", "milestone", "milestone.closed", "milestone.created", "milestone.deleted", "milestone.edited", "milestone.opened", "org_block", "org_block.blocked", "org_block.unblocked", "organization", "organization.deleted", "organization.member_added", "organization.member_invited", "organization.member_removed", "organization.renamed", "package", "package.published", "package.updated", "page_build", "ping", "project", "project.closed", "project.created", "project.deleted", "project.edited", "project.reopened", "project_card", "project_card.converted", "project_card.created", "project_card.deleted", "project_card.edited", "project_card.moved", "project_column", "project_column.created", "project_column.deleted", "project_column.edited", "project_column.moved", "public", "pull_request", "pull_request.assigned", "pull_request.auto_merge_disabled", "pull_request.auto_merge_enabled", "pull_request.closed", "pull_request.converted_to_draft", "pull_request.edited", "pull_request.labeled", "pull_request.locked", "pull_request.opened", "pull_request.ready_for_review", "pull_request.reopened", "pull_request.review_request_removed", "pull_request.review_requested", "pull_request.synchronize", "pull_request.unassigned", "pull_request.unlabeled", "pull_request.unlocked", "pull_request_review", "pull_request_review.dismissed", "pull_request_review.edited", "pull_request_review.submitted", "pull_request_review_comment", "pull_request_review_comment.created", "pull_request_review_comment.deleted", "pull_request_review_comment.edited", "push", "release", "release.created", "release.deleted", "release.edited", "release.prereleased", "release.published", "release.released", "release.unpublished", "repository", "repository.archived", "repository.created", "repository.deleted", "repository.edited", "repository.privatized", "repository.publicized", "repository.renamed", "repository.transferred", "repository.unarchived", "repository_dispatch", "repository_dispatch.on-demand-test", "repository_import", "repository_vulnerability_alert", "repository_vulnerability_alert.create", "repository_vulnerability_alert.dismiss", "repository_vulnerability_alert.resolve", "secret_scanning_alert", "secret_scanning_alert.created", "secret_scanning_alert.reopened", "secret_scanning_alert.resolved", "security_advisory", "security_advisory.performed", "security_advisory.published", "security_advisory.updated", "security_advisory.withdrawn", "sponsorship", "sponsorship.cancelled", "sponsorship.created", "sponsorship.edited", "sponsorship.pending_cancellation", "sponsorship.pending_tier_change", "sponsorship.tier_changed", "star", "star.created", "star.deleted", "status", "team", "team.added_to_repository", "team.created", "team.deleted", "team.edited", "team.removed_from_repository", "team_add", "watch", "watch.started", "workflow_dispatch", "workflow_run", "workflow_run.completed", "workflow_run.requested"];
+const emitterEventNames = ["check_run", "check_run.completed", "check_run.created", "check_run.requested_action", "check_run.rerequested", "check_suite", "check_suite.completed", "check_suite.requested", "check_suite.rerequested", "code_scanning_alert", "code_scanning_alert.appeared_in_branch", "code_scanning_alert.closed_by_user", "code_scanning_alert.created", "code_scanning_alert.fixed", "code_scanning_alert.reopened", "code_scanning_alert.reopened_by_user", "commit_comment", "commit_comment.created", "content_reference", "content_reference.created", "create", "delete", "deploy_key", "deploy_key.created", "deploy_key.deleted", "deployment", "deployment.created", "deployment_status", "deployment_status.created", "discussion", "discussion.answered", "discussion.category_changed", "discussion.created", "discussion.deleted", "discussion.edited", "discussion.labeled", "discussion.locked", "discussion.pinned", "discussion.transferred", "discussion.unanswered", "discussion.unlabeled", "discussion.unlocked", "discussion.unpinned", "discussion_comment", "discussion_comment.created", "discussion_comment.deleted", "discussion_comment.edited", "fork", "github_app_authorization", "github_app_authorization.revoked", "gollum", "installation", "installation.created", "installation.deleted", "installation.new_permissions_accepted", "installation.suspend", "installation.unsuspend", "installation_repositories", "installation_repositories.added", "installation_repositories.removed", "issue_comment", "issue_comment.created", "issue_comment.deleted", "issue_comment.edited", "issues", "issues.assigned", "issues.closed", "issues.deleted", "issues.demilestoned", "issues.edited", "issues.labeled", "issues.locked", "issues.milestoned", "issues.opened", "issues.pinned", "issues.reopened", "issues.transferred", "issues.unassigned", "issues.unlabeled", "issues.unlocked", "issues.unpinned", "label", "label.created", "label.deleted", "label.edited", "marketplace_purchase", "marketplace_purchase.cancelled", "marketplace_purchase.changed", "marketplace_purchase.pending_change", "marketplace_purchase.pending_change_cancelled", "marketplace_purchase.purchased", "member", "member.added", "member.edited", "member.removed", "membership", "membership.added", "membership.removed", "meta", "meta.deleted", "milestone", "milestone.closed", "milestone.created", "milestone.deleted", "milestone.edited", "milestone.opened", "org_block", "org_block.blocked", "org_block.unblocked", "organization", "organization.deleted", "organization.member_added", "organization.member_invited", "organization.member_removed", "organization.renamed", "package", "package.published", "package.updated", "page_build", "ping", "project", "project.closed", "project.created", "project.deleted", "project.edited", "project.reopened", "project_card", "project_card.converted", "project_card.created", "project_card.deleted", "project_card.edited", "project_card.moved", "project_column", "project_column.created", "project_column.deleted", "project_column.edited", "project_column.moved", "public", "pull_request", "pull_request.assigned", "pull_request.auto_merge_disabled", "pull_request.auto_merge_enabled", "pull_request.closed", "pull_request.converted_to_draft", "pull_request.edited", "pull_request.labeled", "pull_request.locked", "pull_request.opened", "pull_request.ready_for_review", "pull_request.reopened", "pull_request.review_request_removed", "pull_request.review_requested", "pull_request.synchronize", "pull_request.unassigned", "pull_request.unlabeled", "pull_request.unlocked", "pull_request_review", "pull_request_review.dismissed", "pull_request_review.edited", "pull_request_review.submitted", "pull_request_review_comment", "pull_request_review_comment.created", "pull_request_review_comment.deleted", "pull_request_review_comment.edited", "push", "release", "release.created", "release.deleted", "release.edited", "release.prereleased", "release.published", "release.released", "release.unpublished", "repository", "repository.archived", "repository.created", "repository.deleted", "repository.edited", "repository.privatized", "repository.publicized", "repository.renamed", "repository.transferred", "repository.unarchived", "repository_dispatch", "repository_dispatch.on-demand-test", "repository_import", "repository_vulnerability_alert", "repository_vulnerability_alert.create", "repository_vulnerability_alert.dismiss", "repository_vulnerability_alert.resolve", "secret_scanning_alert", "secret_scanning_alert.created", "secret_scanning_alert.reopened", "secret_scanning_alert.resolved", "security_advisory", "security_advisory.performed", "security_advisory.published", "security_advisory.updated", "security_advisory.withdrawn", "sponsorship", "sponsorship.cancelled", "sponsorship.created", "sponsorship.edited", "sponsorship.pending_cancellation", "sponsorship.pending_tier_change", "sponsorship.tier_changed", "star", "star.created", "star.deleted", "status", "team", "team.added_to_repository", "team.created", "team.deleted", "team.edited", "team.removed_from_repository", "team_add", "watch", "watch.started", "workflow_dispatch", "workflow_job", "workflow_job.completed", "workflow_job.started", "workflow_run", "workflow_run.completed", "workflow_run.requested"];
 
 function handleEventHandlers(state, webhookName, handler) {
   if (!state.hooks[webhookName]) {
@@ -5456,7 +6385,7 @@ function receiverOn(state, webhookNameOrNames, handler) {
     throw new Error(message);
   }
 
-  if (emitterEventNames.indexOf(webhookNameOrNames) === -1) {
+  if (!emitterEventNames.includes(webhookNameOrNames)) {
     state.log.warn(`"${webhookNameOrNames}" is not a known webhook name (https://developer.github.com/v3/activity/events/types/)`);
   }
 
@@ -5598,9 +6527,27 @@ function createEventHandler(options) {
   };
 }
 
+/**
+ * GitHub sends its JSON with an indentation of 2 spaces and a line break at the end
+ */
+function toNormalizedJsonString(payload) {
+  const payloadString = JSON.stringify(payload);
+  return payloadString.replace(/[^\\]\\u[\da-f]{4}/g, s => {
+    return s.substr(0, 3) + s.substr(3).toUpperCase();
+  });
+}
+
+async function sign(secret, payload) {
+  return webhooksMethods.sign(secret, typeof payload === "string" ? payload : toNormalizedJsonString(payload));
+}
+
+async function verify(secret, payload, signature) {
+  return webhooksMethods.verify(secret, typeof payload === "string" ? payload : toNormalizedJsonString(payload), signature);
+}
+
 async function verifyAndReceive(state, event) {
   // verify will validate that the secret is not undefined
-  const matchesSignature = await webhooksMethods.verify(state.secret, event.payload, event.signature);
+  const matchesSignature = await webhooksMethods.verify(state.secret, typeof event.payload === "object" ? toNormalizedJsonString(event.payload) : event.payload, event.signature);
 
   if (!matchesSignature) {
     const error = new Error("[@octokit/webhooks] signature does not match event payload and secret");
@@ -5613,7 +6560,7 @@ async function verifyAndReceive(state, event) {
   return state.eventHandler.receive({
     id: event.id,
     name: event.name,
-    payload: event.payload
+    payload: typeof event.payload === "string" ? JSON.parse(event.payload) : event.payload
   });
 }
 
@@ -5739,8 +6686,8 @@ class Webhooks {
       hooks: {},
       log: createLogger(options.log)
     };
-    this.sign = webhooksMethods.sign.bind(null, options.secret);
-    this.verify = webhooksMethods.verify.bind(null, options.secret);
+    this.sign = sign.bind(null, options.secret);
+    this.verify = verify.bind(null, options.secret);
     this.on = state.eventHandler.on;
     this.onAny = state.eventHandler.onAny;
     this.onError = state.eventHandler.onError;
@@ -13722,7 +14669,7 @@ module.exports = eval("require")("encoding");
 /***/ ((module) => {
 
 "use strict";
-module.exports = require("buffer");;
+module.exports = require("buffer");
 
 /***/ }),
 
@@ -13730,7 +14677,7 @@ module.exports = require("buffer");;
 /***/ ((module) => {
 
 "use strict";
-module.exports = require("crypto");;
+module.exports = require("crypto");
 
 /***/ }),
 
@@ -13738,7 +14685,7 @@ module.exports = require("crypto");;
 /***/ ((module) => {
 
 "use strict";
-module.exports = require("fs");;
+module.exports = require("fs");
 
 /***/ }),
 
@@ -13746,7 +14693,7 @@ module.exports = require("fs");;
 /***/ ((module) => {
 
 "use strict";
-module.exports = require("http");;
+module.exports = require("http");
 
 /***/ }),
 
@@ -13754,7 +14701,7 @@ module.exports = require("http");;
 /***/ ((module) => {
 
 "use strict";
-module.exports = require("https");;
+module.exports = require("https");
 
 /***/ }),
 
@@ -13762,7 +14709,7 @@ module.exports = require("https");;
 /***/ ((module) => {
 
 "use strict";
-module.exports = require("os");;
+module.exports = require("os");
 
 /***/ }),
 
@@ -13770,7 +14717,7 @@ module.exports = require("os");;
 /***/ ((module) => {
 
 "use strict";
-module.exports = require("path");;
+module.exports = require("path");
 
 /***/ }),
 
@@ -13778,7 +14725,7 @@ module.exports = require("path");;
 /***/ ((module) => {
 
 "use strict";
-module.exports = require("stream");;
+module.exports = require("stream");
 
 /***/ }),
 
@@ -13786,7 +14733,7 @@ module.exports = require("stream");;
 /***/ ((module) => {
 
 "use strict";
-module.exports = require("url");;
+module.exports = require("url");
 
 /***/ }),
 
@@ -13794,7 +14741,7 @@ module.exports = require("url");;
 /***/ ((module) => {
 
 "use strict";
-module.exports = require("util");;
+module.exports = require("util");
 
 /***/ }),
 
@@ -13802,7 +14749,7 @@ module.exports = require("util");;
 /***/ ((module) => {
 
 "use strict";
-module.exports = require("zlib");;
+module.exports = require("zlib");
 
 /***/ })
 
@@ -13841,7 +14788,9 @@ module.exports = require("zlib");;
 /************************************************************************/
 /******/ 	/* webpack/runtime/compat */
 /******/ 	
-/******/ 	if (typeof __nccwpck_require__ !== 'undefined') __nccwpck_require__.ab = __dirname + "/";/************************************************************************/
+/******/ 	if (typeof __nccwpck_require__ !== 'undefined') __nccwpck_require__.ab = __dirname + "/";
+/******/ 	
+/************************************************************************/
 var __webpack_exports__ = {};
 // This entry need to be wrapped in an IIFE because it need to be isolated against other modules in the chunk.
 (() => {
