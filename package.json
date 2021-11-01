@@ -38,7 +38,7 @@
     ]
   },
   "devDependencies": {
-    "@semantic-release/git": "^10.0.0",
+    "@semantic-release/git": "^10.0.1",
     "@vercel/ncc": "^0.31.1",
     "nock": "^13.1.4",
     "semantic-release": "^18.0.0",
