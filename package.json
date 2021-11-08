@@ -40,7 +40,7 @@
   "devDependencies": {
     "@semantic-release/git": "^10.0.1",
     "@vercel/ncc": "^0.31.1",
-    "nock": "^13.1.4",
+    "nock": "^13.2.0",
     "semantic-release": "^18.0.0",
     "tap": "^15.0.10"
   }
