@@ -1762,7 +1762,7 @@ var authUnauthenticated = __nccwpck_require__(9567);
 var webhooks$1 = __nccwpck_require__(8513);
 var pluginPaginateRest = __nccwpck_require__(4193);
 
-const VERSION = "13.0.5";
+const VERSION = "13.0.7";
 
 function webhooks(appOctokit, options // Explict return type for better debugability and performance,
 // see https://github.com/octokit/app.js/pull/201
@@ -2135,7 +2135,7 @@ var request = __nccwpck_require__(6787);
 var graphql = __nccwpck_require__(7777);
 var authToken = __nccwpck_require__(6628);
 
-const VERSION = "4.0.4";
+const VERSION = "4.0.5";
 
 class Octokit {
   constructor(options = {}) {
@@ -2639,7 +2639,7 @@ function withDefaults(oldDefaults, newDefaults) {
   });
 }
 
-const VERSION = "7.0.0";
+const VERSION = "7.0.1";
 
 const userAgent = `octokit-endpoint.js/${VERSION} ${universalUserAgent.getUserAgent()}`; // DEFAULTS has all properties set that EndpointOptions has, except url.
 // So we use RequestParameters and add method as additional required property.
@@ -2676,7 +2676,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 var request = __nccwpck_require__(6787);
 var universalUserAgent = __nccwpck_require__(5030);
 
-const VERSION = "5.0.0";
+const VERSION = "5.0.1";
 
 function _buildMessageForResponseErrors(data) {
   return `Request failed due to following response errors:\n` + data.errors.map(e => ` - ${e.message}`).join("\n");
@@ -2889,7 +2889,7 @@ var isPlainObject = __nccwpck_require__(3287);
 var nodeFetch = _interopDefault(__nccwpck_require__(6519));
 var requestError = __nccwpck_require__(5968);
 
-const VERSION = "6.0.2";
+const VERSION = "6.2.1";
 
 function getBufferResponse(response) {
   return response.arrayBuffer();
@@ -2905,7 +2905,9 @@ function fetchWrapper(requestOptions) {
   let headers = {};
   let status;
   let url;
-  const fetch = requestOptions.request && requestOptions.request.fetch || nodeFetch;
+  const fetch = requestOptions.request && requestOptions.request.fetch || globalThis.fetch ||
+  /* istanbul ignore next */
+  nodeFetch;
   return fetch(requestOptions.url, Object.assign({
     method: requestOptions.method,
     body: requestOptions.body,
@@ -2983,7 +2985,7 @@ function fetchWrapper(requestOptions) {
       data
     };
   }).catch(error => {
-    if (error instanceof requestError.RequestError) throw error;
+    if (error instanceof requestError.RequestError) throw error;else if (error.name === "AbortError") throw error;
     throw new requestError.RequestError(error.message, 500, {
       request: requestOptions
     });
@@ -5164,7 +5166,7 @@ async function sendRequestWithRetries(state, request, options, createdAt, retrie
   }
 }
 
-const VERSION = "4.0.4";
+const VERSION = "4.0.5";
 
 function createAppAuth(options) {
   if (!options.appId) {
@@ -5591,7 +5593,7 @@ function withDefaults(oldDefaults, newDefaults) {
   });
 }
 
-const VERSION = "7.0.0";
+const VERSION = "7.0.1";
 
 const userAgent = `octokit-endpoint.js/${VERSION} ${universalUserAgent.getUserAgent()}`; // DEFAULTS has all properties set that EndpointOptions has, except url.
 // So we use RequestParameters and add method as additional required property.
@@ -5715,7 +5717,7 @@ var isPlainObject = __nccwpck_require__(3287);
 var nodeFetch = _interopDefault(__nccwpck_require__(9960));
 var requestError = __nccwpck_require__(5634);
 
-const VERSION = "6.0.2";
+const VERSION = "6.2.1";
 
 function getBufferResponse(response) {
   return response.arrayBuffer();
@@ -5731,7 +5733,9 @@ function fetchWrapper(requestOptions) {
   let headers = {};
   let status;
   let url;
-  const fetch = requestOptions.request && requestOptions.request.fetch || nodeFetch;
+  const fetch = requestOptions.request && requestOptions.request.fetch || globalThis.fetch ||
+  /* istanbul ignore next */
+  nodeFetch;
   return fetch(requestOptions.url, Object.assign({
     method: requestOptions.method,
     body: requestOptions.body,
@@ -5809,7 +5813,7 @@ function fetchWrapper(requestOptions) {
       data
     };
   }).catch(error => {
-    if (error instanceof requestError.RequestError) throw error;
+    if (error instanceof requestError.RequestError) throw error;else if (error.name === "AbortError") throw error;
     throw new requestError.RequestError(error.message, 500, {
       request: requestOptions
     });
@@ -7667,7 +7671,7 @@ async function hook(state, request, route, parameters) {
   }
 }
 
-const VERSION = "5.0.1";
+const VERSION = "5.0.2";
 
 function createOAuthAppAuth(options) {
   const state = Object.assign({
@@ -9786,7 +9790,7 @@ async function hook(state, request, route, parameters) {
   return request(endpoint);
 }
 
-const VERSION = "4.0.0";
+const VERSION = "4.0.1";
 
 function createOAuthDeviceAuth(options) {
   const requestWithDefaults = options.request || request.request.defaults({
@@ -10199,7 +10203,7 @@ function withDefaults(oldDefaults, newDefaults) {
   });
 }
 
-const VERSION = "7.0.0";
+const VERSION = "7.0.1";
 
 const userAgent = `octokit-endpoint.js/${VERSION} ${universalUserAgent.getUserAgent()}`; // DEFAULTS has all properties set that EndpointOptions has, except url.
 // So we use RequestParameters and add method as additional required property.
@@ -10323,7 +10327,7 @@ var isPlainObject = __nccwpck_require__(3287);
 var nodeFetch = _interopDefault(__nccwpck_require__(1337));
 var requestError = __nccwpck_require__(4384);
 
-const VERSION = "6.0.2";
+const VERSION = "6.2.1";
 
 function getBufferResponse(response) {
   return response.arrayBuffer();
@@ -10339,7 +10343,9 @@ function fetchWrapper(requestOptions) {
   let headers = {};
   let status;
   let url;
-  const fetch = requestOptions.request && requestOptions.request.fetch || nodeFetch;
+  const fetch = requestOptions.request && requestOptions.request.fetch || globalThis.fetch ||
+  /* istanbul ignore next */
+  nodeFetch;
   return fetch(requestOptions.url, Object.assign({
     method: requestOptions.method,
     body: requestOptions.body,
@@ -10417,7 +10423,7 @@ function fetchWrapper(requestOptions) {
       data
     };
   }).catch(error => {
-    if (error instanceof requestError.RequestError) throw error;
+    if (error instanceof requestError.RequestError) throw error;else if (error.name === "AbortError") throw error;
     throw new requestError.RequestError(error.message, 500, {
       request: requestOptions
     });
@@ -12210,10 +12216,10 @@ function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'defau
 var universalUserAgent = __nccwpck_require__(5030);
 var request = __nccwpck_require__(8608);
 var authOauthDevice = __nccwpck_require__(4344);
-var oauthMethods = __nccwpck_require__(1516);
+var oauthMethods = __nccwpck_require__(8445);
 var btoa = _interopDefault(__nccwpck_require__(2358));
 
-const VERSION = "2.0.1";
+const VERSION = "2.0.3";
 
 // @ts-nocheck there is only place for one of us in this file. And it's not you, TS
 async function getAuthentication(state) {
@@ -12447,922 +12453,7 @@ exports.requiresBasicAuth = requiresBasicAuth;
 
 /***/ }),
 
-/***/ 259:
-/***/ ((__unused_webpack_module, exports) => {
-
-"use strict";
-
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-
-function oauthAuthorizationUrl(options) {
-  const clientType = options.clientType || "oauth-app";
-  const baseUrl = options.baseUrl || "https://github.com";
-  const result = {
-    clientType,
-    allowSignup: options.allowSignup === false ? false : true,
-    clientId: options.clientId,
-    login: options.login || null,
-    redirectUrl: options.redirectUrl || null,
-    state: options.state || Math.random().toString(36).substr(2),
-    url: ""
-  };
-
-  if (clientType === "oauth-app") {
-    const scopes = "scopes" in options ? options.scopes : [];
-    result.scopes = typeof scopes === "string" ? scopes.split(/[,\s]+/).filter(Boolean) : scopes;
-  }
-
-  result.url = urlBuilderAuthorize(`${baseUrl}/login/oauth/authorize`, result);
-  return result;
-}
-
-function urlBuilderAuthorize(base, options) {
-  const map = {
-    allowSignup: "allow_signup",
-    clientId: "client_id",
-    login: "login",
-    redirectUrl: "redirect_uri",
-    scopes: "scope",
-    state: "state"
-  };
-  let url = base;
-  Object.keys(map) // Filter out keys that are null and remove the url key
-  .filter(k => options[k] !== null) // Filter out empty scopes array
-  .filter(k => {
-    if (k !== "scopes") return true;
-    if (options.clientType === "github-app") return false;
-    return !Array.isArray(options[k]) || options[k].length > 0;
-  }) // Map Array with the proper URL parameter names and change the value to a string using template strings
-  // @ts-ignore
-  .map(key => [map[key], `${options[key]}`]) // Finally, build the URL
-  .forEach(([key, value], index) => {
-    url += index === 0 ? `?` : "&";
-    url += `${key}=${encodeURIComponent(value)}`;
-  });
-  return url;
-}
-
-exports.oauthAuthorizationUrl = oauthAuthorizationUrl;
-//# sourceMappingURL=index.js.map
-
-
-/***/ }),
-
-/***/ 1516:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
-
-"use strict";
-
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-
-function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
-
-var oauthAuthorizationUrl = __nccwpck_require__(259);
-var request = __nccwpck_require__(6421);
-var requestError = __nccwpck_require__(7450);
-var btoa = _interopDefault(__nccwpck_require__(2358));
-
-const VERSION = "1.2.6";
-
-function ownKeys(object, enumerableOnly) {
-  var keys = Object.keys(object);
-
-  if (Object.getOwnPropertySymbols) {
-    var symbols = Object.getOwnPropertySymbols(object);
-
-    if (enumerableOnly) {
-      symbols = symbols.filter(function (sym) {
-        return Object.getOwnPropertyDescriptor(object, sym).enumerable;
-      });
-    }
-
-    keys.push.apply(keys, symbols);
-  }
-
-  return keys;
-}
-
-function _objectSpread2(target) {
-  for (var i = 1; i < arguments.length; i++) {
-    var source = arguments[i] != null ? arguments[i] : {};
-
-    if (i % 2) {
-      ownKeys(Object(source), true).forEach(function (key) {
-        _defineProperty(target, key, source[key]);
-      });
-    } else if (Object.getOwnPropertyDescriptors) {
-      Object.defineProperties(target, Object.getOwnPropertyDescriptors(source));
-    } else {
-      ownKeys(Object(source)).forEach(function (key) {
-        Object.defineProperty(target, key, Object.getOwnPropertyDescriptor(source, key));
-      });
-    }
-  }
-
-  return target;
-}
-
-function _defineProperty(obj, key, value) {
-  if (key in obj) {
-    Object.defineProperty(obj, key, {
-      value: value,
-      enumerable: true,
-      configurable: true,
-      writable: true
-    });
-  } else {
-    obj[key] = value;
-  }
-
-  return obj;
-}
-
-function _objectWithoutPropertiesLoose(source, excluded) {
-  if (source == null) return {};
-  var target = {};
-  var sourceKeys = Object.keys(source);
-  var key, i;
-
-  for (i = 0; i < sourceKeys.length; i++) {
-    key = sourceKeys[i];
-    if (excluded.indexOf(key) >= 0) continue;
-    target[key] = source[key];
-  }
-
-  return target;
-}
-
-function _objectWithoutProperties(source, excluded) {
-  if (source == null) return {};
-
-  var target = _objectWithoutPropertiesLoose(source, excluded);
-
-  var key, i;
-
-  if (Object.getOwnPropertySymbols) {
-    var sourceSymbolKeys = Object.getOwnPropertySymbols(source);
-
-    for (i = 0; i < sourceSymbolKeys.length; i++) {
-      key = sourceSymbolKeys[i];
-      if (excluded.indexOf(key) >= 0) continue;
-      if (!Object.prototype.propertyIsEnumerable.call(source, key)) continue;
-      target[key] = source[key];
-    }
-  }
-
-  return target;
-}
-
-function requestToOAuthBaseUrl(request) {
-  const endpointDefaults = request.endpoint.DEFAULTS;
-  return /^https:\/\/(api\.)?github\.com$/.test(endpointDefaults.baseUrl) ? "https://github.com" : endpointDefaults.baseUrl.replace("/api/v3", "");
-}
-async function oauthRequest(request, route, parameters) {
-  const withOAuthParameters = _objectSpread2({
-    baseUrl: requestToOAuthBaseUrl(request),
-    headers: {
-      accept: "application/json"
-    }
-  }, parameters);
-
-  const response = await request(route, withOAuthParameters);
-
-  if ("error" in response.data) {
-    const error = new requestError.RequestError(`${response.data.error_description} (${response.data.error}, ${response.data.error_uri})`, 400, {
-      request: request.endpoint.merge(route, withOAuthParameters),
-      headers: response.headers
-    }); // @ts-ignore add custom response property until https://github.com/octokit/request-error.js/issues/169 is resolved
-
-    error.response = response;
-    throw error;
-  }
-
-  return response;
-}
-
-const _excluded = ["request"];
-function getWebFlowAuthorizationUrl(_ref) {
-  let {
-    request: request$1 = request.request
-  } = _ref,
-      options = _objectWithoutProperties(_ref, _excluded);
-
-  const baseUrl = requestToOAuthBaseUrl(request$1); // @ts-expect-error TypeScript wants `clientType` to be set explicitly ¯\_(ツ)_/¯
-
-  return oauthAuthorizationUrl.oauthAuthorizationUrl(_objectSpread2(_objectSpread2({}, options), {}, {
-    baseUrl
-  }));
-}
-
-async function exchangeWebFlowCode(options) {
-  const request$1 = options.request ||
-  /* istanbul ignore next: we always pass a custom request in tests */
-  request.request;
-  const response = await oauthRequest(request$1, "POST /login/oauth/access_token", {
-    client_id: options.clientId,
-    client_secret: options.clientSecret,
-    code: options.code,
-    redirect_uri: options.redirectUrl
-  });
-  const authentication = {
-    clientType: options.clientType,
-    clientId: options.clientId,
-    clientSecret: options.clientSecret,
-    token: response.data.access_token,
-    scopes: response.data.scope.split(/\s+/).filter(Boolean)
-  };
-
-  if (options.clientType === "github-app") {
-    if ("refresh_token" in response.data) {
-      const apiTimeInMs = new Date(response.headers.date).getTime();
-      authentication.refreshToken = response.data.refresh_token, authentication.expiresAt = toTimestamp(apiTimeInMs, response.data.expires_in), authentication.refreshTokenExpiresAt = toTimestamp(apiTimeInMs, response.data.refresh_token_expires_in);
-    }
-
-    delete authentication.scopes;
-  }
-
-  return _objectSpread2(_objectSpread2({}, response), {}, {
-    authentication
-  });
-}
-
-function toTimestamp(apiTimeInMs, expirationInSeconds) {
-  return new Date(apiTimeInMs + expirationInSeconds * 1000).toISOString();
-}
-
-async function createDeviceCode(options) {
-  const request$1 = options.request ||
-  /* istanbul ignore next: we always pass a custom request in tests */
-  request.request;
-  const parameters = {
-    client_id: options.clientId
-  };
-
-  if ("scopes" in options && Array.isArray(options.scopes)) {
-    parameters.scope = options.scopes.join(" ");
-  }
-
-  return oauthRequest(request$1, "POST /login/device/code", parameters);
-}
-
-async function exchangeDeviceCode(options) {
-  const request$1 = options.request ||
-  /* istanbul ignore next: we always pass a custom request in tests */
-  request.request;
-  const response = await oauthRequest(request$1, "POST /login/oauth/access_token", {
-    client_id: options.clientId,
-    device_code: options.code,
-    grant_type: "urn:ietf:params:oauth:grant-type:device_code"
-  });
-  const authentication = {
-    clientType: options.clientType,
-    clientId: options.clientId,
-    token: response.data.access_token,
-    scopes: response.data.scope.split(/\s+/).filter(Boolean)
-  };
-
-  if ("clientSecret" in options) {
-    authentication.clientSecret = options.clientSecret;
-  }
-
-  if (options.clientType === "github-app") {
-    if ("refresh_token" in response.data) {
-      const apiTimeInMs = new Date(response.headers.date).getTime();
-      authentication.refreshToken = response.data.refresh_token, authentication.expiresAt = toTimestamp$1(apiTimeInMs, response.data.expires_in), authentication.refreshTokenExpiresAt = toTimestamp$1(apiTimeInMs, response.data.refresh_token_expires_in);
-    }
-
-    delete authentication.scopes;
-  }
-
-  return _objectSpread2(_objectSpread2({}, response), {}, {
-    authentication
-  });
-}
-
-function toTimestamp$1(apiTimeInMs, expirationInSeconds) {
-  return new Date(apiTimeInMs + expirationInSeconds * 1000).toISOString();
-}
-
-async function checkToken(options) {
-  const request$1 = options.request ||
-  /* istanbul ignore next: we always pass a custom request in tests */
-  request.request;
-  const response = await request$1("POST /applications/{client_id}/token", {
-    headers: {
-      authorization: `basic ${btoa(`${options.clientId}:${options.clientSecret}`)}`
-    },
-    client_id: options.clientId,
-    access_token: options.token
-  });
-  const authentication = {
-    clientType: options.clientType,
-    clientId: options.clientId,
-    clientSecret: options.clientSecret,
-    token: options.token,
-    scopes: response.data.scopes
-  };
-  if (response.data.expires_at) authentication.expiresAt = response.data.expires_at;
-
-  if (options.clientType === "github-app") {
-    delete authentication.scopes;
-  }
-
-  return _objectSpread2(_objectSpread2({}, response), {}, {
-    authentication
-  });
-}
-
-async function refreshToken(options) {
-  const request$1 = options.request ||
-  /* istanbul ignore next: we always pass a custom request in tests */
-  request.request;
-  const response = await oauthRequest(request$1, "POST /login/oauth/access_token", {
-    client_id: options.clientId,
-    client_secret: options.clientSecret,
-    grant_type: "refresh_token",
-    refresh_token: options.refreshToken
-  });
-  const apiTimeInMs = new Date(response.headers.date).getTime();
-  const authentication = {
-    clientType: "github-app",
-    clientId: options.clientId,
-    clientSecret: options.clientSecret,
-    token: response.data.access_token,
-    refreshToken: response.data.refresh_token,
-    expiresAt: toTimestamp$2(apiTimeInMs, response.data.expires_in),
-    refreshTokenExpiresAt: toTimestamp$2(apiTimeInMs, response.data.refresh_token_expires_in)
-  };
-  return _objectSpread2(_objectSpread2({}, response), {}, {
-    authentication
-  });
-}
-
-function toTimestamp$2(apiTimeInMs, expirationInSeconds) {
-  return new Date(apiTimeInMs + expirationInSeconds * 1000).toISOString();
-}
-
-const _excluded$1 = ["request", "clientType", "clientId", "clientSecret", "token"];
-async function scopeToken(options) {
-  const {
-    request: request$1,
-    clientType,
-    clientId,
-    clientSecret,
-    token
-  } = options,
-        requestOptions = _objectWithoutProperties(options, _excluded$1);
-
-  const response = await (request$1 ||
-  /* istanbul ignore next: we always pass a custom request in tests */
-  request.request)("POST /applications/{client_id}/token/scoped", _objectSpread2({
-    headers: {
-      authorization: `basic ${btoa(`${clientId}:${clientSecret}`)}`
-    },
-    client_id: clientId,
-    access_token: token
-  }, requestOptions));
-  const authentication = Object.assign({
-    clientType,
-    clientId,
-    clientSecret,
-    token: response.data.token
-  }, response.data.expires_at ? {
-    expiresAt: response.data.expires_at
-  } : {});
-  return _objectSpread2(_objectSpread2({}, response), {}, {
-    authentication
-  });
-}
-
-async function resetToken(options) {
-  const request$1 = options.request ||
-  /* istanbul ignore next: we always pass a custom request in tests */
-  request.request;
-  const auth = btoa(`${options.clientId}:${options.clientSecret}`);
-  const response = await request$1("PATCH /applications/{client_id}/token", {
-    headers: {
-      authorization: `basic ${auth}`
-    },
-    client_id: options.clientId,
-    access_token: options.token
-  });
-  const authentication = {
-    clientType: options.clientType,
-    clientId: options.clientId,
-    clientSecret: options.clientSecret,
-    token: response.data.token,
-    scopes: response.data.scopes
-  };
-  if (response.data.expires_at) authentication.expiresAt = response.data.expires_at;
-
-  if (options.clientType === "github-app") {
-    delete authentication.scopes;
-  }
-
-  return _objectSpread2(_objectSpread2({}, response), {}, {
-    authentication
-  });
-}
-
-async function deleteToken(options) {
-  const request$1 = options.request ||
-  /* istanbul ignore next: we always pass a custom request in tests */
-  request.request;
-  const auth = btoa(`${options.clientId}:${options.clientSecret}`);
-  return request$1("DELETE /applications/{client_id}/token", {
-    headers: {
-      authorization: `basic ${auth}`
-    },
-    client_id: options.clientId,
-    access_token: options.token
-  });
-}
-
-async function deleteAuthorization(options) {
-  const request$1 = options.request ||
-  /* istanbul ignore next: we always pass a custom request in tests */
-  request.request;
-  const auth = btoa(`${options.clientId}:${options.clientSecret}`);
-  return request$1("DELETE /applications/{client_id}/grant", {
-    headers: {
-      authorization: `basic ${auth}`
-    },
-    client_id: options.clientId,
-    access_token: options.token
-  });
-}
-
-exports.VERSION = VERSION;
-exports.checkToken = checkToken;
-exports.createDeviceCode = createDeviceCode;
-exports.deleteAuthorization = deleteAuthorization;
-exports.deleteToken = deleteToken;
-exports.exchangeDeviceCode = exchangeDeviceCode;
-exports.exchangeWebFlowCode = exchangeWebFlowCode;
-exports.getWebFlowAuthorizationUrl = getWebFlowAuthorizationUrl;
-exports.refreshToken = refreshToken;
-exports.resetToken = resetToken;
-exports.scopeToken = scopeToken;
-//# sourceMappingURL=index.js.map
-
-
-/***/ }),
-
-/***/ 6421:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
-
-"use strict";
-
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-
-function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
-
-var endpoint = __nccwpck_require__(9440);
-var universalUserAgent = __nccwpck_require__(5030);
-var isPlainObject = __nccwpck_require__(3287);
-var nodeFetch = _interopDefault(__nccwpck_require__(9183));
-var requestError = __nccwpck_require__(7450);
-
-const VERSION = "5.6.3";
-
-function getBufferResponse(response) {
-  return response.arrayBuffer();
-}
-
-function fetchWrapper(requestOptions) {
-  const log = requestOptions.request && requestOptions.request.log ? requestOptions.request.log : console;
-
-  if (isPlainObject.isPlainObject(requestOptions.body) || Array.isArray(requestOptions.body)) {
-    requestOptions.body = JSON.stringify(requestOptions.body);
-  }
-
-  let headers = {};
-  let status;
-  let url;
-  const fetch = requestOptions.request && requestOptions.request.fetch || nodeFetch;
-  return fetch(requestOptions.url, Object.assign({
-    method: requestOptions.method,
-    body: requestOptions.body,
-    headers: requestOptions.headers,
-    redirect: requestOptions.redirect
-  }, // `requestOptions.request.agent` type is incompatible
-  // see https://github.com/octokit/types.ts/pull/264
-  requestOptions.request)).then(async response => {
-    url = response.url;
-    status = response.status;
-
-    for (const keyAndValue of response.headers) {
-      headers[keyAndValue[0]] = keyAndValue[1];
-    }
-
-    if ("deprecation" in headers) {
-      const matches = headers.link && headers.link.match(/<([^>]+)>; rel="deprecation"/);
-      const deprecationLink = matches && matches.pop();
-      log.warn(`[@octokit/request] "${requestOptions.method} ${requestOptions.url}" is deprecated. It is scheduled to be removed on ${headers.sunset}${deprecationLink ? `. See ${deprecationLink}` : ""}`);
-    }
-
-    if (status === 204 || status === 205) {
-      return;
-    } // GitHub API returns 200 for HEAD requests
-
-
-    if (requestOptions.method === "HEAD") {
-      if (status < 400) {
-        return;
-      }
-
-      throw new requestError.RequestError(response.statusText, status, {
-        response: {
-          url,
-          status,
-          headers,
-          data: undefined
-        },
-        request: requestOptions
-      });
-    }
-
-    if (status === 304) {
-      throw new requestError.RequestError("Not modified", status, {
-        response: {
-          url,
-          status,
-          headers,
-          data: await getResponseData(response)
-        },
-        request: requestOptions
-      });
-    }
-
-    if (status >= 400) {
-      const data = await getResponseData(response);
-      const error = new requestError.RequestError(toErrorMessage(data), status, {
-        response: {
-          url,
-          status,
-          headers,
-          data
-        },
-        request: requestOptions
-      });
-      throw error;
-    }
-
-    return getResponseData(response);
-  }).then(data => {
-    return {
-      status,
-      url,
-      headers,
-      data
-    };
-  }).catch(error => {
-    if (error instanceof requestError.RequestError) throw error;
-    throw new requestError.RequestError(error.message, 500, {
-      request: requestOptions
-    });
-  });
-}
-
-async function getResponseData(response) {
-  const contentType = response.headers.get("content-type");
-
-  if (/application\/json/.test(contentType)) {
-    return response.json();
-  }
-
-  if (!contentType || /^text\/|charset=utf-8$/.test(contentType)) {
-    return response.text();
-  }
-
-  return getBufferResponse(response);
-}
-
-function toErrorMessage(data) {
-  if (typeof data === "string") return data; // istanbul ignore else - just in case
-
-  if ("message" in data) {
-    if (Array.isArray(data.errors)) {
-      return `${data.message}: ${data.errors.map(JSON.stringify).join(", ")}`;
-    }
-
-    return data.message;
-  } // istanbul ignore next - just in case
-
-
-  return `Unknown error: ${JSON.stringify(data)}`;
-}
-
-function withDefaults(oldEndpoint, newDefaults) {
-  const endpoint = oldEndpoint.defaults(newDefaults);
-
-  const newApi = function (route, parameters) {
-    const endpointOptions = endpoint.merge(route, parameters);
-
-    if (!endpointOptions.request || !endpointOptions.request.hook) {
-      return fetchWrapper(endpoint.parse(endpointOptions));
-    }
-
-    const request = (route, parameters) => {
-      return fetchWrapper(endpoint.parse(endpoint.merge(route, parameters)));
-    };
-
-    Object.assign(request, {
-      endpoint,
-      defaults: withDefaults.bind(null, endpoint)
-    });
-    return endpointOptions.request.hook(request, endpointOptions);
-  };
-
-  return Object.assign(newApi, {
-    endpoint,
-    defaults: withDefaults.bind(null, endpoint)
-  });
-}
-
-const request = withDefaults(endpoint.endpoint, {
-  headers: {
-    "user-agent": `octokit-request.js/${VERSION} ${universalUserAgent.getUserAgent()}`
-  }
-});
-
-exports.request = request;
-//# sourceMappingURL=index.js.map
-
-
-/***/ }),
-
-/***/ 7450:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
-
-"use strict";
-
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-
-function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
-
-var deprecation = __nccwpck_require__(8932);
-var once = _interopDefault(__nccwpck_require__(1223));
-
-const logOnceCode = once(deprecation => console.warn(deprecation));
-const logOnceHeaders = once(deprecation => console.warn(deprecation));
-/**
- * Error with extra properties to help with debugging
- */
-
-class RequestError extends Error {
-  constructor(message, statusCode, options) {
-    super(message); // Maintains proper stack trace (only available on V8)
-
-    /* istanbul ignore next */
-
-    if (Error.captureStackTrace) {
-      Error.captureStackTrace(this, this.constructor);
-    }
-
-    this.name = "HttpError";
-    this.status = statusCode;
-    let headers;
-
-    if ("headers" in options && typeof options.headers !== "undefined") {
-      headers = options.headers;
-    }
-
-    if ("response" in options) {
-      this.response = options.response;
-      headers = options.response.headers;
-    } // redact request credentials without mutating original request options
-
-
-    const requestCopy = Object.assign({}, options.request);
-
-    if (options.request.headers.authorization) {
-      requestCopy.headers = Object.assign({}, options.request.headers, {
-        authorization: options.request.headers.authorization.replace(/ .*$/, " [REDACTED]")
-      });
-    }
-
-    requestCopy.url = requestCopy.url // client_id & client_secret can be passed as URL query parameters to increase rate limit
-    // see https://developer.github.com/v3/#increasing-the-unauthenticated-rate-limit-for-oauth-applications
-    .replace(/\bclient_secret=\w+/g, "client_secret=[REDACTED]") // OAuth tokens can be passed as URL query parameters, although it is not recommended
-    // see https://developer.github.com/v3/#oauth2-token-sent-in-a-header
-    .replace(/\baccess_token=\w+/g, "access_token=[REDACTED]");
-    this.request = requestCopy; // deprecations
-
-    Object.defineProperty(this, "code", {
-      get() {
-        logOnceCode(new deprecation.Deprecation("[@octokit/request-error] `error.code` is deprecated, use `error.status`."));
-        return statusCode;
-      }
-
-    });
-    Object.defineProperty(this, "headers", {
-      get() {
-        logOnceHeaders(new deprecation.Deprecation("[@octokit/request-error] `error.headers` is deprecated, use `error.response.headers`."));
-        return headers || {};
-      }
-
-    });
-  }
-
-}
-
-exports.RequestError = RequestError;
-//# sourceMappingURL=index.js.map
-
-
-/***/ }),
-
-/***/ 8608:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
-
-"use strict";
-
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-
-function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
-
-var endpoint = __nccwpck_require__(4880);
-var universalUserAgent = __nccwpck_require__(5030);
-var isPlainObject = __nccwpck_require__(3287);
-var nodeFetch = _interopDefault(__nccwpck_require__(9183));
-var requestError = __nccwpck_require__(9988);
-
-const VERSION = "6.0.2";
-
-function getBufferResponse(response) {
-  return response.arrayBuffer();
-}
-
-function fetchWrapper(requestOptions) {
-  const log = requestOptions.request && requestOptions.request.log ? requestOptions.request.log : console;
-
-  if (isPlainObject.isPlainObject(requestOptions.body) || Array.isArray(requestOptions.body)) {
-    requestOptions.body = JSON.stringify(requestOptions.body);
-  }
-
-  let headers = {};
-  let status;
-  let url;
-  const fetch = requestOptions.request && requestOptions.request.fetch || nodeFetch;
-  return fetch(requestOptions.url, Object.assign({
-    method: requestOptions.method,
-    body: requestOptions.body,
-    headers: requestOptions.headers,
-    redirect: requestOptions.redirect
-  }, // `requestOptions.request.agent` type is incompatible
-  // see https://github.com/octokit/types.ts/pull/264
-  requestOptions.request)).then(async response => {
-    url = response.url;
-    status = response.status;
-
-    for (const keyAndValue of response.headers) {
-      headers[keyAndValue[0]] = keyAndValue[1];
-    }
-
-    if ("deprecation" in headers) {
-      const matches = headers.link && headers.link.match(/<([^>]+)>; rel="deprecation"/);
-      const deprecationLink = matches && matches.pop();
-      log.warn(`[@octokit/request] "${requestOptions.method} ${requestOptions.url}" is deprecated. It is scheduled to be removed on ${headers.sunset}${deprecationLink ? `. See ${deprecationLink}` : ""}`);
-    }
-
-    if (status === 204 || status === 205) {
-      return;
-    } // GitHub API returns 200 for HEAD requests
-
-
-    if (requestOptions.method === "HEAD") {
-      if (status < 400) {
-        return;
-      }
-
-      throw new requestError.RequestError(response.statusText, status, {
-        response: {
-          url,
-          status,
-          headers,
-          data: undefined
-        },
-        request: requestOptions
-      });
-    }
-
-    if (status === 304) {
-      throw new requestError.RequestError("Not modified", status, {
-        response: {
-          url,
-          status,
-          headers,
-          data: await getResponseData(response)
-        },
-        request: requestOptions
-      });
-    }
-
-    if (status >= 400) {
-      const data = await getResponseData(response);
-      const error = new requestError.RequestError(toErrorMessage(data), status, {
-        response: {
-          url,
-          status,
-          headers,
-          data
-        },
-        request: requestOptions
-      });
-      throw error;
-    }
-
-    return getResponseData(response);
-  }).then(data => {
-    return {
-      status,
-      url,
-      headers,
-      data
-    };
-  }).catch(error => {
-    if (error instanceof requestError.RequestError) throw error;
-    throw new requestError.RequestError(error.message, 500, {
-      request: requestOptions
-    });
-  });
-}
-
-async function getResponseData(response) {
-  const contentType = response.headers.get("content-type");
-
-  if (/application\/json/.test(contentType)) {
-    return response.json();
-  }
-
-  if (!contentType || /^text\/|charset=utf-8$/.test(contentType)) {
-    return response.text();
-  }
-
-  return getBufferResponse(response);
-}
-
-function toErrorMessage(data) {
-  if (typeof data === "string") return data; // istanbul ignore else - just in case
-
-  if ("message" in data) {
-    if (Array.isArray(data.errors)) {
-      return `${data.message}: ${data.errors.map(JSON.stringify).join(", ")}`;
-    }
-
-    return data.message;
-  } // istanbul ignore next - just in case
-
-
-  return `Unknown error: ${JSON.stringify(data)}`;
-}
-
-function withDefaults(oldEndpoint, newDefaults) {
-  const endpoint = oldEndpoint.defaults(newDefaults);
-
-  const newApi = function (route, parameters) {
-    const endpointOptions = endpoint.merge(route, parameters);
-
-    if (!endpointOptions.request || !endpointOptions.request.hook) {
-      return fetchWrapper(endpoint.parse(endpointOptions));
-    }
-
-    const request = (route, parameters) => {
-      return fetchWrapper(endpoint.parse(endpoint.merge(route, parameters)));
-    };
-
-    Object.assign(request, {
-      endpoint,
-      defaults: withDefaults.bind(null, endpoint)
-    });
-    return endpointOptions.request.hook(request, endpointOptions);
-  };
-
-  return Object.assign(newApi, {
-    endpoint,
-    defaults: withDefaults.bind(null, endpoint)
-  });
-}
-
-const request = withDefaults(endpoint.endpoint, {
-  headers: {
-    "user-agent": `octokit-request.js/${VERSION} ${universalUserAgent.getUserAgent()}`
-  }
-});
-
-exports.request = request;
-//# sourceMappingURL=index.js.map
-
-
-/***/ }),
-
-/***/ 4880:
+/***/ 7224:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
@@ -13734,7 +12825,7 @@ function withDefaults(oldDefaults, newDefaults) {
   });
 }
 
-const VERSION = "7.0.0";
+const VERSION = "7.0.1";
 
 const userAgent = `octokit-endpoint.js/${VERSION} ${universalUserAgent.getUserAgent()}`; // DEFAULTS has all properties set that EndpointOptions has, except url.
 // So we use RequestParameters and add method as additional required property.
@@ -13760,7 +12851,7 @@ exports.endpoint = endpoint;
 
 /***/ }),
 
-/***/ 9988:
+/***/ 7450:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
@@ -13837,6 +12928,193 @@ class RequestError extends Error {
 }
 
 exports.RequestError = RequestError;
+//# sourceMappingURL=index.js.map
+
+
+/***/ }),
+
+/***/ 8608:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+
+function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
+
+var endpoint = __nccwpck_require__(7224);
+var universalUserAgent = __nccwpck_require__(5030);
+var isPlainObject = __nccwpck_require__(3287);
+var nodeFetch = _interopDefault(__nccwpck_require__(9183));
+var requestError = __nccwpck_require__(7450);
+
+const VERSION = "6.2.1";
+
+function getBufferResponse(response) {
+  return response.arrayBuffer();
+}
+
+function fetchWrapper(requestOptions) {
+  const log = requestOptions.request && requestOptions.request.log ? requestOptions.request.log : console;
+
+  if (isPlainObject.isPlainObject(requestOptions.body) || Array.isArray(requestOptions.body)) {
+    requestOptions.body = JSON.stringify(requestOptions.body);
+  }
+
+  let headers = {};
+  let status;
+  let url;
+  const fetch = requestOptions.request && requestOptions.request.fetch || globalThis.fetch ||
+  /* istanbul ignore next */
+  nodeFetch;
+  return fetch(requestOptions.url, Object.assign({
+    method: requestOptions.method,
+    body: requestOptions.body,
+    headers: requestOptions.headers,
+    redirect: requestOptions.redirect
+  }, // `requestOptions.request.agent` type is incompatible
+  // see https://github.com/octokit/types.ts/pull/264
+  requestOptions.request)).then(async response => {
+    url = response.url;
+    status = response.status;
+
+    for (const keyAndValue of response.headers) {
+      headers[keyAndValue[0]] = keyAndValue[1];
+    }
+
+    if ("deprecation" in headers) {
+      const matches = headers.link && headers.link.match(/<([^>]+)>; rel="deprecation"/);
+      const deprecationLink = matches && matches.pop();
+      log.warn(`[@octokit/request] "${requestOptions.method} ${requestOptions.url}" is deprecated. It is scheduled to be removed on ${headers.sunset}${deprecationLink ? `. See ${deprecationLink}` : ""}`);
+    }
+
+    if (status === 204 || status === 205) {
+      return;
+    } // GitHub API returns 200 for HEAD requests
+
+
+    if (requestOptions.method === "HEAD") {
+      if (status < 400) {
+        return;
+      }
+
+      throw new requestError.RequestError(response.statusText, status, {
+        response: {
+          url,
+          status,
+          headers,
+          data: undefined
+        },
+        request: requestOptions
+      });
+    }
+
+    if (status === 304) {
+      throw new requestError.RequestError("Not modified", status, {
+        response: {
+          url,
+          status,
+          headers,
+          data: await getResponseData(response)
+        },
+        request: requestOptions
+      });
+    }
+
+    if (status >= 400) {
+      const data = await getResponseData(response);
+      const error = new requestError.RequestError(toErrorMessage(data), status, {
+        response: {
+          url,
+          status,
+          headers,
+          data
+        },
+        request: requestOptions
+      });
+      throw error;
+    }
+
+    return getResponseData(response);
+  }).then(data => {
+    return {
+      status,
+      url,
+      headers,
+      data
+    };
+  }).catch(error => {
+    if (error instanceof requestError.RequestError) throw error;else if (error.name === "AbortError") throw error;
+    throw new requestError.RequestError(error.message, 500, {
+      request: requestOptions
+    });
+  });
+}
+
+async function getResponseData(response) {
+  const contentType = response.headers.get("content-type");
+
+  if (/application\/json/.test(contentType)) {
+    return response.json();
+  }
+
+  if (!contentType || /^text\/|charset=utf-8$/.test(contentType)) {
+    return response.text();
+  }
+
+  return getBufferResponse(response);
+}
+
+function toErrorMessage(data) {
+  if (typeof data === "string") return data; // istanbul ignore else - just in case
+
+  if ("message" in data) {
+    if (Array.isArray(data.errors)) {
+      return `${data.message}: ${data.errors.map(JSON.stringify).join(", ")}`;
+    }
+
+    return data.message;
+  } // istanbul ignore next - just in case
+
+
+  return `Unknown error: ${JSON.stringify(data)}`;
+}
+
+function withDefaults(oldEndpoint, newDefaults) {
+  const endpoint = oldEndpoint.defaults(newDefaults);
+
+  const newApi = function (route, parameters) {
+    const endpointOptions = endpoint.merge(route, parameters);
+
+    if (!endpointOptions.request || !endpointOptions.request.hook) {
+      return fetchWrapper(endpoint.parse(endpointOptions));
+    }
+
+    const request = (route, parameters) => {
+      return fetchWrapper(endpoint.parse(endpoint.merge(route, parameters)));
+    };
+
+    Object.assign(request, {
+      endpoint,
+      defaults: withDefaults.bind(null, endpoint)
+    });
+    return endpointOptions.request.hook(request, endpointOptions);
+  };
+
+  return Object.assign(newApi, {
+    endpoint,
+    defaults: withDefaults.bind(null, endpoint)
+  });
+}
+
+const request = withDefaults(endpoint.endpoint, {
+  headers: {
+    "user-agent": `octokit-request.js/${VERSION} ${universalUserAgent.getUserAgent()}`
+  }
+});
+
+exports.request = request;
 //# sourceMappingURL=index.js.map
 
 
@@ -16972,7 +16250,7 @@ var request = __nccwpck_require__(3225);
 var graphql = __nccwpck_require__(5492);
 var authToken = __nccwpck_require__(7181);
 
-const VERSION = "4.0.4";
+const VERSION = "4.0.5";
 
 class Octokit {
   constructor(options = {}) {
@@ -17476,7 +16754,7 @@ function withDefaults(oldDefaults, newDefaults) {
   });
 }
 
-const VERSION = "7.0.0";
+const VERSION = "7.0.1";
 
 const userAgent = `octokit-endpoint.js/${VERSION} ${universalUserAgent.getUserAgent()}`; // DEFAULTS has all properties set that EndpointOptions has, except url.
 // So we use RequestParameters and add method as additional required property.
@@ -17513,7 +16791,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 var request = __nccwpck_require__(3225);
 var universalUserAgent = __nccwpck_require__(5030);
 
-const VERSION = "5.0.0";
+const VERSION = "5.0.1";
 
 function _buildMessageForResponseErrors(data) {
   return `Request failed due to following response errors:\n` + data.errors.map(e => ` - ${e.message}`).join("\n");
@@ -17726,7 +17004,7 @@ var isPlainObject = __nccwpck_require__(3287);
 var nodeFetch = _interopDefault(__nccwpck_require__(2712));
 var requestError = __nccwpck_require__(8036);
 
-const VERSION = "6.0.2";
+const VERSION = "6.2.1";
 
 function getBufferResponse(response) {
   return response.arrayBuffer();
@@ -17742,7 +17020,9 @@ function fetchWrapper(requestOptions) {
   let headers = {};
   let status;
   let url;
-  const fetch = requestOptions.request && requestOptions.request.fetch || nodeFetch;
+  const fetch = requestOptions.request && requestOptions.request.fetch || globalThis.fetch ||
+  /* istanbul ignore next */
+  nodeFetch;
   return fetch(requestOptions.url, Object.assign({
     method: requestOptions.method,
     body: requestOptions.body,
@@ -17820,7 +17100,7 @@ function fetchWrapper(requestOptions) {
       data
     };
   }).catch(error => {
-    if (error instanceof requestError.RequestError) throw error;
+    if (error instanceof requestError.RequestError) throw error;else if (error.name === "AbortError") throw error;
     throw new requestError.RequestError(error.message, 500, {
       request: requestOptions
     });
@@ -20342,7 +19622,7 @@ function withDefaults(oldDefaults, newDefaults) {
   });
 }
 
-const VERSION = "7.0.0";
+const VERSION = "7.0.1";
 
 const userAgent = `octokit-endpoint.js/${VERSION} ${universalUserAgent.getUserAgent()}`; // DEFAULTS has all properties set that EndpointOptions has, except url.
 // So we use RequestParameters and add method as additional required property.
@@ -20466,7 +19746,7 @@ var isPlainObject = __nccwpck_require__(3287);
 var nodeFetch = _interopDefault(__nccwpck_require__(5439));
 var requestError = __nccwpck_require__(2434);
 
-const VERSION = "6.0.2";
+const VERSION = "6.2.1";
 
 function getBufferResponse(response) {
   return response.arrayBuffer();
@@ -20482,7 +19762,9 @@ function fetchWrapper(requestOptions) {
   let headers = {};
   let status;
   let url;
-  const fetch = requestOptions.request && requestOptions.request.fetch || nodeFetch;
+  const fetch = requestOptions.request && requestOptions.request.fetch || globalThis.fetch ||
+  /* istanbul ignore next */
+  nodeFetch;
   return fetch(requestOptions.url, Object.assign({
     method: requestOptions.method,
     body: requestOptions.body,
@@ -20560,7 +19842,7 @@ function fetchWrapper(requestOptions) {
       data
     };
   }).catch(error => {
-    if (error instanceof requestError.RequestError) throw error;
+    if (error instanceof requestError.RequestError) throw error;else if (error.name === "AbortError") throw error;
     throw new requestError.RequestError(error.message, 500, {
       request: requestOptions
     });
@@ -22348,7 +21630,7 @@ exports.FetchError = FetchError;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 
-const VERSION = "3.0.0";
+const VERSION = "4.0.0";
 
 /**
  * Some “list” response that can be paginated have a different response structure
@@ -22479,7 +21761,7 @@ const composePaginateRest = Object.assign(paginate, {
   iterator
 });
 
-const paginatingEndpoints = ["GET /app/hook/deliveries", "GET /app/installations", "GET /applications/grants", "GET /authorizations", "GET /enterprises/{enterprise}/actions/permissions/organizations", "GET /enterprises/{enterprise}/actions/runner-groups", "GET /enterprises/{enterprise}/actions/runner-groups/{runner_group_id}/organizations", "GET /enterprises/{enterprise}/actions/runner-groups/{runner_group_id}/runners", "GET /enterprises/{enterprise}/actions/runners", "GET /enterprises/{enterprise}/audit-log", "GET /enterprises/{enterprise}/secret-scanning/alerts", "GET /enterprises/{enterprise}/settings/billing/advanced-security", "GET /events", "GET /gists", "GET /gists/public", "GET /gists/starred", "GET /gists/{gist_id}/comments", "GET /gists/{gist_id}/commits", "GET /gists/{gist_id}/forks", "GET /installation/repositories", "GET /issues", "GET /licenses", "GET /marketplace_listing/plans", "GET /marketplace_listing/plans/{plan_id}/accounts", "GET /marketplace_listing/stubbed/plans", "GET /marketplace_listing/stubbed/plans/{plan_id}/accounts", "GET /networks/{owner}/{repo}/events", "GET /notifications", "GET /organizations", "GET /orgs/{org}/actions/cache/usage-by-repository", "GET /orgs/{org}/actions/permissions/repositories", "GET /orgs/{org}/actions/runner-groups", "GET /orgs/{org}/actions/runner-groups/{runner_group_id}/repositories", "GET /orgs/{org}/actions/runner-groups/{runner_group_id}/runners", "GET /orgs/{org}/actions/runners", "GET /orgs/{org}/actions/secrets", "GET /orgs/{org}/actions/secrets/{secret_name}/repositories", "GET /orgs/{org}/audit-log", "GET /orgs/{org}/blocks", "GET /orgs/{org}/code-scanning/alerts", "GET /orgs/{org}/codespaces", "GET /orgs/{org}/credential-authorizations", "GET /orgs/{org}/dependabot/secrets", "GET /orgs/{org}/dependabot/secrets/{secret_name}/repositories", "GET /orgs/{org}/events", "GET /orgs/{org}/external-groups", "GET /orgs/{org}/failed_invitations", "GET /orgs/{org}/hooks", "GET /orgs/{org}/hooks/{hook_id}/deliveries", "GET /orgs/{org}/installations", "GET /orgs/{org}/invitations", "GET /orgs/{org}/invitations/{invitation_id}/teams", "GET /orgs/{org}/issues", "GET /orgs/{org}/members", "GET /orgs/{org}/migrations", "GET /orgs/{org}/migrations/{migration_id}/repositories", "GET /orgs/{org}/outside_collaborators", "GET /orgs/{org}/packages", "GET /orgs/{org}/packages/{package_type}/{package_name}/versions", "GET /orgs/{org}/projects", "GET /orgs/{org}/public_members", "GET /orgs/{org}/repos", "GET /orgs/{org}/secret-scanning/alerts", "GET /orgs/{org}/settings/billing/advanced-security", "GET /orgs/{org}/team-sync/groups", "GET /orgs/{org}/teams", "GET /orgs/{org}/teams/{team_slug}/discussions", "GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/comments", "GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/comments/{comment_number}/reactions", "GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/reactions", "GET /orgs/{org}/teams/{team_slug}/invitations", "GET /orgs/{org}/teams/{team_slug}/members", "GET /orgs/{org}/teams/{team_slug}/projects", "GET /orgs/{org}/teams/{team_slug}/repos", "GET /orgs/{org}/teams/{team_slug}/teams", "GET /projects/columns/{column_id}/cards", "GET /projects/{project_id}/collaborators", "GET /projects/{project_id}/columns", "GET /repos/{owner}/{repo}/actions/artifacts", "GET /repos/{owner}/{repo}/actions/caches", "GET /repos/{owner}/{repo}/actions/runners", "GET /repos/{owner}/{repo}/actions/runs", "GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts", "GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}/jobs", "GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs", "GET /repos/{owner}/{repo}/actions/secrets", "GET /repos/{owner}/{repo}/actions/workflows", "GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs", "GET /repos/{owner}/{repo}/assignees", "GET /repos/{owner}/{repo}/branches", "GET /repos/{owner}/{repo}/check-runs/{check_run_id}/annotations", "GET /repos/{owner}/{repo}/check-suites/{check_suite_id}/check-runs", "GET /repos/{owner}/{repo}/code-scanning/alerts", "GET /repos/{owner}/{repo}/code-scanning/alerts/{alert_number}/instances", "GET /repos/{owner}/{repo}/code-scanning/analyses", "GET /repos/{owner}/{repo}/codespaces", "GET /repos/{owner}/{repo}/codespaces/devcontainers", "GET /repos/{owner}/{repo}/codespaces/secrets", "GET /repos/{owner}/{repo}/collaborators", "GET /repos/{owner}/{repo}/comments", "GET /repos/{owner}/{repo}/comments/{comment_id}/reactions", "GET /repos/{owner}/{repo}/commits", "GET /repos/{owner}/{repo}/commits/{commit_sha}/comments", "GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls", "GET /repos/{owner}/{repo}/commits/{ref}/check-runs", "GET /repos/{owner}/{repo}/commits/{ref}/check-suites", "GET /repos/{owner}/{repo}/commits/{ref}/status", "GET /repos/{owner}/{repo}/commits/{ref}/statuses", "GET /repos/{owner}/{repo}/contributors", "GET /repos/{owner}/{repo}/dependabot/secrets", "GET /repos/{owner}/{repo}/deployments", "GET /repos/{owner}/{repo}/deployments/{deployment_id}/statuses", "GET /repos/{owner}/{repo}/environments", "GET /repos/{owner}/{repo}/events", "GET /repos/{owner}/{repo}/forks", "GET /repos/{owner}/{repo}/git/matching-refs/{ref}", "GET /repos/{owner}/{repo}/hooks", "GET /repos/{owner}/{repo}/hooks/{hook_id}/deliveries", "GET /repos/{owner}/{repo}/invitations", "GET /repos/{owner}/{repo}/issues", "GET /repos/{owner}/{repo}/issues/comments", "GET /repos/{owner}/{repo}/issues/comments/{comment_id}/reactions", "GET /repos/{owner}/{repo}/issues/events", "GET /repos/{owner}/{repo}/issues/{issue_number}/comments", "GET /repos/{owner}/{repo}/issues/{issue_number}/events", "GET /repos/{owner}/{repo}/issues/{issue_number}/labels", "GET /repos/{owner}/{repo}/issues/{issue_number}/reactions", "GET /repos/{owner}/{repo}/issues/{issue_number}/timeline", "GET /repos/{owner}/{repo}/keys", "GET /repos/{owner}/{repo}/labels", "GET /repos/{owner}/{repo}/milestones", "GET /repos/{owner}/{repo}/milestones/{milestone_number}/labels", "GET /repos/{owner}/{repo}/notifications", "GET /repos/{owner}/{repo}/pages/builds", "GET /repos/{owner}/{repo}/projects", "GET /repos/{owner}/{repo}/pulls", "GET /repos/{owner}/{repo}/pulls/comments", "GET /repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions", "GET /repos/{owner}/{repo}/pulls/{pull_number}/comments", "GET /repos/{owner}/{repo}/pulls/{pull_number}/commits", "GET /repos/{owner}/{repo}/pulls/{pull_number}/files", "GET /repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews", "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/comments", "GET /repos/{owner}/{repo}/releases", "GET /repos/{owner}/{repo}/releases/{release_id}/assets", "GET /repos/{owner}/{repo}/releases/{release_id}/reactions", "GET /repos/{owner}/{repo}/secret-scanning/alerts", "GET /repos/{owner}/{repo}/secret-scanning/alerts/{alert_number}/locations", "GET /repos/{owner}/{repo}/stargazers", "GET /repos/{owner}/{repo}/subscribers", "GET /repos/{owner}/{repo}/tags", "GET /repos/{owner}/{repo}/teams", "GET /repos/{owner}/{repo}/topics", "GET /repositories", "GET /repositories/{repository_id}/environments/{environment_name}/secrets", "GET /search/code", "GET /search/commits", "GET /search/issues", "GET /search/labels", "GET /search/repositories", "GET /search/topics", "GET /search/users", "GET /teams/{team_id}/discussions", "GET /teams/{team_id}/discussions/{discussion_number}/comments", "GET /teams/{team_id}/discussions/{discussion_number}/comments/{comment_number}/reactions", "GET /teams/{team_id}/discussions/{discussion_number}/reactions", "GET /teams/{team_id}/invitations", "GET /teams/{team_id}/members", "GET /teams/{team_id}/projects", "GET /teams/{team_id}/repos", "GET /teams/{team_id}/teams", "GET /user/blocks", "GET /user/codespaces", "GET /user/codespaces/secrets", "GET /user/emails", "GET /user/followers", "GET /user/following", "GET /user/gpg_keys", "GET /user/installations", "GET /user/installations/{installation_id}/repositories", "GET /user/issues", "GET /user/keys", "GET /user/marketplace_purchases", "GET /user/marketplace_purchases/stubbed", "GET /user/memberships/orgs", "GET /user/migrations", "GET /user/migrations/{migration_id}/repositories", "GET /user/orgs", "GET /user/packages", "GET /user/packages/{package_type}/{package_name}/versions", "GET /user/public_emails", "GET /user/repos", "GET /user/repository_invitations", "GET /user/starred", "GET /user/subscriptions", "GET /user/teams", "GET /users", "GET /users/{username}/events", "GET /users/{username}/events/orgs/{org}", "GET /users/{username}/events/public", "GET /users/{username}/followers", "GET /users/{username}/following", "GET /users/{username}/gists", "GET /users/{username}/gpg_keys", "GET /users/{username}/keys", "GET /users/{username}/orgs", "GET /users/{username}/packages", "GET /users/{username}/projects", "GET /users/{username}/received_events", "GET /users/{username}/received_events/public", "GET /users/{username}/repos", "GET /users/{username}/starred", "GET /users/{username}/subscriptions"];
+const paginatingEndpoints = ["GET /app/hook/deliveries", "GET /app/installations", "GET /enterprises/{enterprise}/actions/permissions/organizations", "GET /enterprises/{enterprise}/actions/runner-groups", "GET /enterprises/{enterprise}/actions/runner-groups/{runner_group_id}/organizations", "GET /enterprises/{enterprise}/actions/runner-groups/{runner_group_id}/runners", "GET /enterprises/{enterprise}/actions/runners", "GET /enterprises/{enterprise}/audit-log", "GET /enterprises/{enterprise}/code-scanning/alerts", "GET /enterprises/{enterprise}/secret-scanning/alerts", "GET /enterprises/{enterprise}/settings/billing/advanced-security", "GET /events", "GET /gists", "GET /gists/public", "GET /gists/starred", "GET /gists/{gist_id}/comments", "GET /gists/{gist_id}/commits", "GET /gists/{gist_id}/forks", "GET /installation/repositories", "GET /issues", "GET /licenses", "GET /marketplace_listing/plans", "GET /marketplace_listing/plans/{plan_id}/accounts", "GET /marketplace_listing/stubbed/plans", "GET /marketplace_listing/stubbed/plans/{plan_id}/accounts", "GET /networks/{owner}/{repo}/events", "GET /notifications", "GET /organizations", "GET /orgs/{org}/actions/cache/usage-by-repository", "GET /orgs/{org}/actions/permissions/repositories", "GET /orgs/{org}/actions/runner-groups", "GET /orgs/{org}/actions/runner-groups/{runner_group_id}/repositories", "GET /orgs/{org}/actions/runner-groups/{runner_group_id}/runners", "GET /orgs/{org}/actions/runners", "GET /orgs/{org}/actions/secrets", "GET /orgs/{org}/actions/secrets/{secret_name}/repositories", "GET /orgs/{org}/audit-log", "GET /orgs/{org}/blocks", "GET /orgs/{org}/code-scanning/alerts", "GET /orgs/{org}/codespaces", "GET /orgs/{org}/credential-authorizations", "GET /orgs/{org}/dependabot/secrets", "GET /orgs/{org}/dependabot/secrets/{secret_name}/repositories", "GET /orgs/{org}/events", "GET /orgs/{org}/external-groups", "GET /orgs/{org}/failed_invitations", "GET /orgs/{org}/hooks", "GET /orgs/{org}/hooks/{hook_id}/deliveries", "GET /orgs/{org}/installations", "GET /orgs/{org}/invitations", "GET /orgs/{org}/invitations/{invitation_id}/teams", "GET /orgs/{org}/issues", "GET /orgs/{org}/members", "GET /orgs/{org}/migrations", "GET /orgs/{org}/migrations/{migration_id}/repositories", "GET /orgs/{org}/outside_collaborators", "GET /orgs/{org}/packages", "GET /orgs/{org}/packages/{package_type}/{package_name}/versions", "GET /orgs/{org}/projects", "GET /orgs/{org}/public_members", "GET /orgs/{org}/repos", "GET /orgs/{org}/secret-scanning/alerts", "GET /orgs/{org}/settings/billing/advanced-security", "GET /orgs/{org}/team-sync/groups", "GET /orgs/{org}/teams", "GET /orgs/{org}/teams/{team_slug}/discussions", "GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/comments", "GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/comments/{comment_number}/reactions", "GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/reactions", "GET /orgs/{org}/teams/{team_slug}/invitations", "GET /orgs/{org}/teams/{team_slug}/members", "GET /orgs/{org}/teams/{team_slug}/projects", "GET /orgs/{org}/teams/{team_slug}/repos", "GET /orgs/{org}/teams/{team_slug}/teams", "GET /projects/columns/{column_id}/cards", "GET /projects/{project_id}/collaborators", "GET /projects/{project_id}/columns", "GET /repos/{owner}/{repo}/actions/artifacts", "GET /repos/{owner}/{repo}/actions/caches", "GET /repos/{owner}/{repo}/actions/runners", "GET /repos/{owner}/{repo}/actions/runs", "GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts", "GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}/jobs", "GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs", "GET /repos/{owner}/{repo}/actions/secrets", "GET /repos/{owner}/{repo}/actions/workflows", "GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs", "GET /repos/{owner}/{repo}/assignees", "GET /repos/{owner}/{repo}/branches", "GET /repos/{owner}/{repo}/check-runs/{check_run_id}/annotations", "GET /repos/{owner}/{repo}/check-suites/{check_suite_id}/check-runs", "GET /repos/{owner}/{repo}/code-scanning/alerts", "GET /repos/{owner}/{repo}/code-scanning/alerts/{alert_number}/instances", "GET /repos/{owner}/{repo}/code-scanning/analyses", "GET /repos/{owner}/{repo}/codespaces", "GET /repos/{owner}/{repo}/codespaces/devcontainers", "GET /repos/{owner}/{repo}/codespaces/secrets", "GET /repos/{owner}/{repo}/collaborators", "GET /repos/{owner}/{repo}/comments", "GET /repos/{owner}/{repo}/comments/{comment_id}/reactions", "GET /repos/{owner}/{repo}/commits", "GET /repos/{owner}/{repo}/commits/{commit_sha}/comments", "GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls", "GET /repos/{owner}/{repo}/commits/{ref}/check-runs", "GET /repos/{owner}/{repo}/commits/{ref}/check-suites", "GET /repos/{owner}/{repo}/commits/{ref}/status", "GET /repos/{owner}/{repo}/commits/{ref}/statuses", "GET /repos/{owner}/{repo}/contributors", "GET /repos/{owner}/{repo}/dependabot/secrets", "GET /repos/{owner}/{repo}/deployments", "GET /repos/{owner}/{repo}/deployments/{deployment_id}/statuses", "GET /repos/{owner}/{repo}/environments", "GET /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies", "GET /repos/{owner}/{repo}/events", "GET /repos/{owner}/{repo}/forks", "GET /repos/{owner}/{repo}/hooks", "GET /repos/{owner}/{repo}/hooks/{hook_id}/deliveries", "GET /repos/{owner}/{repo}/invitations", "GET /repos/{owner}/{repo}/issues", "GET /repos/{owner}/{repo}/issues/comments", "GET /repos/{owner}/{repo}/issues/comments/{comment_id}/reactions", "GET /repos/{owner}/{repo}/issues/events", "GET /repos/{owner}/{repo}/issues/{issue_number}/comments", "GET /repos/{owner}/{repo}/issues/{issue_number}/events", "GET /repos/{owner}/{repo}/issues/{issue_number}/labels", "GET /repos/{owner}/{repo}/issues/{issue_number}/reactions", "GET /repos/{owner}/{repo}/issues/{issue_number}/timeline", "GET /repos/{owner}/{repo}/keys", "GET /repos/{owner}/{repo}/labels", "GET /repos/{owner}/{repo}/milestones", "GET /repos/{owner}/{repo}/milestones/{milestone_number}/labels", "GET /repos/{owner}/{repo}/notifications", "GET /repos/{owner}/{repo}/pages/builds", "GET /repos/{owner}/{repo}/projects", "GET /repos/{owner}/{repo}/pulls", "GET /repos/{owner}/{repo}/pulls/comments", "GET /repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions", "GET /repos/{owner}/{repo}/pulls/{pull_number}/comments", "GET /repos/{owner}/{repo}/pulls/{pull_number}/commits", "GET /repos/{owner}/{repo}/pulls/{pull_number}/files", "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews", "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/comments", "GET /repos/{owner}/{repo}/releases", "GET /repos/{owner}/{repo}/releases/{release_id}/assets", "GET /repos/{owner}/{repo}/releases/{release_id}/reactions", "GET /repos/{owner}/{repo}/secret-scanning/alerts", "GET /repos/{owner}/{repo}/secret-scanning/alerts/{alert_number}/locations", "GET /repos/{owner}/{repo}/stargazers", "GET /repos/{owner}/{repo}/subscribers", "GET /repos/{owner}/{repo}/tags", "GET /repos/{owner}/{repo}/teams", "GET /repos/{owner}/{repo}/topics", "GET /repositories", "GET /repositories/{repository_id}/environments/{environment_name}/secrets", "GET /search/code", "GET /search/commits", "GET /search/issues", "GET /search/labels", "GET /search/repositories", "GET /search/topics", "GET /search/users", "GET /teams/{team_id}/discussions", "GET /teams/{team_id}/discussions/{discussion_number}/comments", "GET /teams/{team_id}/discussions/{discussion_number}/comments/{comment_number}/reactions", "GET /teams/{team_id}/discussions/{discussion_number}/reactions", "GET /teams/{team_id}/invitations", "GET /teams/{team_id}/members", "GET /teams/{team_id}/projects", "GET /teams/{team_id}/repos", "GET /teams/{team_id}/teams", "GET /user/blocks", "GET /user/codespaces", "GET /user/codespaces/secrets", "GET /user/emails", "GET /user/followers", "GET /user/following", "GET /user/gpg_keys", "GET /user/installations", "GET /user/installations/{installation_id}/repositories", "GET /user/issues", "GET /user/keys", "GET /user/marketplace_purchases", "GET /user/marketplace_purchases/stubbed", "GET /user/memberships/orgs", "GET /user/migrations", "GET /user/migrations/{migration_id}/repositories", "GET /user/orgs", "GET /user/packages", "GET /user/packages/{package_type}/{package_name}/versions", "GET /user/public_emails", "GET /user/repos", "GET /user/repository_invitations", "GET /user/starred", "GET /user/subscriptions", "GET /user/teams", "GET /users", "GET /users/{username}/events", "GET /users/{username}/events/orgs/{org}", "GET /users/{username}/events/public", "GET /users/{username}/followers", "GET /users/{username}/following", "GET /users/{username}/gists", "GET /users/{username}/gpg_keys", "GET /users/{username}/keys", "GET /users/{username}/orgs", "GET /users/{username}/packages", "GET /users/{username}/projects", "GET /users/{username}/received_events", "GET /users/{username}/received_events/public", "GET /users/{username}/repos", "GET /users/{username}/starred", "GET /users/{username}/subscriptions"];
 
 function isPaginatingEndpoint(arg) {
   if (typeof arg === "string") {
@@ -22613,7 +21895,7 @@ const createLogger = logger => ({
 
 // THIS FILE IS GENERATED - DO NOT EDIT DIRECTLY
 // make edits in scripts/generate-types.ts
-const emitterEventNames = ["branch_protection_rule", "branch_protection_rule.created", "branch_protection_rule.deleted", "branch_protection_rule.edited", "check_run", "check_run.completed", "check_run.created", "check_run.requested_action", "check_run.rerequested", "check_suite", "check_suite.completed", "check_suite.requested", "check_suite.rerequested", "code_scanning_alert", "code_scanning_alert.appeared_in_branch", "code_scanning_alert.closed_by_user", "code_scanning_alert.created", "code_scanning_alert.fixed", "code_scanning_alert.reopened", "code_scanning_alert.reopened_by_user", "commit_comment", "commit_comment.created", "create", "delete", "deploy_key", "deploy_key.created", "deploy_key.deleted", "deployment", "deployment.created", "deployment_status", "deployment_status.created", "discussion", "discussion.answered", "discussion.category_changed", "discussion.created", "discussion.deleted", "discussion.edited", "discussion.labeled", "discussion.locked", "discussion.pinned", "discussion.transferred", "discussion.unanswered", "discussion.unlabeled", "discussion.unlocked", "discussion.unpinned", "discussion_comment", "discussion_comment.created", "discussion_comment.deleted", "discussion_comment.edited", "fork", "github_app_authorization", "github_app_authorization.revoked", "gollum", "installation", "installation.created", "installation.deleted", "installation.new_permissions_accepted", "installation.suspend", "installation.unsuspend", "installation_repositories", "installation_repositories.added", "installation_repositories.removed", "issue_comment", "issue_comment.created", "issue_comment.deleted", "issue_comment.edited", "issues", "issues.assigned", "issues.closed", "issues.deleted", "issues.demilestoned", "issues.edited", "issues.labeled", "issues.locked", "issues.milestoned", "issues.opened", "issues.pinned", "issues.reopened", "issues.transferred", "issues.unassigned", "issues.unlabeled", "issues.unlocked", "issues.unpinned", "label", "label.created", "label.deleted", "label.edited", "marketplace_purchase", "marketplace_purchase.cancelled", "marketplace_purchase.changed", "marketplace_purchase.pending_change", "marketplace_purchase.pending_change_cancelled", "marketplace_purchase.purchased", "member", "member.added", "member.edited", "member.removed", "membership", "membership.added", "membership.removed", "meta", "meta.deleted", "milestone", "milestone.closed", "milestone.created", "milestone.deleted", "milestone.edited", "milestone.opened", "org_block", "org_block.blocked", "org_block.unblocked", "organization", "organization.deleted", "organization.member_added", "organization.member_invited", "organization.member_removed", "organization.renamed", "package", "package.published", "package.updated", "page_build", "ping", "project", "project.closed", "project.created", "project.deleted", "project.edited", "project.reopened", "project_card", "project_card.converted", "project_card.created", "project_card.deleted", "project_card.edited", "project_card.moved", "project_column", "project_column.created", "project_column.deleted", "project_column.edited", "project_column.moved", "projects_v2_item", "projects_v2_item.archived", "projects_v2_item.converted", "projects_v2_item.created", "projects_v2_item.deleted", "projects_v2_item.edited", "projects_v2_item.reordered", "projects_v2_item.restored", "public", "pull_request", "pull_request.assigned", "pull_request.auto_merge_disabled", "pull_request.auto_merge_enabled", "pull_request.closed", "pull_request.converted_to_draft", "pull_request.edited", "pull_request.labeled", "pull_request.locked", "pull_request.opened", "pull_request.ready_for_review", "pull_request.reopened", "pull_request.review_request_removed", "pull_request.review_requested", "pull_request.synchronize", "pull_request.unassigned", "pull_request.unlabeled", "pull_request.unlocked", "pull_request_review", "pull_request_review.dismissed", "pull_request_review.edited", "pull_request_review.submitted", "pull_request_review_comment", "pull_request_review_comment.created", "pull_request_review_comment.deleted", "pull_request_review_comment.edited", "pull_request_review_thread", "pull_request_review_thread.resolved", "pull_request_review_thread.unresolved", "push", "release", "release.created", "release.deleted", "release.edited", "release.prereleased", "release.published", "release.released", "release.unpublished", "repository", "repository.archived", "repository.created", "repository.deleted", "repository.edited", "repository.privatized", "repository.publicized", "repository.renamed", "repository.transferred", "repository.unarchived", "repository_dispatch", "repository_import", "repository_vulnerability_alert", "repository_vulnerability_alert.create", "repository_vulnerability_alert.dismiss", "repository_vulnerability_alert.reopen", "repository_vulnerability_alert.resolve", "secret_scanning_alert", "secret_scanning_alert.created", "secret_scanning_alert.reopened", "secret_scanning_alert.resolved", "security_advisory", "security_advisory.performed", "security_advisory.published", "security_advisory.updated", "security_advisory.withdrawn", "sponsorship", "sponsorship.cancelled", "sponsorship.created", "sponsorship.edited", "sponsorship.pending_cancellation", "sponsorship.pending_tier_change", "sponsorship.tier_changed", "star", "star.created", "star.deleted", "status", "team", "team.added_to_repository", "team.created", "team.deleted", "team.edited", "team.removed_from_repository", "team_add", "watch", "watch.started", "workflow_dispatch", "workflow_job", "workflow_job.completed", "workflow_job.in_progress", "workflow_job.queued", "workflow_run", "workflow_run.completed", "workflow_run.requested"];
+const emitterEventNames = ["branch_protection_rule", "branch_protection_rule.created", "branch_protection_rule.deleted", "branch_protection_rule.edited", "check_run", "check_run.completed", "check_run.created", "check_run.requested_action", "check_run.rerequested", "check_suite", "check_suite.completed", "check_suite.requested", "check_suite.rerequested", "code_scanning_alert", "code_scanning_alert.appeared_in_branch", "code_scanning_alert.closed_by_user", "code_scanning_alert.created", "code_scanning_alert.fixed", "code_scanning_alert.reopened", "code_scanning_alert.reopened_by_user", "commit_comment", "commit_comment.created", "create", "delete", "deploy_key", "deploy_key.created", "deploy_key.deleted", "deployment", "deployment.created", "deployment_status", "deployment_status.created", "discussion", "discussion.answered", "discussion.category_changed", "discussion.created", "discussion.deleted", "discussion.edited", "discussion.labeled", "discussion.locked", "discussion.pinned", "discussion.transferred", "discussion.unanswered", "discussion.unlabeled", "discussion.unlocked", "discussion.unpinned", "discussion_comment", "discussion_comment.created", "discussion_comment.deleted", "discussion_comment.edited", "fork", "github_app_authorization", "github_app_authorization.revoked", "gollum", "installation", "installation.created", "installation.deleted", "installation.new_permissions_accepted", "installation.suspend", "installation.unsuspend", "installation_repositories", "installation_repositories.added", "installation_repositories.removed", "issue_comment", "issue_comment.created", "issue_comment.deleted", "issue_comment.edited", "issues", "issues.assigned", "issues.closed", "issues.deleted", "issues.demilestoned", "issues.edited", "issues.labeled", "issues.locked", "issues.milestoned", "issues.opened", "issues.pinned", "issues.reopened", "issues.transferred", "issues.unassigned", "issues.unlabeled", "issues.unlocked", "issues.unpinned", "label", "label.created", "label.deleted", "label.edited", "marketplace_purchase", "marketplace_purchase.cancelled", "marketplace_purchase.changed", "marketplace_purchase.pending_change", "marketplace_purchase.pending_change_cancelled", "marketplace_purchase.purchased", "member", "member.added", "member.edited", "member.removed", "membership", "membership.added", "membership.removed", "merge_group", "merge_group.checks_requested", "meta", "meta.deleted", "milestone", "milestone.closed", "milestone.created", "milestone.deleted", "milestone.edited", "milestone.opened", "org_block", "org_block.blocked", "org_block.unblocked", "organization", "organization.deleted", "organization.member_added", "organization.member_invited", "organization.member_removed", "organization.renamed", "package", "package.published", "package.updated", "page_build", "ping", "project", "project.closed", "project.created", "project.deleted", "project.edited", "project.reopened", "project_card", "project_card.converted", "project_card.created", "project_card.deleted", "project_card.edited", "project_card.moved", "project_column", "project_column.created", "project_column.deleted", "project_column.edited", "project_column.moved", "projects_v2_item", "projects_v2_item.archived", "projects_v2_item.converted", "projects_v2_item.created", "projects_v2_item.deleted", "projects_v2_item.edited", "projects_v2_item.reordered", "projects_v2_item.restored", "public", "pull_request", "pull_request.assigned", "pull_request.auto_merge_disabled", "pull_request.auto_merge_enabled", "pull_request.closed", "pull_request.converted_to_draft", "pull_request.edited", "pull_request.labeled", "pull_request.locked", "pull_request.opened", "pull_request.ready_for_review", "pull_request.reopened", "pull_request.review_request_removed", "pull_request.review_requested", "pull_request.synchronize", "pull_request.unassigned", "pull_request.unlabeled", "pull_request.unlocked", "pull_request_review", "pull_request_review.dismissed", "pull_request_review.edited", "pull_request_review.submitted", "pull_request_review_comment", "pull_request_review_comment.created", "pull_request_review_comment.deleted", "pull_request_review_comment.edited", "pull_request_review_thread", "pull_request_review_thread.resolved", "pull_request_review_thread.unresolved", "push", "release", "release.created", "release.deleted", "release.edited", "release.prereleased", "release.published", "release.released", "release.unpublished", "repository", "repository.archived", "repository.created", "repository.deleted", "repository.edited", "repository.privatized", "repository.publicized", "repository.renamed", "repository.transferred", "repository.unarchived", "repository_dispatch", "repository_import", "repository_vulnerability_alert", "repository_vulnerability_alert.create", "repository_vulnerability_alert.dismiss", "repository_vulnerability_alert.reopen", "repository_vulnerability_alert.resolve", "secret_scanning_alert", "secret_scanning_alert.created", "secret_scanning_alert.reopened", "secret_scanning_alert.resolved", "security_advisory", "security_advisory.performed", "security_advisory.published", "security_advisory.updated", "security_advisory.withdrawn", "sponsorship", "sponsorship.cancelled", "sponsorship.created", "sponsorship.edited", "sponsorship.pending_cancellation", "sponsorship.pending_tier_change", "sponsorship.tier_changed", "star", "star.created", "star.deleted", "status", "team", "team.added_to_repository", "team.created", "team.deleted", "team.edited", "team.removed_from_repository", "team_add", "watch", "watch.started", "workflow_dispatch", "workflow_job", "workflow_job.completed", "workflow_job.in_progress", "workflow_job.queued", "workflow_run", "workflow_run.completed", "workflow_run.requested"];
 
 function handleEventHandlers(state, webhookName, handler) {
   if (!state.hooks[webhookName]) {
