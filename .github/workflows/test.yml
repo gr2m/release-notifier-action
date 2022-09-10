@@ -1,4 +1,4 @@
-on:
+"on":
   push:
     branches:
       - main
@@ -12,6 +12,8 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - uses: actions/setup-node@v1
+        with:
+          node-version: lts/*
       - run: npm ci
       - run: npm test
   readmeExample:
@@ -19,6 +21,8 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - uses: actions/setup-node@v1
+        with:
+          node-version: lts/*
       - run: npm ci
       - run: npm run build
       - uses: ./
