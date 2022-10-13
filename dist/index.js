@@ -1777,7 +1777,7 @@ var authUnauthenticated = __nccwpck_require__(9567);
 var webhooks$1 = __nccwpck_require__(8513);
 var pluginPaginateRest = __nccwpck_require__(4193);
 
-const VERSION = "13.0.9";
+const VERSION = "13.0.10";
 
 function webhooks(appOctokit, options // Explict return type for better debugability and performance,
 // see https://github.com/octokit/app.js/pull/201
@@ -2474,7 +2474,7 @@ async function sendRequestWithRetries(state, request, options, createdAt, retrie
   }
 }
 
-const VERSION = "4.0.6";
+const VERSION = "4.0.7";
 
 function createAppAuth(options) {
   if (!options.appId) {
@@ -2611,7 +2611,7 @@ async function hook(state, request, route, parameters) {
   }
 }
 
-const VERSION = "5.0.3";
+const VERSION = "5.0.4";
 
 function createOAuthAppAuth(options) {
   const state = Object.assign({
@@ -2760,7 +2760,7 @@ async function hook(state, request, route, parameters) {
   return request(endpoint);
 }
 
-const VERSION = "4.0.2";
+const VERSION = "4.0.3";
 
 function createOAuthDeviceAuth(options) {
   const requestWithDefaults = options.request || request.request.defaults({
@@ -2817,7 +2817,7 @@ var authOauthDevice = __nccwpck_require__(4344);
 var oauthMethods = __nccwpck_require__(8445);
 var btoa = _interopDefault(__nccwpck_require__(2358));
 
-const VERSION = "2.0.3";
+const VERSION = "2.0.4";
 
 // @ts-nocheck there is only place for one of us in this file. And it's not you, TS
 async function getAuthentication(state) {
@@ -4429,7 +4429,7 @@ var request = __nccwpck_require__(6234);
 var requestError = __nccwpck_require__(537);
 var btoa = _interopDefault(__nccwpck_require__(2358));
 
-const VERSION = "2.0.3";
+const VERSION = "2.0.4";
 
 function requestToOAuthBaseUrl(request) {
   const endpointDefaults = request.endpoint.DEFAULTS;
@@ -4444,17 +4444,15 @@ async function oauthRequest(request, route, parameters) {
     ...parameters
   };
   const response = await request(route, withOAuthParameters);
-
   if ("error" in response.data) {
     const error = new requestError.RequestError(`${response.data.error_description} (${response.data.error}, ${response.data.error_uri})`, 400, {
       request: request.endpoint.merge(route, withOAuthParameters),
       headers: response.headers
-    }); // @ts-ignore add custom response property until https://github.com/octokit/request-error.js/issues/169 is resolved
-
+    });
+    // @ts-ignore add custom response property until https://github.com/octokit/request-error.js/issues/169 is resolved
     error.response = response;
     throw error;
   }
-
   return response;
 }
 
@@ -4462,16 +4460,16 @@ function getWebFlowAuthorizationUrl({
   request: request$1 = request.request,
   ...options
 }) {
-  const baseUrl = requestToOAuthBaseUrl(request$1); // @ts-expect-error TypeScript wants `clientType` to be set explicitly ¯\_(ツ)_/¯
-
-  return oauthAuthorizationUrl.oauthAuthorizationUrl({ ...options,
+  const baseUrl = requestToOAuthBaseUrl(request$1);
+  // @ts-expect-error TypeScript wants `clientType` to be set explicitly ¯\_(ツ)_/¯
+  return oauthAuthorizationUrl.oauthAuthorizationUrl({
+    ...options,
     baseUrl
   });
 }
 
 async function exchangeWebFlowCode(options) {
-  const request$1 = options.request ||
-  /* istanbul ignore next: we always pass a custom request in tests */
+  const request$1 = options.request || /* istanbul ignore next: we always pass a custom request in tests */
   request.request;
   const response = await oauthRequest(request$1, "POST /login/oauth/access_token", {
     client_id: options.clientId,
@@ -4486,43 +4484,36 @@ async function exchangeWebFlowCode(options) {
     token: response.data.access_token,
     scopes: response.data.scope.split(/\s+/).filter(Boolean)
   };
-
   if (options.clientType === "github-app") {
     if ("refresh_token" in response.data) {
       const apiTimeInMs = new Date(response.headers.date).getTime();
       authentication.refreshToken = response.data.refresh_token, authentication.expiresAt = toTimestamp(apiTimeInMs, response.data.expires_in), authentication.refreshTokenExpiresAt = toTimestamp(apiTimeInMs, response.data.refresh_token_expires_in);
     }
-
     delete authentication.scopes;
   }
-
-  return { ...response,
+  return {
+    ...response,
     authentication
   };
 }
-
 function toTimestamp(apiTimeInMs, expirationInSeconds) {
   return new Date(apiTimeInMs + expirationInSeconds * 1000).toISOString();
 }
 
 async function createDeviceCode(options) {
-  const request$1 = options.request ||
-  /* istanbul ignore next: we always pass a custom request in tests */
+  const request$1 = options.request || /* istanbul ignore next: we always pass a custom request in tests */
   request.request;
   const parameters = {
     client_id: options.clientId
   };
-
   if ("scopes" in options && Array.isArray(options.scopes)) {
     parameters.scope = options.scopes.join(" ");
   }
-
   return oauthRequest(request$1, "POST /login/device/code", parameters);
 }
 
 async function exchangeDeviceCode(options) {
-  const request$1 = options.request ||
-  /* istanbul ignore next: we always pass a custom request in tests */
+  const request$1 = options.request || /* istanbul ignore next: we always pass a custom request in tests */
   request.request;
   const response = await oauthRequest(request$1, "POST /login/oauth/access_token", {
     client_id: options.clientId,
@@ -4535,34 +4526,28 @@ async function exchangeDeviceCode(options) {
     token: response.data.access_token,
     scopes: response.data.scope.split(/\s+/).filter(Boolean)
   };
-
   if ("clientSecret" in options) {
     authentication.clientSecret = options.clientSecret;
   }
-
   if (options.clientType === "github-app") {
     if ("refresh_token" in response.data) {
       const apiTimeInMs = new Date(response.headers.date).getTime();
       authentication.refreshToken = response.data.refresh_token, authentication.expiresAt = toTimestamp$1(apiTimeInMs, response.data.expires_in), authentication.refreshTokenExpiresAt = toTimestamp$1(apiTimeInMs, response.data.refresh_token_expires_in);
     }
-
     delete authentication.scopes;
   }
-
-  return { ...response,
+  return {
+    ...response,
     authentication
   };
 }
-
 function toTimestamp$1(apiTimeInMs, expirationInSeconds) {
   return new Date(apiTimeInMs + expirationInSeconds * 1000).toISOString();
 }
 
 async function checkToken(options) {
-  const request$1 = options.request ||
-  /* istanbul ignore next: we always pass a custom request in tests */
-  request.request; // @ts-expect-error - TODO: I don't get why TS is complaining here. It works with `defaultRequest` directly
-
+  const request$1 = options.request || /* istanbul ignore next: we always pass a custom request in tests */
+  request.request;
   const response = await request$1("POST /applications/{client_id}/token", {
     headers: {
       authorization: `basic ${btoa(`${options.clientId}:${options.clientSecret}`)}`
@@ -4578,19 +4563,17 @@ async function checkToken(options) {
     scopes: response.data.scopes
   };
   if (response.data.expires_at) authentication.expiresAt = response.data.expires_at;
-
   if (options.clientType === "github-app") {
     delete authentication.scopes;
   }
-
-  return { ...response,
+  return {
+    ...response,
     authentication
   };
 }
 
 async function refreshToken(options) {
-  const request$1 = options.request ||
-  /* istanbul ignore next: we always pass a custom request in tests */
+  const request$1 = options.request || /* istanbul ignore next: we always pass a custom request in tests */
   request.request;
   const response = await oauthRequest(request$1, "POST /login/oauth/access_token", {
     client_id: options.clientId,
@@ -4608,11 +4591,11 @@ async function refreshToken(options) {
     expiresAt: toTimestamp$2(apiTimeInMs, response.data.expires_in),
     refreshTokenExpiresAt: toTimestamp$2(apiTimeInMs, response.data.refresh_token_expires_in)
   };
-  return { ...response,
+  return {
+    ...response,
     authentication
   };
 }
-
 function toTimestamp$2(apiTimeInMs, expirationInSeconds) {
   return new Date(apiTimeInMs + expirationInSeconds * 1000).toISOString();
 }
@@ -4626,11 +4609,9 @@ async function scopeToken(options) {
     token,
     ...requestOptions
   } = options;
-  const request$1 = optionsRequest ||
-  /* istanbul ignore next: we always pass a custom request in tests */
+  const request$1 = optionsRequest || /* istanbul ignore next: we always pass a custom request in tests */
   request.request;
-  const response = await request$1("POST /applications/{client_id}/token/scoped", // @ts-expect-error - TODO: I don't get why TS is complaining here. It works with `defaultRequest` directly
-  {
+  const response = await request$1("POST /applications/{client_id}/token/scoped", {
     headers: {
       authorization: `basic ${btoa(`${clientId}:${clientSecret}`)}`
     },
@@ -4645,20 +4626,18 @@ async function scopeToken(options) {
     token: response.data.token
   }, response.data.expires_at ? {
     expiresAt: response.data.expires_at
-  } : {}); // @ts-expect-error - response.status type is incompatible (200 vs number)
-
-  return { ...response,
+  } : {});
+  return {
+    ...response,
     authentication
   };
 }
 
 async function resetToken(options) {
-  const request$1 = options.request ||
-  /* istanbul ignore next: we always pass a custom request in tests */
+  const request$1 = options.request || /* istanbul ignore next: we always pass a custom request in tests */
   request.request;
   const auth = btoa(`${options.clientId}:${options.clientSecret}`);
-  const response = await request$1("PATCH /applications/{client_id}/token", // @ts-expect-error - TODO: I don't get why TS is complaining here. It works with `defaultRequest` directly
-  {
+  const response = await request$1("PATCH /applications/{client_id}/token", {
     headers: {
       authorization: `basic ${auth}`
     },
@@ -4673,23 +4652,20 @@ async function resetToken(options) {
     scopes: response.data.scopes
   };
   if (response.data.expires_at) authentication.expiresAt = response.data.expires_at;
-
   if (options.clientType === "github-app") {
     delete authentication.scopes;
   }
-
-  return { ...response,
+  return {
+    ...response,
     authentication
   };
 }
 
 async function deleteToken(options) {
-  const request$1 = options.request ||
-  /* istanbul ignore next: we always pass a custom request in tests */
+  const request$1 = options.request || /* istanbul ignore next: we always pass a custom request in tests */
   request.request;
   const auth = btoa(`${options.clientId}:${options.clientSecret}`);
-  return request$1("DELETE /applications/{client_id}/token", // @ts-expect-error - TODO: I don't get why TS is complaining here. It works with `defaultRequest` directly
-  {
+  return request$1("DELETE /applications/{client_id}/token", {
     headers: {
       authorization: `basic ${auth}`
     },
@@ -4699,12 +4675,10 @@ async function deleteToken(options) {
 }
 
 async function deleteAuthorization(options) {
-  const request$1 = options.request ||
-  /* istanbul ignore next: we always pass a custom request in tests */
+  const request$1 = options.request || /* istanbul ignore next: we always pass a custom request in tests */
   request.request;
   const auth = btoa(`${options.clientId}:${options.clientSecret}`);
-  return request$1("DELETE /applications/{client_id}/grant", // @ts-expect-error - TODO: I don't get why TS is complaining here. It works with `defaultRequest` directly
-  {
+  return request$1("DELETE /applications/{client_id}/grant", {
     headers: {
       authorization: `basic ${auth}`
     },
@@ -5579,14 +5553,14 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 var crypto = __nccwpck_require__(6113);
 var buffer = __nccwpck_require__(4300);
 
-const VERSION = "3.0.0";
-
 var Algorithm;
 
 (function (Algorithm) {
   Algorithm["SHA1"] = "sha1";
   Algorithm["SHA256"] = "sha256";
 })(Algorithm || (Algorithm = {}));
+
+const VERSION = "3.0.1";
 
 async function sign(options, payload) {
   const {
@@ -5669,7 +5643,7 @@ const createLogger = logger => ({
 
 // THIS FILE IS GENERATED - DO NOT EDIT DIRECTLY
 // make edits in scripts/generate-types.ts
-const emitterEventNames = ["branch_protection_rule", "branch_protection_rule.created", "branch_protection_rule.deleted", "branch_protection_rule.edited", "check_run", "check_run.completed", "check_run.created", "check_run.requested_action", "check_run.rerequested", "check_suite", "check_suite.completed", "check_suite.requested", "check_suite.rerequested", "code_scanning_alert", "code_scanning_alert.appeared_in_branch", "code_scanning_alert.closed_by_user", "code_scanning_alert.created", "code_scanning_alert.fixed", "code_scanning_alert.reopened", "code_scanning_alert.reopened_by_user", "commit_comment", "commit_comment.created", "create", "delete", "deploy_key", "deploy_key.created", "deploy_key.deleted", "deployment", "deployment.created", "deployment_status", "deployment_status.created", "discussion", "discussion.answered", "discussion.category_changed", "discussion.created", "discussion.deleted", "discussion.edited", "discussion.labeled", "discussion.locked", "discussion.pinned", "discussion.transferred", "discussion.unanswered", "discussion.unlabeled", "discussion.unlocked", "discussion.unpinned", "discussion_comment", "discussion_comment.created", "discussion_comment.deleted", "discussion_comment.edited", "fork", "github_app_authorization", "github_app_authorization.revoked", "gollum", "installation", "installation.created", "installation.deleted", "installation.new_permissions_accepted", "installation.suspend", "installation.unsuspend", "installation_repositories", "installation_repositories.added", "installation_repositories.removed", "issue_comment", "issue_comment.created", "issue_comment.deleted", "issue_comment.edited", "issues", "issues.assigned", "issues.closed", "issues.deleted", "issues.demilestoned", "issues.edited", "issues.labeled", "issues.locked", "issues.milestoned", "issues.opened", "issues.pinned", "issues.reopened", "issues.transferred", "issues.unassigned", "issues.unlabeled", "issues.unlocked", "issues.unpinned", "label", "label.created", "label.deleted", "label.edited", "marketplace_purchase", "marketplace_purchase.cancelled", "marketplace_purchase.changed", "marketplace_purchase.pending_change", "marketplace_purchase.pending_change_cancelled", "marketplace_purchase.purchased", "member", "member.added", "member.edited", "member.removed", "membership", "membership.added", "membership.removed", "merge_group", "merge_group.checks_requested", "meta", "meta.deleted", "milestone", "milestone.closed", "milestone.created", "milestone.deleted", "milestone.edited", "milestone.opened", "org_block", "org_block.blocked", "org_block.unblocked", "organization", "organization.deleted", "organization.member_added", "organization.member_invited", "organization.member_removed", "organization.renamed", "package", "package.published", "package.updated", "page_build", "ping", "project", "project.closed", "project.created", "project.deleted", "project.edited", "project.reopened", "project_card", "project_card.converted", "project_card.created", "project_card.deleted", "project_card.edited", "project_card.moved", "project_column", "project_column.created", "project_column.deleted", "project_column.edited", "project_column.moved", "projects_v2_item", "projects_v2_item.archived", "projects_v2_item.converted", "projects_v2_item.created", "projects_v2_item.deleted", "projects_v2_item.edited", "projects_v2_item.reordered", "projects_v2_item.restored", "public", "pull_request", "pull_request.assigned", "pull_request.auto_merge_disabled", "pull_request.auto_merge_enabled", "pull_request.closed", "pull_request.converted_to_draft", "pull_request.edited", "pull_request.labeled", "pull_request.locked", "pull_request.opened", "pull_request.ready_for_review", "pull_request.reopened", "pull_request.review_request_removed", "pull_request.review_requested", "pull_request.synchronize", "pull_request.unassigned", "pull_request.unlabeled", "pull_request.unlocked", "pull_request_review", "pull_request_review.dismissed", "pull_request_review.edited", "pull_request_review.submitted", "pull_request_review_comment", "pull_request_review_comment.created", "pull_request_review_comment.deleted", "pull_request_review_comment.edited", "pull_request_review_thread", "pull_request_review_thread.resolved", "pull_request_review_thread.unresolved", "push", "release", "release.created", "release.deleted", "release.edited", "release.prereleased", "release.published", "release.released", "release.unpublished", "repository", "repository.archived", "repository.created", "repository.deleted", "repository.edited", "repository.privatized", "repository.publicized", "repository.renamed", "repository.transferred", "repository.unarchived", "repository_dispatch", "repository_import", "repository_vulnerability_alert", "repository_vulnerability_alert.create", "repository_vulnerability_alert.dismiss", "repository_vulnerability_alert.reopen", "repository_vulnerability_alert.resolve", "secret_scanning_alert", "secret_scanning_alert.created", "secret_scanning_alert.reopened", "secret_scanning_alert.resolved", "security_advisory", "security_advisory.performed", "security_advisory.published", "security_advisory.updated", "security_advisory.withdrawn", "sponsorship", "sponsorship.cancelled", "sponsorship.created", "sponsorship.edited", "sponsorship.pending_cancellation", "sponsorship.pending_tier_change", "sponsorship.tier_changed", "star", "star.created", "star.deleted", "status", "team", "team.added_to_repository", "team.created", "team.deleted", "team.edited", "team.removed_from_repository", "team_add", "watch", "watch.started", "workflow_dispatch", "workflow_job", "workflow_job.completed", "workflow_job.in_progress", "workflow_job.queued", "workflow_run", "workflow_run.completed", "workflow_run.requested"];
+const emitterEventNames = ["branch_protection_rule", "branch_protection_rule.created", "branch_protection_rule.deleted", "branch_protection_rule.edited", "check_run", "check_run.completed", "check_run.created", "check_run.requested_action", "check_run.rerequested", "check_suite", "check_suite.completed", "check_suite.requested", "check_suite.rerequested", "code_scanning_alert", "code_scanning_alert.appeared_in_branch", "code_scanning_alert.closed_by_user", "code_scanning_alert.created", "code_scanning_alert.fixed", "code_scanning_alert.reopened", "code_scanning_alert.reopened_by_user", "commit_comment", "commit_comment.created", "create", "delete", "deploy_key", "deploy_key.created", "deploy_key.deleted", "deployment", "deployment.created", "deployment_status", "deployment_status.created", "discussion", "discussion.answered", "discussion.category_changed", "discussion.created", "discussion.deleted", "discussion.edited", "discussion.labeled", "discussion.locked", "discussion.pinned", "discussion.transferred", "discussion.unanswered", "discussion.unlabeled", "discussion.unlocked", "discussion.unpinned", "discussion_comment", "discussion_comment.created", "discussion_comment.deleted", "discussion_comment.edited", "fork", "github_app_authorization", "github_app_authorization.revoked", "gollum", "installation", "installation.created", "installation.deleted", "installation.new_permissions_accepted", "installation.suspend", "installation.unsuspend", "installation_repositories", "installation_repositories.added", "installation_repositories.removed", "issue_comment", "issue_comment.created", "issue_comment.deleted", "issue_comment.edited", "issues", "issues.assigned", "issues.closed", "issues.deleted", "issues.demilestoned", "issues.edited", "issues.labeled", "issues.locked", "issues.milestoned", "issues.opened", "issues.pinned", "issues.reopened", "issues.transferred", "issues.unassigned", "issues.unlabeled", "issues.unlocked", "issues.unpinned", "label", "label.created", "label.deleted", "label.edited", "marketplace_purchase", "marketplace_purchase.cancelled", "marketplace_purchase.changed", "marketplace_purchase.pending_change", "marketplace_purchase.pending_change_cancelled", "marketplace_purchase.purchased", "member", "member.added", "member.edited", "member.removed", "membership", "membership.added", "membership.removed", "merge_group", "merge_group.checks_requested", "meta", "meta.deleted", "milestone", "milestone.closed", "milestone.created", "milestone.deleted", "milestone.edited", "milestone.opened", "org_block", "org_block.blocked", "org_block.unblocked", "organization", "organization.deleted", "organization.member_added", "organization.member_invited", "organization.member_removed", "organization.renamed", "package", "package.published", "package.updated", "page_build", "ping", "project", "project.closed", "project.created", "project.deleted", "project.edited", "project.reopened", "project_card", "project_card.converted", "project_card.created", "project_card.deleted", "project_card.edited", "project_card.moved", "project_column", "project_column.created", "project_column.deleted", "project_column.edited", "project_column.moved", "projects_v2_item", "projects_v2_item.archived", "projects_v2_item.converted", "projects_v2_item.created", "projects_v2_item.deleted", "projects_v2_item.edited", "projects_v2_item.reordered", "projects_v2_item.restored", "public", "pull_request", "pull_request.assigned", "pull_request.auto_merge_disabled", "pull_request.auto_merge_enabled", "pull_request.closed", "pull_request.converted_to_draft", "pull_request.dequeued", "pull_request.edited", "pull_request.labeled", "pull_request.locked", "pull_request.opened", "pull_request.queued", "pull_request.ready_for_review", "pull_request.reopened", "pull_request.review_request_removed", "pull_request.review_requested", "pull_request.synchronize", "pull_request.unassigned", "pull_request.unlabeled", "pull_request.unlocked", "pull_request_review", "pull_request_review.dismissed", "pull_request_review.edited", "pull_request_review.submitted", "pull_request_review_comment", "pull_request_review_comment.created", "pull_request_review_comment.deleted", "pull_request_review_comment.edited", "pull_request_review_thread", "pull_request_review_thread.resolved", "pull_request_review_thread.unresolved", "push", "release", "release.created", "release.deleted", "release.edited", "release.prereleased", "release.published", "release.released", "release.unpublished", "repository", "repository.archived", "repository.created", "repository.deleted", "repository.edited", "repository.privatized", "repository.publicized", "repository.renamed", "repository.transferred", "repository.unarchived", "repository_dispatch", "repository_import", "repository_vulnerability_alert", "repository_vulnerability_alert.create", "repository_vulnerability_alert.dismiss", "repository_vulnerability_alert.reopen", "repository_vulnerability_alert.resolve", "secret_scanning_alert", "secret_scanning_alert.created", "secret_scanning_alert.reopened", "secret_scanning_alert.resolved", "security_advisory", "security_advisory.performed", "security_advisory.published", "security_advisory.updated", "security_advisory.withdrawn", "sponsorship", "sponsorship.cancelled", "sponsorship.created", "sponsorship.edited", "sponsorship.pending_cancellation", "sponsorship.pending_tier_change", "sponsorship.tier_changed", "star", "star.created", "star.deleted", "status", "team", "team.added_to_repository", "team.created", "team.deleted", "team.edited", "team.removed_from_repository", "team_add", "watch", "watch.started", "workflow_dispatch", "workflow_job", "workflow_job.completed", "workflow_job.in_progress", "workflow_job.queued", "workflow_run", "workflow_run.completed", "workflow_run.requested"];
 
 function handleEventHandlers(state, webhookName, handler) {
   if (!state.hooks[webhookName]) {
