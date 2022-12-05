@@ -1777,9 +1777,10 @@ var authUnauthenticated = __nccwpck_require__(9567);
 var webhooks$1 = __nccwpck_require__(8513);
 var pluginPaginateRest = __nccwpck_require__(8076);
 
-const VERSION = "13.0.11";
+const VERSION = "13.1.0";
 
-function webhooks(appOctokit, options // Explict return type for better debugability and performance,
+function webhooks(appOctokit, options
+// Explict return type for better debugability and performance,
 // see https://github.com/octokit/app.js/pull/201
 ) {
   return new webhooks$1.Webhooks({
@@ -1792,30 +1793,40 @@ function webhooks(appOctokit, options // Explict return type for better debugabi
             reason: `"installation" key missing in webhook event payload`
           }
         });
-        return { ...event,
-          octokit: octokit
+        return {
+          ...event,
+          octokit
         };
       }
-
       const installationId = event.payload.installation.id;
       const octokit = await appOctokit.auth({
         type: "installation",
         installationId,
-
         factory(auth) {
-          return new auth.octokit.constructor({ ...auth.octokitOptions,
+          return new auth.octokit.constructor({
+            ...auth.octokitOptions,
             authStrategy: authApp.createAppAuth,
             ...{
-              auth: { ...auth,
+              auth: {
+                ...auth,
                 installationId
               }
             }
           });
         }
-
       });
-      return { ...event,
-        octokit: octokit
+      // set `x-github-delivery` header on all requests sent in response to the current
+      // event. This allows GitHub Support to correlate the request with the event.
+      // This is not documented and not considered public API, the header may change.
+      // Once we document this as best practice on https://docs.github.com/en/rest/guides/best-practices-for-integrators
+      // we will make it official
+      /* istanbul ignore next */
+      octokit.hook.before("request", options => {
+        options.headers["x-github-delivery"] = event.id;
+      });
+      return {
+        ...event,
+        octokit
       };
     }
   });
@@ -1825,19 +1836,19 @@ async function getInstallationOctokit(app, installationId) {
   return app.octokit.auth({
     type: "installation",
     installationId: installationId,
-
     factory(auth) {
-      const options = { ...auth.octokitOptions,
+      const options = {
+        ...auth.octokitOptions,
         authStrategy: authApp.createAppAuth,
         ...{
-          auth: { ...auth,
+          auth: {
+            ...auth,
             installationId: installationId
           }
         }
       };
       return new auth.octokit.constructor(options);
     }
-
   });
 }
 
@@ -1849,7 +1860,6 @@ function eachInstallationFactory(app) {
 async function eachInstallation(app, callback) {
   const i = eachInstallationIterator(app)[Symbol.asyncIterator]();
   let result = await i.next();
-
   while (!result.done) {
     await callback(result.value);
     result = await i.next();
@@ -1859,7 +1869,6 @@ function eachInstallationIterator(app) {
   return {
     async *[Symbol.asyncIterator]() {
       const iterator = pluginPaginateRest.composePaginateRest.iterator(app.octokit, "GET /app/installations");
-
       for await (const {
         data: installations
       } of iterator) {
@@ -1872,7 +1881,6 @@ function eachInstallationIterator(app) {
         }
       }
     }
-
   };
 }
 
@@ -1884,18 +1892,15 @@ function eachRepositoryFactory(app) {
 async function eachRepository(app, queryOrCallback, callback) {
   const i = eachRepositoryIterator(app, callback ? queryOrCallback : undefined)[Symbol.asyncIterator]();
   let result = await i.next();
-
   while (!result.done) {
     if (callback) {
       await callback(result.value);
     } else {
       await queryOrCallback(result.value);
     }
-
     result = await i.next();
   }
 }
-
 function singleInstallationIterator(app, installationId) {
   return {
     async *[Symbol.asyncIterator]() {
@@ -1903,20 +1908,16 @@ function singleInstallationIterator(app, installationId) {
         octokit: await app.getInstallationOctokit(installationId)
       };
     }
-
   };
 }
-
 function eachRepositoryIterator(app, query) {
   return {
     async *[Symbol.asyncIterator]() {
       const iterator = query ? singleInstallationIterator(app, query.installationId) : app.eachInstallation.iterator();
-
       for await (const {
         octokit
       } of iterator) {
         const repositoriesIterator = pluginPaginateRest.composePaginateRest.iterator(octokit, "GET /installation/repositories");
-
         for await (const {
           data: repositories
         } of repositoriesIterator) {
@@ -1929,7 +1930,6 @@ function eachRepositoryIterator(app, query) {
         }
       }
     }
-
   };
 }
 
@@ -1943,7 +1943,6 @@ function onUnhandledRequestDefault(request, response) {
 }
 
 function noop() {}
-
 function createNodeMiddleware(app, options = {}) {
   const log = Object.assign({
     debug: noop,
@@ -1978,26 +1977,32 @@ async function middleware(options, {
   const {
     pathname
   } = new URL(request.url, "http://localhost");
-
   if (pathname === `${options.pathPrefix}/webhooks`) {
     return webhooksMiddleware(request, response, next);
   }
-
   if (pathname.startsWith(`${options.pathPrefix}/oauth/`)) {
     return oauthMiddleware(request, response, next);
   }
-
   const isExpressMiddleware = typeof next === "function";
-
   if (isExpressMiddleware) {
     // @ts-ignore `next` must be a function as we check two lines above
     return next();
   }
-
   return options.onUnhandledRequest(request, response);
 }
 
 class App {
+  static defaults(defaults) {
+    const AppWithDefaults = class extends this {
+      constructor(...args) {
+        super({
+          ...defaults,
+          ...args[0]
+        });
+      }
+    };
+    return AppWithDefaults;
+  }
   constructor(options) {
     const Octokit = options.Octokit || core.Octokit;
     const authOptions = Object.assign({
@@ -2017,8 +2022,8 @@ class App {
       info: () => {},
       warn: console.warn.bind(console),
       error: console.error.bind(console)
-    }, options.log); // set app.webhooks depending on whether "webhooks" option has been passed
-
+    }, options.log);
+    // set app.webhooks depending on whether "webhooks" option has been passed
     if (options.webhooks) {
       // @ts-expect-error TODO: figure this out
       this.webhooks = webhooks(this.octokit, options.webhooks);
@@ -2027,13 +2032,12 @@ class App {
         get() {
           throw new Error("[@octokit/app] webhooks option not set");
         }
-
       });
-    } // set app.oauth depending on whether "oauth" option has been passed
-
-
+    }
+    // set app.oauth depending on whether "oauth" option has been passed
     if (options.oauth) {
-      this.oauth = new oauthApp.OAuthApp({ ...options.oauth,
+      this.oauth = new oauthApp.OAuthApp({
+        ...options.oauth,
         clientType: "github-app",
         Octokit
       });
@@ -2042,27 +2046,12 @@ class App {
         get() {
           throw new Error("[@octokit/app] oauth.clientId / oauth.clientSecret options are not set");
         }
-
       });
     }
-
     this.getInstallationOctokit = getInstallationOctokit.bind(null, this);
     this.eachInstallation = eachInstallationFactory(this);
     this.eachRepository = eachRepositoryFactory(this);
   }
-
-  static defaults(defaults) {
-    const AppWithDefaults = class extends this {
-      constructor(...args) {
-        super({ ...defaults,
-          ...args[0]
-        });
-      }
-
-    };
-    return AppWithDefaults;
-  }
-
 }
 App.VERSION = VERSION;
 
@@ -5636,26 +5625,21 @@ function handleEventHandlers(state, webhookName, handler) {
   if (!state.hooks[webhookName]) {
     state.hooks[webhookName] = [];
   }
-
   state.hooks[webhookName].push(handler);
 }
-
 function receiverOn(state, webhookNameOrNames, handler) {
   if (Array.isArray(webhookNameOrNames)) {
     webhookNameOrNames.forEach(webhookName => receiverOn(state, webhookName, handler));
     return;
   }
-
   if (["*", "error"].includes(webhookNameOrNames)) {
     const webhookName = webhookNameOrNames === "*" ? "any" : webhookNameOrNames;
     const message = `Using the "${webhookNameOrNames}" event with the regular Webhooks.on() function is not supported. Please use the Webhooks.on${webhookName.charAt(0).toUpperCase() + webhookName.slice(1)}() method instead`;
     throw new Error(message);
   }
-
   if (!emitterEventNames.includes(webhookNameOrNames)) {
     state.log.warn(`"${webhookNameOrNames}" is not a known webhook name (https://developer.github.com/v3/activity/events/types/)`);
   }
-
   handleEventHandlers(state, webhookNameOrNames, handler);
 }
 function receiverOnAny(state, handler) {
@@ -5670,14 +5654,12 @@ function receiverOnError(state, handler) {
 // "Fatal: Error occurred" message to stdout
 function wrapErrorHandler(handler, error) {
   let returnValue;
-
   try {
     returnValue = handler(error);
   } catch (error) {
     console.log('FATAL: Error occurred in "error" event handler');
     console.log(error);
   }
-
   if (returnValue && returnValue.catch) {
     returnValue.catch(error => {
       console.log('FATAL: Error occurred in "error" event handler');
@@ -5687,21 +5669,16 @@ function wrapErrorHandler(handler, error) {
 }
 
 // @ts-ignore to address #245
-
 function getHooks(state, eventPayloadAction, eventName) {
   const hooks = [state.hooks[eventName], state.hooks["*"]];
-
   if (eventPayloadAction) {
     hooks.unshift(state.hooks[`${eventName}.${eventPayloadAction}`]);
   }
-
   return [].concat(...hooks.filter(Boolean));
-} // main handler function
-
-
+}
+// main handler function
 function receiverHandle(state, event) {
   const errorHandlers = state.hooks.error || [];
-
   if (event instanceof Error) {
     const error = Object.assign(new AggregateError([event]), {
       event,
@@ -5710,30 +5687,23 @@ function receiverHandle(state, event) {
     errorHandlers.forEach(handler => wrapErrorHandler(handler, error));
     return Promise.reject(error);
   }
-
   if (!event || !event.name) {
     throw new AggregateError(["Event name not passed"]);
   }
-
   if (!event.payload) {
     throw new AggregateError(["Event payload not passed"]);
-  } // flatten arrays of event listeners and remove undefined values
-
-
+  }
+  // flatten arrays of event listeners and remove undefined values
   const hooks = getHooks(state, "action" in event.payload ? event.payload.action : null, event.name);
-
   if (hooks.length === 0) {
     return Promise.resolve();
   }
-
   const errors = [];
   const promises = hooks.map(handler => {
     let promise = Promise.resolve(event);
-
     if (state.transform) {
       promise = promise.then(state.transform);
     }
-
     return promise.then(event => {
       return handler(event);
     }).catch(error => errors.push(Object.assign(error, {
@@ -5744,7 +5714,6 @@ function receiverHandle(state, event) {
     if (errors.length === 0) {
       return;
     }
-
     const error = new AggregateError(errors);
     Object.assign(error, {
       event,
@@ -5760,13 +5729,11 @@ function removeListener(state, webhookNameOrNames, handler) {
     webhookNameOrNames.forEach(webhookName => removeListener(state, webhookName, handler));
     return;
   }
-
   if (!state.hooks[webhookNameOrNames]) {
     return;
-  } // remove last hook that has been added, that way
+  }
+  // remove last hook that has been added, that way
   // it behaves the same as removeListener
-
-
   for (let i = state.hooks[webhookNameOrNames].length - 1; i >= 0; i--) {
     if (state.hooks[webhookNameOrNames][i] === handler) {
       state.hooks[webhookNameOrNames].splice(i, 1);
@@ -5780,11 +5747,9 @@ function createEventHandler(options) {
     hooks: {},
     log: createLogger(options && options.log)
   };
-
   if (options && options.transform) {
     state.transform = options.transform;
   }
-
   return {
     on: receiverOn.bind(null, state),
     onAny: receiverOnAny.bind(null, state),
@@ -5815,7 +5780,6 @@ async function verify(secret, payload, signature) {
 async function verifyAndReceive(state, event) {
   // verify will validate that the secret is not undefined
   const matchesSignature = await webhooksMethods.verify(state.secret, typeof event.payload === "object" ? toNormalizedJsonString(event.payload) : event.payload, event.signature);
-
   if (!matchesSignature) {
     const error = new Error("[@octokit/webhooks] signature does not match event payload and secret");
     return state.eventHandler.receive(Object.assign(error, {
@@ -5823,7 +5787,6 @@ async function verifyAndReceive(state, event) {
       status: 400
     }));
   }
-
   return state.eventHandler.receive({
     id: event.id,
     name: event.name,
@@ -5831,8 +5794,8 @@ async function verifyAndReceive(state, event) {
   });
 }
 
-const WEBHOOK_HEADERS = ["x-github-event", "x-hub-signature-256", "x-github-delivery"]; // https://docs.github.com/en/developers/webhooks-and-events/webhook-events-and-payloads#delivery-headers
-
+const WEBHOOK_HEADERS = ["x-github-event", "x-hub-signature-256", "x-github-delivery"];
+// https://docs.github.com/en/developers/webhooks-and-events/webhook-events-and-payloads#delivery-headers
 function getMissingHeaders(request) {
   return WEBHOOK_HEADERS.filter(header => !(header in request.headers));
 }
@@ -5844,8 +5807,8 @@ function getPayload(request) {
   if (request.body) return Promise.resolve(request.body);
   return new Promise((resolve, reject) => {
     let data = "";
-    request.setEncoding("utf8"); // istanbul ignore next
-
+    request.setEncoding("utf8");
+    // istanbul ignore next
     request.on("error", error => reject(new AggregateError([error])));
     request.on("data", chunk => data += chunk);
     request.on("end", () => {
@@ -5862,7 +5825,6 @@ function getPayload(request) {
 
 async function middleware(webhooks, options, request, response, next) {
   let pathname;
-
   try {
     pathname = new URL(request.url, "http://localhost").pathname;
   } catch (error) {
@@ -5874,10 +5836,8 @@ async function middleware(webhooks, options, request, response, next) {
     }));
     return;
   }
-
   const isUnknownRoute = request.method !== "POST" || pathname !== options.path;
   const isExpressMiddleware = typeof next === "function";
-
   if (isUnknownRoute) {
     if (isExpressMiddleware) {
       return next();
@@ -5885,9 +5845,7 @@ async function middleware(webhooks, options, request, response, next) {
       return options.onUnhandledRequest(request, response);
     }
   }
-
   const missingHeaders = getMissingHeaders(request).join(", ");
-
   if (missingHeaders) {
     response.writeHead(400, {
       "content-type": "application/json"
@@ -5897,20 +5855,18 @@ async function middleware(webhooks, options, request, response, next) {
     }));
     return;
   }
-
   const eventName = request.headers["x-github-event"];
   const signatureSHA256 = request.headers["x-hub-signature-256"];
   const id = request.headers["x-github-delivery"];
-  options.log.debug(`${eventName} event received (id: ${id})`); // GitHub will abort the request if it does not receive a response within 10s
+  options.log.debug(`${eventName} event received (id: ${id})`);
+  // GitHub will abort the request if it does not receive a response within 10s
   // See https://github.com/octokit/webhooks.js/issues/185
-
   let didTimeout = false;
   const timeout = setTimeout(() => {
     didTimeout = true;
     response.statusCode = 202;
     response.end("still processing\n");
   }, 9000).unref();
-
   try {
     const payload = await getPayload(request);
     await webhooks.verifyAndReceive({
@@ -5956,12 +5912,12 @@ function createNodeMiddleware(webhooks, {
   });
 }
 
+// U holds the return value of `transform` function in Options
 class Webhooks {
   constructor(options) {
     if (!options || !options.secret) {
       throw new Error("[@octokit/webhooks] options.secret required");
     }
-
     const state = {
       eventHandler: createEventHandler(options),
       secret: options.secret,
@@ -5977,7 +5933,6 @@ class Webhooks {
     this.receive = state.eventHandler.receive;
     this.verifyAndReceive = verifyAndReceive.bind(null, state);
   }
-
 }
 
 exports.Webhooks = Webhooks;
