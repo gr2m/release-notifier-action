@@ -1775,9 +1775,9 @@ var authApp = __nccwpck_require__(7541);
 var oauthApp = __nccwpck_require__(3493);
 var authUnauthenticated = __nccwpck_require__(9567);
 var webhooks$1 = __nccwpck_require__(8513);
-var pluginPaginateRest = __nccwpck_require__(8076);
+var pluginPaginateRest = __nccwpck_require__(4193);
 
-const VERSION = "13.1.2";
+const VERSION = "13.1.3";
 
 function webhooks(appOctokit, options
 // Explict return type for better debugability and performance,
@@ -2057,165 +2057,6 @@ App.VERSION = VERSION;
 
 exports.App = App;
 exports.createNodeMiddleware = createNodeMiddleware;
-//# sourceMappingURL=index.js.map
-
-
-/***/ }),
-
-/***/ 8076:
-/***/ ((__unused_webpack_module, exports) => {
-
-"use strict";
-
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-
-const VERSION = "6.0.0";
-
-/**
- * Some “list” response that can be paginated have a different response structure
- *
- * They have a `total_count` key in the response (search also has `incomplete_results`,
- * /installation/repositories also has `repository_selection`), as well as a key with
- * the list of the items which name varies from endpoint to endpoint.
- *
- * Octokit normalizes these responses so that paginated results are always returned following
- * the same structure. One challenge is that if the list response has only one page, no Link
- * header is provided, so this header alone is not sufficient to check wether a response is
- * paginated or not.
- *
- * We check if a "total_count" key is present in the response data, but also make sure that
- * a "url" property is not, as the "Get the combined status for a specific ref" endpoint would
- * otherwise match: https://developer.github.com/v3/repos/statuses/#get-the-combined-status-for-a-specific-ref
- */
-function normalizePaginatedListResponse(response) {
-  // endpoints can respond with 204 if repository is empty
-  if (!response.data) {
-    return {
-      ...response,
-      data: []
-    };
-  }
-  const responseNeedsNormalization = "total_count" in response.data && !("url" in response.data);
-  if (!responseNeedsNormalization) return response;
-  // keep the additional properties intact as there is currently no other way
-  // to retrieve the same information.
-  const incompleteResults = response.data.incomplete_results;
-  const repositorySelection = response.data.repository_selection;
-  const totalCount = response.data.total_count;
-  delete response.data.incomplete_results;
-  delete response.data.repository_selection;
-  delete response.data.total_count;
-  const namespaceKey = Object.keys(response.data)[0];
-  const data = response.data[namespaceKey];
-  response.data = data;
-  if (typeof incompleteResults !== "undefined") {
-    response.data.incomplete_results = incompleteResults;
-  }
-  if (typeof repositorySelection !== "undefined") {
-    response.data.repository_selection = repositorySelection;
-  }
-  response.data.total_count = totalCount;
-  return response;
-}
-
-function iterator(octokit, route, parameters) {
-  const options = typeof route === "function" ? route.endpoint(parameters) : octokit.request.endpoint(route, parameters);
-  const requestMethod = typeof route === "function" ? route : octokit.request;
-  const method = options.method;
-  const headers = options.headers;
-  let url = options.url;
-  return {
-    [Symbol.asyncIterator]: () => ({
-      async next() {
-        if (!url) return {
-          done: true
-        };
-        try {
-          const response = await requestMethod({
-            method,
-            url,
-            headers
-          });
-          const normalizedResponse = normalizePaginatedListResponse(response);
-          // `response.headers.link` format:
-          // '<https://api.github.com/users/aseemk/followers?page=2>; rel="next", <https://api.github.com/users/aseemk/followers?page=2>; rel="last"'
-          // sets `url` to undefined if "next" URL is not present or `link` header is not set
-          url = ((normalizedResponse.headers.link || "").match(/<([^>]+)>;\s*rel="next"/) || [])[1];
-          return {
-            value: normalizedResponse
-          };
-        } catch (error) {
-          if (error.status !== 409) throw error;
-          url = "";
-          return {
-            value: {
-              status: 200,
-              headers: {},
-              data: []
-            }
-          };
-        }
-      }
-    })
-  };
-}
-
-function paginate(octokit, route, parameters, mapFn) {
-  if (typeof parameters === "function") {
-    mapFn = parameters;
-    parameters = undefined;
-  }
-  return gather(octokit, [], iterator(octokit, route, parameters)[Symbol.asyncIterator](), mapFn);
-}
-function gather(octokit, results, iterator, mapFn) {
-  return iterator.next().then(result => {
-    if (result.done) {
-      return results;
-    }
-    let earlyExit = false;
-    function done() {
-      earlyExit = true;
-    }
-    results = results.concat(mapFn ? mapFn(result.value, done) : result.value.data);
-    if (earlyExit) {
-      return results;
-    }
-    return gather(octokit, results, iterator, mapFn);
-  });
-}
-
-const composePaginateRest = Object.assign(paginate, {
-  iterator
-});
-
-const paginatingEndpoints = ["GET /app/hook/deliveries", "GET /app/installations", "GET /enterprises/{enterprise}/actions/runner-groups", "GET /enterprises/{enterprise}/dependabot/alerts", "GET /enterprises/{enterprise}/secret-scanning/alerts", "GET /events", "GET /gists", "GET /gists/public", "GET /gists/starred", "GET /gists/{gist_id}/comments", "GET /gists/{gist_id}/commits", "GET /gists/{gist_id}/forks", "GET /installation/repositories", "GET /issues", "GET /licenses", "GET /marketplace_listing/plans", "GET /marketplace_listing/plans/{plan_id}/accounts", "GET /marketplace_listing/stubbed/plans", "GET /marketplace_listing/stubbed/plans/{plan_id}/accounts", "GET /networks/{owner}/{repo}/events", "GET /notifications", "GET /organizations", "GET /orgs/{org}/actions/cache/usage-by-repository", "GET /orgs/{org}/actions/permissions/repositories", "GET /orgs/{org}/actions/required_workflows", "GET /orgs/{org}/actions/runner-groups", "GET /orgs/{org}/actions/runner-groups/{runner_group_id}/repositories", "GET /orgs/{org}/actions/runner-groups/{runner_group_id}/runners", "GET /orgs/{org}/actions/runners", "GET /orgs/{org}/actions/secrets", "GET /orgs/{org}/actions/secrets/{secret_name}/repositories", "GET /orgs/{org}/actions/variables", "GET /orgs/{org}/actions/variables/{name}/repositories", "GET /orgs/{org}/blocks", "GET /orgs/{org}/code-scanning/alerts", "GET /orgs/{org}/codespaces", "GET /orgs/{org}/codespaces/secrets", "GET /orgs/{org}/codespaces/secrets/{secret_name}/repositories", "GET /orgs/{org}/dependabot/alerts", "GET /orgs/{org}/dependabot/secrets", "GET /orgs/{org}/dependabot/secrets/{secret_name}/repositories", "GET /orgs/{org}/events", "GET /orgs/{org}/failed_invitations", "GET /orgs/{org}/hooks", "GET /orgs/{org}/hooks/{hook_id}/deliveries", "GET /orgs/{org}/installations", "GET /orgs/{org}/invitations", "GET /orgs/{org}/invitations/{invitation_id}/teams", "GET /orgs/{org}/issues", "GET /orgs/{org}/members", "GET /orgs/{org}/members/{username}/codespaces", "GET /orgs/{org}/migrations", "GET /orgs/{org}/migrations/{migration_id}/repositories", "GET /orgs/{org}/outside_collaborators", "GET /orgs/{org}/packages", "GET /orgs/{org}/packages/{package_type}/{package_name}/versions", "GET /orgs/{org}/projects", "GET /orgs/{org}/public_members", "GET /orgs/{org}/repos", "GET /orgs/{org}/secret-scanning/alerts", "GET /orgs/{org}/teams", "GET /orgs/{org}/teams/{team_slug}/discussions", "GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/comments", "GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/comments/{comment_number}/reactions", "GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/reactions", "GET /orgs/{org}/teams/{team_slug}/invitations", "GET /orgs/{org}/teams/{team_slug}/members", "GET /orgs/{org}/teams/{team_slug}/projects", "GET /orgs/{org}/teams/{team_slug}/repos", "GET /orgs/{org}/teams/{team_slug}/teams", "GET /projects/columns/{column_id}/cards", "GET /projects/{project_id}/collaborators", "GET /projects/{project_id}/columns", "GET /repos/{org}/{repo}/actions/required_workflows", "GET /repos/{owner}/{repo}/actions/artifacts", "GET /repos/{owner}/{repo}/actions/caches", "GET /repos/{owner}/{repo}/actions/required_workflows/{required_workflow_id_for_repo}/runs", "GET /repos/{owner}/{repo}/actions/runners", "GET /repos/{owner}/{repo}/actions/runs", "GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts", "GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}/jobs", "GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs", "GET /repos/{owner}/{repo}/actions/secrets", "GET /repos/{owner}/{repo}/actions/variables", "GET /repos/{owner}/{repo}/actions/workflows", "GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs", "GET /repos/{owner}/{repo}/assignees", "GET /repos/{owner}/{repo}/branches", "GET /repos/{owner}/{repo}/check-runs/{check_run_id}/annotations", "GET /repos/{owner}/{repo}/check-suites/{check_suite_id}/check-runs", "GET /repos/{owner}/{repo}/code-scanning/alerts", "GET /repos/{owner}/{repo}/code-scanning/alerts/{alert_number}/instances", "GET /repos/{owner}/{repo}/code-scanning/analyses", "GET /repos/{owner}/{repo}/codespaces", "GET /repos/{owner}/{repo}/codespaces/devcontainers", "GET /repos/{owner}/{repo}/codespaces/secrets", "GET /repos/{owner}/{repo}/collaborators", "GET /repos/{owner}/{repo}/comments", "GET /repos/{owner}/{repo}/comments/{comment_id}/reactions", "GET /repos/{owner}/{repo}/commits", "GET /repos/{owner}/{repo}/commits/{commit_sha}/comments", "GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls", "GET /repos/{owner}/{repo}/commits/{ref}/check-runs", "GET /repos/{owner}/{repo}/commits/{ref}/check-suites", "GET /repos/{owner}/{repo}/commits/{ref}/status", "GET /repos/{owner}/{repo}/commits/{ref}/statuses", "GET /repos/{owner}/{repo}/contributors", "GET /repos/{owner}/{repo}/dependabot/alerts", "GET /repos/{owner}/{repo}/dependabot/secrets", "GET /repos/{owner}/{repo}/deployments", "GET /repos/{owner}/{repo}/deployments/{deployment_id}/statuses", "GET /repos/{owner}/{repo}/environments", "GET /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies", "GET /repos/{owner}/{repo}/events", "GET /repos/{owner}/{repo}/forks", "GET /repos/{owner}/{repo}/hooks", "GET /repos/{owner}/{repo}/hooks/{hook_id}/deliveries", "GET /repos/{owner}/{repo}/invitations", "GET /repos/{owner}/{repo}/issues", "GET /repos/{owner}/{repo}/issues/comments", "GET /repos/{owner}/{repo}/issues/comments/{comment_id}/reactions", "GET /repos/{owner}/{repo}/issues/events", "GET /repos/{owner}/{repo}/issues/{issue_number}/comments", "GET /repos/{owner}/{repo}/issues/{issue_number}/events", "GET /repos/{owner}/{repo}/issues/{issue_number}/labels", "GET /repos/{owner}/{repo}/issues/{issue_number}/reactions", "GET /repos/{owner}/{repo}/issues/{issue_number}/timeline", "GET /repos/{owner}/{repo}/keys", "GET /repos/{owner}/{repo}/labels", "GET /repos/{owner}/{repo}/milestones", "GET /repos/{owner}/{repo}/milestones/{milestone_number}/labels", "GET /repos/{owner}/{repo}/notifications", "GET /repos/{owner}/{repo}/pages/builds", "GET /repos/{owner}/{repo}/projects", "GET /repos/{owner}/{repo}/pulls", "GET /repos/{owner}/{repo}/pulls/comments", "GET /repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions", "GET /repos/{owner}/{repo}/pulls/{pull_number}/comments", "GET /repos/{owner}/{repo}/pulls/{pull_number}/commits", "GET /repos/{owner}/{repo}/pulls/{pull_number}/files", "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews", "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/comments", "GET /repos/{owner}/{repo}/releases", "GET /repos/{owner}/{repo}/releases/{release_id}/assets", "GET /repos/{owner}/{repo}/releases/{release_id}/reactions", "GET /repos/{owner}/{repo}/secret-scanning/alerts", "GET /repos/{owner}/{repo}/secret-scanning/alerts/{alert_number}/locations", "GET /repos/{owner}/{repo}/stargazers", "GET /repos/{owner}/{repo}/subscribers", "GET /repos/{owner}/{repo}/tags", "GET /repos/{owner}/{repo}/teams", "GET /repos/{owner}/{repo}/topics", "GET /repositories", "GET /repositories/{repository_id}/environments/{environment_name}/secrets", "GET /repositories/{repository_id}/environments/{environment_name}/variables", "GET /search/code", "GET /search/commits", "GET /search/issues", "GET /search/labels", "GET /search/repositories", "GET /search/topics", "GET /search/users", "GET /teams/{team_id}/discussions", "GET /teams/{team_id}/discussions/{discussion_number}/comments", "GET /teams/{team_id}/discussions/{discussion_number}/comments/{comment_number}/reactions", "GET /teams/{team_id}/discussions/{discussion_number}/reactions", "GET /teams/{team_id}/invitations", "GET /teams/{team_id}/members", "GET /teams/{team_id}/projects", "GET /teams/{team_id}/repos", "GET /teams/{team_id}/teams", "GET /user/blocks", "GET /user/codespaces", "GET /user/codespaces/secrets", "GET /user/emails", "GET /user/followers", "GET /user/following", "GET /user/gpg_keys", "GET /user/installations", "GET /user/installations/{installation_id}/repositories", "GET /user/issues", "GET /user/keys", "GET /user/marketplace_purchases", "GET /user/marketplace_purchases/stubbed", "GET /user/memberships/orgs", "GET /user/migrations", "GET /user/migrations/{migration_id}/repositories", "GET /user/orgs", "GET /user/packages", "GET /user/packages/{package_type}/{package_name}/versions", "GET /user/public_emails", "GET /user/repos", "GET /user/repository_invitations", "GET /user/ssh_signing_keys", "GET /user/starred", "GET /user/subscriptions", "GET /user/teams", "GET /users", "GET /users/{username}/events", "GET /users/{username}/events/orgs/{org}", "GET /users/{username}/events/public", "GET /users/{username}/followers", "GET /users/{username}/following", "GET /users/{username}/gists", "GET /users/{username}/gpg_keys", "GET /users/{username}/keys", "GET /users/{username}/orgs", "GET /users/{username}/packages", "GET /users/{username}/projects", "GET /users/{username}/received_events", "GET /users/{username}/received_events/public", "GET /users/{username}/repos", "GET /users/{username}/ssh_signing_keys", "GET /users/{username}/starred", "GET /users/{username}/subscriptions"];
-
-function isPaginatingEndpoint(arg) {
-  if (typeof arg === "string") {
-    return paginatingEndpoints.includes(arg);
-  } else {
-    return false;
-  }
-}
-
-/**
- * @param octokit Octokit instance
- * @param options Options passed to Octokit constructor
- */
-function paginateRest(octokit) {
-  return {
-    paginate: Object.assign(paginate.bind(null, octokit), {
-      iterator: iterator.bind(null, octokit)
-    })
-  };
-}
-paginateRest.VERSION = VERSION;
-
-exports.composePaginateRest = composePaginateRest;
-exports.isPaginatingEndpoint = isPaginatingEndpoint;
-exports.paginateRest = paginateRest;
-exports.paginatingEndpoints = paginatingEndpoints;
 //# sourceMappingURL=index.js.map
 
 
@@ -2592,7 +2433,7 @@ async function sendRequestWithRetries(state, request, options, createdAt, retrie
   }
 }
 
-const VERSION = "4.0.8";
+const VERSION = "4.0.9";
 
 function createAppAuth(options) {
   if (!options.appId) {
@@ -3440,6 +3281,362 @@ exports.Octokit = Octokit;
 
 /***/ }),
 
+/***/ 9440:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+
+var isPlainObject = __nccwpck_require__(3287);
+var universalUserAgent = __nccwpck_require__(5030);
+
+function lowercaseKeys(object) {
+  if (!object) {
+    return {};
+  }
+  return Object.keys(object).reduce((newObj, key) => {
+    newObj[key.toLowerCase()] = object[key];
+    return newObj;
+  }, {});
+}
+
+function mergeDeep(defaults, options) {
+  const result = Object.assign({}, defaults);
+  Object.keys(options).forEach(key => {
+    if (isPlainObject.isPlainObject(options[key])) {
+      if (!(key in defaults)) Object.assign(result, {
+        [key]: options[key]
+      });else result[key] = mergeDeep(defaults[key], options[key]);
+    } else {
+      Object.assign(result, {
+        [key]: options[key]
+      });
+    }
+  });
+  return result;
+}
+
+function removeUndefinedProperties(obj) {
+  for (const key in obj) {
+    if (obj[key] === undefined) {
+      delete obj[key];
+    }
+  }
+  return obj;
+}
+
+function merge(defaults, route, options) {
+  if (typeof route === "string") {
+    let [method, url] = route.split(" ");
+    options = Object.assign(url ? {
+      method,
+      url
+    } : {
+      url: method
+    }, options);
+  } else {
+    options = Object.assign({}, route);
+  }
+  // lowercase header names before merging with defaults to avoid duplicates
+  options.headers = lowercaseKeys(options.headers);
+  // remove properties with undefined values before merging
+  removeUndefinedProperties(options);
+  removeUndefinedProperties(options.headers);
+  const mergedOptions = mergeDeep(defaults || {}, options);
+  // mediaType.previews arrays are merged, instead of overwritten
+  if (defaults && defaults.mediaType.previews.length) {
+    mergedOptions.mediaType.previews = defaults.mediaType.previews.filter(preview => !mergedOptions.mediaType.previews.includes(preview)).concat(mergedOptions.mediaType.previews);
+  }
+  mergedOptions.mediaType.previews = mergedOptions.mediaType.previews.map(preview => preview.replace(/-preview/, ""));
+  return mergedOptions;
+}
+
+function addQueryParameters(url, parameters) {
+  const separator = /\?/.test(url) ? "&" : "?";
+  const names = Object.keys(parameters);
+  if (names.length === 0) {
+    return url;
+  }
+  return url + separator + names.map(name => {
+    if (name === "q") {
+      return "q=" + parameters.q.split("+").map(encodeURIComponent).join("+");
+    }
+    return `${name}=${encodeURIComponent(parameters[name])}`;
+  }).join("&");
+}
+
+const urlVariableRegex = /\{[^}]+\}/g;
+function removeNonChars(variableName) {
+  return variableName.replace(/^\W+|\W+$/g, "").split(/,/);
+}
+function extractUrlVariableNames(url) {
+  const matches = url.match(urlVariableRegex);
+  if (!matches) {
+    return [];
+  }
+  return matches.map(removeNonChars).reduce((a, b) => a.concat(b), []);
+}
+
+function omit(object, keysToOmit) {
+  return Object.keys(object).filter(option => !keysToOmit.includes(option)).reduce((obj, key) => {
+    obj[key] = object[key];
+    return obj;
+  }, {});
+}
+
+// Based on https://github.com/bramstein/url-template, licensed under BSD
+// TODO: create separate package.
+//
+// Copyright (c) 2012-2014, Bram Stein
+// All rights reserved.
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions
+// are met:
+//  1. Redistributions of source code must retain the above copyright
+//     notice, this list of conditions and the following disclaimer.
+//  2. Redistributions in binary form must reproduce the above copyright
+//     notice, this list of conditions and the following disclaimer in the
+//     documentation and/or other materials provided with the distribution.
+//  3. The name of the author may not be used to endorse or promote products
+//     derived from this software without specific prior written permission.
+// THIS SOFTWARE IS PROVIDED BY THE AUTHOR "AS IS" AND ANY EXPRESS OR IMPLIED
+// WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+// MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO
+// EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
+// INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+// BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
+// OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+// NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
+// EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* istanbul ignore file */
+function encodeReserved(str) {
+  return str.split(/(%[0-9A-Fa-f]{2})/g).map(function (part) {
+    if (!/%[0-9A-Fa-f]/.test(part)) {
+      part = encodeURI(part).replace(/%5B/g, "[").replace(/%5D/g, "]");
+    }
+    return part;
+  }).join("");
+}
+function encodeUnreserved(str) {
+  return encodeURIComponent(str).replace(/[!'()*]/g, function (c) {
+    return "%" + c.charCodeAt(0).toString(16).toUpperCase();
+  });
+}
+function encodeValue(operator, value, key) {
+  value = operator === "+" || operator === "#" ? encodeReserved(value) : encodeUnreserved(value);
+  if (key) {
+    return encodeUnreserved(key) + "=" + value;
+  } else {
+    return value;
+  }
+}
+function isDefined(value) {
+  return value !== undefined && value !== null;
+}
+function isKeyOperator(operator) {
+  return operator === ";" || operator === "&" || operator === "?";
+}
+function getValues(context, operator, key, modifier) {
+  var value = context[key],
+    result = [];
+  if (isDefined(value) && value !== "") {
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      value = value.toString();
+      if (modifier && modifier !== "*") {
+        value = value.substring(0, parseInt(modifier, 10));
+      }
+      result.push(encodeValue(operator, value, isKeyOperator(operator) ? key : ""));
+    } else {
+      if (modifier === "*") {
+        if (Array.isArray(value)) {
+          value.filter(isDefined).forEach(function (value) {
+            result.push(encodeValue(operator, value, isKeyOperator(operator) ? key : ""));
+          });
+        } else {
+          Object.keys(value).forEach(function (k) {
+            if (isDefined(value[k])) {
+              result.push(encodeValue(operator, value[k], k));
+            }
+          });
+        }
+      } else {
+        const tmp = [];
+        if (Array.isArray(value)) {
+          value.filter(isDefined).forEach(function (value) {
+            tmp.push(encodeValue(operator, value));
+          });
+        } else {
+          Object.keys(value).forEach(function (k) {
+            if (isDefined(value[k])) {
+              tmp.push(encodeUnreserved(k));
+              tmp.push(encodeValue(operator, value[k].toString()));
+            }
+          });
+        }
+        if (isKeyOperator(operator)) {
+          result.push(encodeUnreserved(key) + "=" + tmp.join(","));
+        } else if (tmp.length !== 0) {
+          result.push(tmp.join(","));
+        }
+      }
+    }
+  } else {
+    if (operator === ";") {
+      if (isDefined(value)) {
+        result.push(encodeUnreserved(key));
+      }
+    } else if (value === "" && (operator === "&" || operator === "?")) {
+      result.push(encodeUnreserved(key) + "=");
+    } else if (value === "") {
+      result.push("");
+    }
+  }
+  return result;
+}
+function parseUrl(template) {
+  return {
+    expand: expand.bind(null, template)
+  };
+}
+function expand(template, context) {
+  var operators = ["+", "#", ".", "/", ";", "?", "&"];
+  return template.replace(/\{([^\{\}]+)\}|([^\{\}]+)/g, function (_, expression, literal) {
+    if (expression) {
+      let operator = "";
+      const values = [];
+      if (operators.indexOf(expression.charAt(0)) !== -1) {
+        operator = expression.charAt(0);
+        expression = expression.substr(1);
+      }
+      expression.split(/,/g).forEach(function (variable) {
+        var tmp = /([^:\*]*)(?::(\d+)|(\*))?/.exec(variable);
+        values.push(getValues(context, operator, tmp[1], tmp[2] || tmp[3]));
+      });
+      if (operator && operator !== "+") {
+        var separator = ",";
+        if (operator === "?") {
+          separator = "&";
+        } else if (operator !== "#") {
+          separator = operator;
+        }
+        return (values.length !== 0 ? operator : "") + values.join(separator);
+      } else {
+        return values.join(",");
+      }
+    } else {
+      return encodeReserved(literal);
+    }
+  });
+}
+
+function parse(options) {
+  // https://fetch.spec.whatwg.org/#methods
+  let method = options.method.toUpperCase();
+  // replace :varname with {varname} to make it RFC 6570 compatible
+  let url = (options.url || "/").replace(/:([a-z]\w+)/g, "{$1}");
+  let headers = Object.assign({}, options.headers);
+  let body;
+  let parameters = omit(options, ["method", "baseUrl", "url", "headers", "request", "mediaType"]);
+  // extract variable names from URL to calculate remaining variables later
+  const urlVariableNames = extractUrlVariableNames(url);
+  url = parseUrl(url).expand(parameters);
+  if (!/^http/.test(url)) {
+    url = options.baseUrl + url;
+  }
+  const omittedParameters = Object.keys(options).filter(option => urlVariableNames.includes(option)).concat("baseUrl");
+  const remainingParameters = omit(parameters, omittedParameters);
+  const isBinaryRequest = /application\/octet-stream/i.test(headers.accept);
+  if (!isBinaryRequest) {
+    if (options.mediaType.format) {
+      // e.g. application/vnd.github.v3+json => application/vnd.github.v3.raw
+      headers.accept = headers.accept.split(/,/).map(preview => preview.replace(/application\/vnd(\.\w+)(\.v3)?(\.\w+)?(\+json)?$/, `application/vnd$1$2.${options.mediaType.format}`)).join(",");
+    }
+    if (options.mediaType.previews.length) {
+      const previewsFromAcceptHeader = headers.accept.match(/[\w-]+(?=-preview)/g) || [];
+      headers.accept = previewsFromAcceptHeader.concat(options.mediaType.previews).map(preview => {
+        const format = options.mediaType.format ? `.${options.mediaType.format}` : "+json";
+        return `application/vnd.github.${preview}-preview${format}`;
+      }).join(",");
+    }
+  }
+  // for GET/HEAD requests, set URL query parameters from remaining parameters
+  // for PATCH/POST/PUT/DELETE requests, set request body from remaining parameters
+  if (["GET", "HEAD"].includes(method)) {
+    url = addQueryParameters(url, remainingParameters);
+  } else {
+    if ("data" in remainingParameters) {
+      body = remainingParameters.data;
+    } else {
+      if (Object.keys(remainingParameters).length) {
+        body = remainingParameters;
+      }
+    }
+  }
+  // default content-type for JSON if body is set
+  if (!headers["content-type"] && typeof body !== "undefined") {
+    headers["content-type"] = "application/json; charset=utf-8";
+  }
+  // GitHub expects 'content-length: 0' header for PUT/PATCH requests without body.
+  // fetch does not allow to set `content-length` header, but we can set body to an empty string
+  if (["PATCH", "PUT"].includes(method) && typeof body === "undefined") {
+    body = "";
+  }
+  // Only return body/request keys if present
+  return Object.assign({
+    method,
+    url,
+    headers
+  }, typeof body !== "undefined" ? {
+    body
+  } : null, options.request ? {
+    request: options.request
+  } : null);
+}
+
+function endpointWithDefaults(defaults, route, options) {
+  return parse(merge(defaults, route, options));
+}
+
+function withDefaults(oldDefaults, newDefaults) {
+  const DEFAULTS = merge(oldDefaults, newDefaults);
+  const endpoint = endpointWithDefaults.bind(null, DEFAULTS);
+  return Object.assign(endpoint, {
+    DEFAULTS,
+    defaults: withDefaults.bind(null, DEFAULTS),
+    merge: merge.bind(null, DEFAULTS),
+    parse
+  });
+}
+
+const VERSION = "7.0.5";
+
+const userAgent = `octokit-endpoint.js/${VERSION} ${universalUserAgent.getUserAgent()}`;
+// DEFAULTS has all properties set that EndpointOptions has, except url.
+// So we use RequestParameters and add method as additional required property.
+const DEFAULTS = {
+  method: "GET",
+  baseUrl: "https://api.github.com",
+  headers: {
+    accept: "application/vnd.github.v3+json",
+    "user-agent": userAgent
+  },
+  mediaType: {
+    format: "",
+    previews: []
+  }
+};
+
+const endpoint = withDefaults(null, DEFAULTS);
+
+exports.endpoint = endpoint;
+//# sourceMappingURL=index.js.map
+
+
+/***/ }),
+
 /***/ 8467:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
@@ -3584,7 +3781,7 @@ var OAuthMethods = __nccwpck_require__(8445);
 var authUnauthenticated = __nccwpck_require__(9567);
 var fromEntries = _interopDefault(__nccwpck_require__(6522));
 
-const VERSION = "4.2.0";
+const VERSION = "4.2.1";
 
 function addEventHandler(state, eventName, eventHandler) {
   if (Array.isArray(eventName)) {
@@ -3646,23 +3843,13 @@ async function getUserOctokitWithState(state, options) {
 }
 
 function getWebFlowAuthorizationUrlWithState(state, options) {
-  let allowSignup;
-  if (options.allowSignup === undefined && state.allowSignup === undefined) {
-    allowSignup = true;
-  } else if (options.allowSignup === undefined && state.allowSignup !== undefined) {
-    allowSignup = state.allowSignup;
-  } else if (state.allowSignup === undefined && options.allowSignup !== undefined) {
-    allowSignup = options.allowSignup;
-  } else {
-    allowSignup = options.allowSignup || state.allowSignup;
-  }
   const optionsWithDefaults = {
     clientId: state.clientId,
     request: state.octokit.request,
     ...options,
-    allowSignup,
-    redirectUrl: options.redirectUrl || state.redirectUrl,
-    scopes: options.scopes || state.defaultScopes
+    allowSignup: state.allowSignup ?? options.allowSignup,
+    redirectUrl: options.redirectUrl ?? state.redirectUrl,
+    scopes: options.scopes ?? state.defaultScopes
   };
   return OAuthMethods.getWebFlowAuthorizationUrl({
     clientType: state.clientType,
@@ -4476,11 +4663,11 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
 
 var oauthAuthorizationUrl = __nccwpck_require__(2272);
-var request = __nccwpck_require__(6234);
-var requestError = __nccwpck_require__(537);
+var request = __nccwpck_require__(3315);
+var requestError = __nccwpck_require__(2434);
 var btoa = _interopDefault(__nccwpck_require__(2358));
 
-const VERSION = "2.0.4";
+const VERSION = "2.0.5";
 
 function requestToOAuthBaseUrl(request) {
   const endpointDefaults = request.endpoint.DEFAULTS;
@@ -4749,6 +4936,402 @@ exports.getWebFlowAuthorizationUrl = getWebFlowAuthorizationUrl;
 exports.refreshToken = refreshToken;
 exports.resetToken = resetToken;
 exports.scopeToken = scopeToken;
+//# sourceMappingURL=index.js.map
+
+
+/***/ }),
+
+/***/ 2434:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+
+function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
+
+var deprecation = __nccwpck_require__(8932);
+var once = _interopDefault(__nccwpck_require__(1223));
+
+const logOnceCode = once(deprecation => console.warn(deprecation));
+const logOnceHeaders = once(deprecation => console.warn(deprecation));
+/**
+ * Error with extra properties to help with debugging
+ */
+class RequestError extends Error {
+  constructor(message, statusCode, options) {
+    super(message);
+    // Maintains proper stack trace (only available on V8)
+    /* istanbul ignore next */
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, this.constructor);
+    }
+    this.name = "HttpError";
+    this.status = statusCode;
+    let headers;
+    if ("headers" in options && typeof options.headers !== "undefined") {
+      headers = options.headers;
+    }
+    if ("response" in options) {
+      this.response = options.response;
+      headers = options.response.headers;
+    }
+    // redact request credentials without mutating original request options
+    const requestCopy = Object.assign({}, options.request);
+    if (options.request.headers.authorization) {
+      requestCopy.headers = Object.assign({}, options.request.headers, {
+        authorization: options.request.headers.authorization.replace(/ .*$/, " [REDACTED]")
+      });
+    }
+    requestCopy.url = requestCopy.url
+    // client_id & client_secret can be passed as URL query parameters to increase rate limit
+    // see https://developer.github.com/v3/#increasing-the-unauthenticated-rate-limit-for-oauth-applications
+    .replace(/\bclient_secret=\w+/g, "client_secret=[REDACTED]")
+    // OAuth tokens can be passed as URL query parameters, although it is not recommended
+    // see https://developer.github.com/v3/#oauth2-token-sent-in-a-header
+    .replace(/\baccess_token=\w+/g, "access_token=[REDACTED]");
+    this.request = requestCopy;
+    // deprecations
+    Object.defineProperty(this, "code", {
+      get() {
+        logOnceCode(new deprecation.Deprecation("[@octokit/request-error] `error.code` is deprecated, use `error.status`."));
+        return statusCode;
+      }
+    });
+    Object.defineProperty(this, "headers", {
+      get() {
+        logOnceHeaders(new deprecation.Deprecation("[@octokit/request-error] `error.headers` is deprecated, use `error.response.headers`."));
+        return headers || {};
+      }
+    });
+  }
+}
+
+exports.RequestError = RequestError;
+//# sourceMappingURL=index.js.map
+
+
+/***/ }),
+
+/***/ 3315:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+
+function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
+
+var endpoint = __nccwpck_require__(9440);
+var universalUserAgent = __nccwpck_require__(5030);
+var isPlainObject = __nccwpck_require__(3287);
+var nodeFetch = _interopDefault(__nccwpck_require__(467));
+var requestError = __nccwpck_require__(2434);
+
+const VERSION = "6.2.3";
+
+function getBufferResponse(response) {
+  return response.arrayBuffer();
+}
+
+function fetchWrapper(requestOptions) {
+  const log = requestOptions.request && requestOptions.request.log ? requestOptions.request.log : console;
+  if (isPlainObject.isPlainObject(requestOptions.body) || Array.isArray(requestOptions.body)) {
+    requestOptions.body = JSON.stringify(requestOptions.body);
+  }
+  let headers = {};
+  let status;
+  let url;
+  const fetch = requestOptions.request && requestOptions.request.fetch || globalThis.fetch || /* istanbul ignore next */nodeFetch;
+  return fetch(requestOptions.url, Object.assign({
+    method: requestOptions.method,
+    body: requestOptions.body,
+    headers: requestOptions.headers,
+    redirect: requestOptions.redirect
+  },
+  // `requestOptions.request.agent` type is incompatible
+  // see https://github.com/octokit/types.ts/pull/264
+  requestOptions.request)).then(async response => {
+    url = response.url;
+    status = response.status;
+    for (const keyAndValue of response.headers) {
+      headers[keyAndValue[0]] = keyAndValue[1];
+    }
+    if ("deprecation" in headers) {
+      const matches = headers.link && headers.link.match(/<([^>]+)>; rel="deprecation"/);
+      const deprecationLink = matches && matches.pop();
+      log.warn(`[@octokit/request] "${requestOptions.method} ${requestOptions.url}" is deprecated. It is scheduled to be removed on ${headers.sunset}${deprecationLink ? `. See ${deprecationLink}` : ""}`);
+    }
+    if (status === 204 || status === 205) {
+      return;
+    }
+    // GitHub API returns 200 for HEAD requests
+    if (requestOptions.method === "HEAD") {
+      if (status < 400) {
+        return;
+      }
+      throw new requestError.RequestError(response.statusText, status, {
+        response: {
+          url,
+          status,
+          headers,
+          data: undefined
+        },
+        request: requestOptions
+      });
+    }
+    if (status === 304) {
+      throw new requestError.RequestError("Not modified", status, {
+        response: {
+          url,
+          status,
+          headers,
+          data: await getResponseData(response)
+        },
+        request: requestOptions
+      });
+    }
+    if (status >= 400) {
+      const data = await getResponseData(response);
+      const error = new requestError.RequestError(toErrorMessage(data), status, {
+        response: {
+          url,
+          status,
+          headers,
+          data
+        },
+        request: requestOptions
+      });
+      throw error;
+    }
+    return getResponseData(response);
+  }).then(data => {
+    return {
+      status,
+      url,
+      headers,
+      data
+    };
+  }).catch(error => {
+    if (error instanceof requestError.RequestError) throw error;else if (error.name === "AbortError") throw error;
+    throw new requestError.RequestError(error.message, 500, {
+      request: requestOptions
+    });
+  });
+}
+async function getResponseData(response) {
+  const contentType = response.headers.get("content-type");
+  if (/application\/json/.test(contentType)) {
+    return response.json();
+  }
+  if (!contentType || /^text\/|charset=utf-8$/.test(contentType)) {
+    return response.text();
+  }
+  return getBufferResponse(response);
+}
+function toErrorMessage(data) {
+  if (typeof data === "string") return data;
+  // istanbul ignore else - just in case
+  if ("message" in data) {
+    if (Array.isArray(data.errors)) {
+      return `${data.message}: ${data.errors.map(JSON.stringify).join(", ")}`;
+    }
+    return data.message;
+  }
+  // istanbul ignore next - just in case
+  return `Unknown error: ${JSON.stringify(data)}`;
+}
+
+function withDefaults(oldEndpoint, newDefaults) {
+  const endpoint = oldEndpoint.defaults(newDefaults);
+  const newApi = function (route, parameters) {
+    const endpointOptions = endpoint.merge(route, parameters);
+    if (!endpointOptions.request || !endpointOptions.request.hook) {
+      return fetchWrapper(endpoint.parse(endpointOptions));
+    }
+    const request = (route, parameters) => {
+      return fetchWrapper(endpoint.parse(endpoint.merge(route, parameters)));
+    };
+    Object.assign(request, {
+      endpoint,
+      defaults: withDefaults.bind(null, endpoint)
+    });
+    return endpointOptions.request.hook(request, endpointOptions);
+  };
+  return Object.assign(newApi, {
+    endpoint,
+    defaults: withDefaults.bind(null, endpoint)
+  });
+}
+
+const request = withDefaults(endpoint.endpoint, {
+  headers: {
+    "user-agent": `octokit-request.js/${VERSION} ${universalUserAgent.getUserAgent()}`
+  }
+});
+
+exports.request = request;
+//# sourceMappingURL=index.js.map
+
+
+/***/ }),
+
+/***/ 4193:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+
+const VERSION = "6.0.0";
+
+/**
+ * Some “list” response that can be paginated have a different response structure
+ *
+ * They have a `total_count` key in the response (search also has `incomplete_results`,
+ * /installation/repositories also has `repository_selection`), as well as a key with
+ * the list of the items which name varies from endpoint to endpoint.
+ *
+ * Octokit normalizes these responses so that paginated results are always returned following
+ * the same structure. One challenge is that if the list response has only one page, no Link
+ * header is provided, so this header alone is not sufficient to check wether a response is
+ * paginated or not.
+ *
+ * We check if a "total_count" key is present in the response data, but also make sure that
+ * a "url" property is not, as the "Get the combined status for a specific ref" endpoint would
+ * otherwise match: https://developer.github.com/v3/repos/statuses/#get-the-combined-status-for-a-specific-ref
+ */
+function normalizePaginatedListResponse(response) {
+  // endpoints can respond with 204 if repository is empty
+  if (!response.data) {
+    return {
+      ...response,
+      data: []
+    };
+  }
+  const responseNeedsNormalization = "total_count" in response.data && !("url" in response.data);
+  if (!responseNeedsNormalization) return response;
+  // keep the additional properties intact as there is currently no other way
+  // to retrieve the same information.
+  const incompleteResults = response.data.incomplete_results;
+  const repositorySelection = response.data.repository_selection;
+  const totalCount = response.data.total_count;
+  delete response.data.incomplete_results;
+  delete response.data.repository_selection;
+  delete response.data.total_count;
+  const namespaceKey = Object.keys(response.data)[0];
+  const data = response.data[namespaceKey];
+  response.data = data;
+  if (typeof incompleteResults !== "undefined") {
+    response.data.incomplete_results = incompleteResults;
+  }
+  if (typeof repositorySelection !== "undefined") {
+    response.data.repository_selection = repositorySelection;
+  }
+  response.data.total_count = totalCount;
+  return response;
+}
+
+function iterator(octokit, route, parameters) {
+  const options = typeof route === "function" ? route.endpoint(parameters) : octokit.request.endpoint(route, parameters);
+  const requestMethod = typeof route === "function" ? route : octokit.request;
+  const method = options.method;
+  const headers = options.headers;
+  let url = options.url;
+  return {
+    [Symbol.asyncIterator]: () => ({
+      async next() {
+        if (!url) return {
+          done: true
+        };
+        try {
+          const response = await requestMethod({
+            method,
+            url,
+            headers
+          });
+          const normalizedResponse = normalizePaginatedListResponse(response);
+          // `response.headers.link` format:
+          // '<https://api.github.com/users/aseemk/followers?page=2>; rel="next", <https://api.github.com/users/aseemk/followers?page=2>; rel="last"'
+          // sets `url` to undefined if "next" URL is not present or `link` header is not set
+          url = ((normalizedResponse.headers.link || "").match(/<([^>]+)>;\s*rel="next"/) || [])[1];
+          return {
+            value: normalizedResponse
+          };
+        } catch (error) {
+          if (error.status !== 409) throw error;
+          url = "";
+          return {
+            value: {
+              status: 200,
+              headers: {},
+              data: []
+            }
+          };
+        }
+      }
+    })
+  };
+}
+
+function paginate(octokit, route, parameters, mapFn) {
+  if (typeof parameters === "function") {
+    mapFn = parameters;
+    parameters = undefined;
+  }
+  return gather(octokit, [], iterator(octokit, route, parameters)[Symbol.asyncIterator](), mapFn);
+}
+function gather(octokit, results, iterator, mapFn) {
+  return iterator.next().then(result => {
+    if (result.done) {
+      return results;
+    }
+    let earlyExit = false;
+    function done() {
+      earlyExit = true;
+    }
+    results = results.concat(mapFn ? mapFn(result.value, done) : result.value.data);
+    if (earlyExit) {
+      return results;
+    }
+    return gather(octokit, results, iterator, mapFn);
+  });
+}
+
+const composePaginateRest = Object.assign(paginate, {
+  iterator
+});
+
+const paginatingEndpoints = ["GET /app/hook/deliveries", "GET /app/installations", "GET /enterprises/{enterprise}/actions/runner-groups", "GET /enterprises/{enterprise}/dependabot/alerts", "GET /enterprises/{enterprise}/secret-scanning/alerts", "GET /events", "GET /gists", "GET /gists/public", "GET /gists/starred", "GET /gists/{gist_id}/comments", "GET /gists/{gist_id}/commits", "GET /gists/{gist_id}/forks", "GET /installation/repositories", "GET /issues", "GET /licenses", "GET /marketplace_listing/plans", "GET /marketplace_listing/plans/{plan_id}/accounts", "GET /marketplace_listing/stubbed/plans", "GET /marketplace_listing/stubbed/plans/{plan_id}/accounts", "GET /networks/{owner}/{repo}/events", "GET /notifications", "GET /organizations", "GET /orgs/{org}/actions/cache/usage-by-repository", "GET /orgs/{org}/actions/permissions/repositories", "GET /orgs/{org}/actions/required_workflows", "GET /orgs/{org}/actions/runner-groups", "GET /orgs/{org}/actions/runner-groups/{runner_group_id}/repositories", "GET /orgs/{org}/actions/runner-groups/{runner_group_id}/runners", "GET /orgs/{org}/actions/runners", "GET /orgs/{org}/actions/secrets", "GET /orgs/{org}/actions/secrets/{secret_name}/repositories", "GET /orgs/{org}/actions/variables", "GET /orgs/{org}/actions/variables/{name}/repositories", "GET /orgs/{org}/blocks", "GET /orgs/{org}/code-scanning/alerts", "GET /orgs/{org}/codespaces", "GET /orgs/{org}/codespaces/secrets", "GET /orgs/{org}/codespaces/secrets/{secret_name}/repositories", "GET /orgs/{org}/dependabot/alerts", "GET /orgs/{org}/dependabot/secrets", "GET /orgs/{org}/dependabot/secrets/{secret_name}/repositories", "GET /orgs/{org}/events", "GET /orgs/{org}/failed_invitations", "GET /orgs/{org}/hooks", "GET /orgs/{org}/hooks/{hook_id}/deliveries", "GET /orgs/{org}/installations", "GET /orgs/{org}/invitations", "GET /orgs/{org}/invitations/{invitation_id}/teams", "GET /orgs/{org}/issues", "GET /orgs/{org}/members", "GET /orgs/{org}/members/{username}/codespaces", "GET /orgs/{org}/migrations", "GET /orgs/{org}/migrations/{migration_id}/repositories", "GET /orgs/{org}/outside_collaborators", "GET /orgs/{org}/packages", "GET /orgs/{org}/packages/{package_type}/{package_name}/versions", "GET /orgs/{org}/projects", "GET /orgs/{org}/public_members", "GET /orgs/{org}/repos", "GET /orgs/{org}/secret-scanning/alerts", "GET /orgs/{org}/teams", "GET /orgs/{org}/teams/{team_slug}/discussions", "GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/comments", "GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/comments/{comment_number}/reactions", "GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/reactions", "GET /orgs/{org}/teams/{team_slug}/invitations", "GET /orgs/{org}/teams/{team_slug}/members", "GET /orgs/{org}/teams/{team_slug}/projects", "GET /orgs/{org}/teams/{team_slug}/repos", "GET /orgs/{org}/teams/{team_slug}/teams", "GET /projects/columns/{column_id}/cards", "GET /projects/{project_id}/collaborators", "GET /projects/{project_id}/columns", "GET /repos/{org}/{repo}/actions/required_workflows", "GET /repos/{owner}/{repo}/actions/artifacts", "GET /repos/{owner}/{repo}/actions/caches", "GET /repos/{owner}/{repo}/actions/required_workflows/{required_workflow_id_for_repo}/runs", "GET /repos/{owner}/{repo}/actions/runners", "GET /repos/{owner}/{repo}/actions/runs", "GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts", "GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}/jobs", "GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs", "GET /repos/{owner}/{repo}/actions/secrets", "GET /repos/{owner}/{repo}/actions/variables", "GET /repos/{owner}/{repo}/actions/workflows", "GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs", "GET /repos/{owner}/{repo}/assignees", "GET /repos/{owner}/{repo}/branches", "GET /repos/{owner}/{repo}/check-runs/{check_run_id}/annotations", "GET /repos/{owner}/{repo}/check-suites/{check_suite_id}/check-runs", "GET /repos/{owner}/{repo}/code-scanning/alerts", "GET /repos/{owner}/{repo}/code-scanning/alerts/{alert_number}/instances", "GET /repos/{owner}/{repo}/code-scanning/analyses", "GET /repos/{owner}/{repo}/codespaces", "GET /repos/{owner}/{repo}/codespaces/devcontainers", "GET /repos/{owner}/{repo}/codespaces/secrets", "GET /repos/{owner}/{repo}/collaborators", "GET /repos/{owner}/{repo}/comments", "GET /repos/{owner}/{repo}/comments/{comment_id}/reactions", "GET /repos/{owner}/{repo}/commits", "GET /repos/{owner}/{repo}/commits/{commit_sha}/comments", "GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls", "GET /repos/{owner}/{repo}/commits/{ref}/check-runs", "GET /repos/{owner}/{repo}/commits/{ref}/check-suites", "GET /repos/{owner}/{repo}/commits/{ref}/status", "GET /repos/{owner}/{repo}/commits/{ref}/statuses", "GET /repos/{owner}/{repo}/contributors", "GET /repos/{owner}/{repo}/dependabot/alerts", "GET /repos/{owner}/{repo}/dependabot/secrets", "GET /repos/{owner}/{repo}/deployments", "GET /repos/{owner}/{repo}/deployments/{deployment_id}/statuses", "GET /repos/{owner}/{repo}/environments", "GET /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies", "GET /repos/{owner}/{repo}/events", "GET /repos/{owner}/{repo}/forks", "GET /repos/{owner}/{repo}/hooks", "GET /repos/{owner}/{repo}/hooks/{hook_id}/deliveries", "GET /repos/{owner}/{repo}/invitations", "GET /repos/{owner}/{repo}/issues", "GET /repos/{owner}/{repo}/issues/comments", "GET /repos/{owner}/{repo}/issues/comments/{comment_id}/reactions", "GET /repos/{owner}/{repo}/issues/events", "GET /repos/{owner}/{repo}/issues/{issue_number}/comments", "GET /repos/{owner}/{repo}/issues/{issue_number}/events", "GET /repos/{owner}/{repo}/issues/{issue_number}/labels", "GET /repos/{owner}/{repo}/issues/{issue_number}/reactions", "GET /repos/{owner}/{repo}/issues/{issue_number}/timeline", "GET /repos/{owner}/{repo}/keys", "GET /repos/{owner}/{repo}/labels", "GET /repos/{owner}/{repo}/milestones", "GET /repos/{owner}/{repo}/milestones/{milestone_number}/labels", "GET /repos/{owner}/{repo}/notifications", "GET /repos/{owner}/{repo}/pages/builds", "GET /repos/{owner}/{repo}/projects", "GET /repos/{owner}/{repo}/pulls", "GET /repos/{owner}/{repo}/pulls/comments", "GET /repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions", "GET /repos/{owner}/{repo}/pulls/{pull_number}/comments", "GET /repos/{owner}/{repo}/pulls/{pull_number}/commits", "GET /repos/{owner}/{repo}/pulls/{pull_number}/files", "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews", "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/comments", "GET /repos/{owner}/{repo}/releases", "GET /repos/{owner}/{repo}/releases/{release_id}/assets", "GET /repos/{owner}/{repo}/releases/{release_id}/reactions", "GET /repos/{owner}/{repo}/secret-scanning/alerts", "GET /repos/{owner}/{repo}/secret-scanning/alerts/{alert_number}/locations", "GET /repos/{owner}/{repo}/stargazers", "GET /repos/{owner}/{repo}/subscribers", "GET /repos/{owner}/{repo}/tags", "GET /repos/{owner}/{repo}/teams", "GET /repos/{owner}/{repo}/topics", "GET /repositories", "GET /repositories/{repository_id}/environments/{environment_name}/secrets", "GET /repositories/{repository_id}/environments/{environment_name}/variables", "GET /search/code", "GET /search/commits", "GET /search/issues", "GET /search/labels", "GET /search/repositories", "GET /search/topics", "GET /search/users", "GET /teams/{team_id}/discussions", "GET /teams/{team_id}/discussions/{discussion_number}/comments", "GET /teams/{team_id}/discussions/{discussion_number}/comments/{comment_number}/reactions", "GET /teams/{team_id}/discussions/{discussion_number}/reactions", "GET /teams/{team_id}/invitations", "GET /teams/{team_id}/members", "GET /teams/{team_id}/projects", "GET /teams/{team_id}/repos", "GET /teams/{team_id}/teams", "GET /user/blocks", "GET /user/codespaces", "GET /user/codespaces/secrets", "GET /user/emails", "GET /user/followers", "GET /user/following", "GET /user/gpg_keys", "GET /user/installations", "GET /user/installations/{installation_id}/repositories", "GET /user/issues", "GET /user/keys", "GET /user/marketplace_purchases", "GET /user/marketplace_purchases/stubbed", "GET /user/memberships/orgs", "GET /user/migrations", "GET /user/migrations/{migration_id}/repositories", "GET /user/orgs", "GET /user/packages", "GET /user/packages/{package_type}/{package_name}/versions", "GET /user/public_emails", "GET /user/repos", "GET /user/repository_invitations", "GET /user/ssh_signing_keys", "GET /user/starred", "GET /user/subscriptions", "GET /user/teams", "GET /users", "GET /users/{username}/events", "GET /users/{username}/events/orgs/{org}", "GET /users/{username}/events/public", "GET /users/{username}/followers", "GET /users/{username}/following", "GET /users/{username}/gists", "GET /users/{username}/gpg_keys", "GET /users/{username}/keys", "GET /users/{username}/orgs", "GET /users/{username}/packages", "GET /users/{username}/projects", "GET /users/{username}/received_events", "GET /users/{username}/received_events/public", "GET /users/{username}/repos", "GET /users/{username}/ssh_signing_keys", "GET /users/{username}/starred", "GET /users/{username}/subscriptions"];
+
+function isPaginatingEndpoint(arg) {
+  if (typeof arg === "string") {
+    return paginatingEndpoints.includes(arg);
+  } else {
+    return false;
+  }
+}
+
+/**
+ * @param octokit Octokit instance
+ * @param options Options passed to Octokit constructor
+ */
+function paginateRest(octokit) {
+  return {
+    paginate: Object.assign(paginate.bind(null, octokit), {
+      iterator: iterator.bind(null, octokit)
+    })
+  };
+}
+paginateRest.VERSION = VERSION;
+
+exports.composePaginateRest = composePaginateRest;
+exports.isPaginatingEndpoint = isPaginatingEndpoint;
+exports.paginateRest = paginateRest;
+exports.paginatingEndpoints = paginatingEndpoints;
 //# sourceMappingURL=index.js.map
 
 
@@ -5493,30 +6076,322 @@ exports.verify = verify;
 /***/ }),
 
 /***/ 8513:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
+var __create = Object.create;
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+  }
+  return to;
+};
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
+var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-Object.defineProperty(exports, "__esModule", ({ value: true }));
+// pkg/dist-src/index.js
+var dist_src_exports = {};
+__export(dist_src_exports, {
+  Webhooks: () => Webhooks,
+  createEventHandler: () => createEventHandler,
+  createNodeMiddleware: () => createNodeMiddleware,
+  emitterEventNames: () => emitterEventNames
+});
+module.exports = __toCommonJS(dist_src_exports);
 
-function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
-
-var AggregateError = _interopDefault(__nccwpck_require__(1231));
-var webhooksMethods = __nccwpck_require__(9768);
-
-const createLogger = logger => ({
-  debug: () => {},
-  info: () => {},
+// pkg/dist-src/createLogger.js
+var createLogger = (logger) => ({
+  debug: () => {
+  },
+  info: () => {
+  },
   warn: console.warn.bind(console),
   error: console.error.bind(console),
   ...logger
 });
 
-// THIS FILE IS GENERATED - DO NOT EDIT DIRECTLY
-// make edits in scripts/generate-types.ts
-const emitterEventNames = ["branch_protection_rule", "branch_protection_rule.created", "branch_protection_rule.deleted", "branch_protection_rule.edited", "check_run", "check_run.completed", "check_run.created", "check_run.requested_action", "check_run.rerequested", "check_suite", "check_suite.completed", "check_suite.requested", "check_suite.rerequested", "code_scanning_alert", "code_scanning_alert.appeared_in_branch", "code_scanning_alert.closed_by_user", "code_scanning_alert.created", "code_scanning_alert.fixed", "code_scanning_alert.reopened", "code_scanning_alert.reopened_by_user", "commit_comment", "commit_comment.created", "create", "delete", "dependabot_alert", "dependabot_alert.created", "dependabot_alert.dismissed", "dependabot_alert.fixed", "dependabot_alert.reintroduced", "dependabot_alert.reopened", "deploy_key", "deploy_key.created", "deploy_key.deleted", "deployment", "deployment.created", "deployment_status", "deployment_status.created", "discussion", "discussion.answered", "discussion.category_changed", "discussion.created", "discussion.deleted", "discussion.edited", "discussion.labeled", "discussion.locked", "discussion.pinned", "discussion.transferred", "discussion.unanswered", "discussion.unlabeled", "discussion.unlocked", "discussion.unpinned", "discussion_comment", "discussion_comment.created", "discussion_comment.deleted", "discussion_comment.edited", "fork", "github_app_authorization", "github_app_authorization.revoked", "gollum", "installation", "installation.created", "installation.deleted", "installation.new_permissions_accepted", "installation.suspend", "installation.unsuspend", "installation_repositories", "installation_repositories.added", "installation_repositories.removed", "installation_target", "installation_target.renamed", "issue_comment", "issue_comment.created", "issue_comment.deleted", "issue_comment.edited", "issues", "issues.assigned", "issues.closed", "issues.deleted", "issues.demilestoned", "issues.edited", "issues.labeled", "issues.locked", "issues.milestoned", "issues.opened", "issues.pinned", "issues.reopened", "issues.transferred", "issues.unassigned", "issues.unlabeled", "issues.unlocked", "issues.unpinned", "label", "label.created", "label.deleted", "label.edited", "marketplace_purchase", "marketplace_purchase.cancelled", "marketplace_purchase.changed", "marketplace_purchase.pending_change", "marketplace_purchase.pending_change_cancelled", "marketplace_purchase.purchased", "member", "member.added", "member.edited", "member.removed", "membership", "membership.added", "membership.removed", "merge_group", "merge_group.checks_requested", "meta", "meta.deleted", "milestone", "milestone.closed", "milestone.created", "milestone.deleted", "milestone.edited", "milestone.opened", "org_block", "org_block.blocked", "org_block.unblocked", "organization", "organization.deleted", "organization.member_added", "organization.member_invited", "organization.member_removed", "organization.renamed", "package", "package.published", "package.updated", "page_build", "ping", "project", "project.closed", "project.created", "project.deleted", "project.edited", "project.reopened", "project_card", "project_card.converted", "project_card.created", "project_card.deleted", "project_card.edited", "project_card.moved", "project_column", "project_column.created", "project_column.deleted", "project_column.edited", "project_column.moved", "projects_v2_item", "projects_v2_item.archived", "projects_v2_item.converted", "projects_v2_item.created", "projects_v2_item.deleted", "projects_v2_item.edited", "projects_v2_item.reordered", "projects_v2_item.restored", "public", "pull_request", "pull_request.assigned", "pull_request.auto_merge_disabled", "pull_request.auto_merge_enabled", "pull_request.closed", "pull_request.converted_to_draft", "pull_request.dequeued", "pull_request.edited", "pull_request.labeled", "pull_request.locked", "pull_request.opened", "pull_request.queued", "pull_request.ready_for_review", "pull_request.reopened", "pull_request.review_request_removed", "pull_request.review_requested", "pull_request.synchronize", "pull_request.unassigned", "pull_request.unlabeled", "pull_request.unlocked", "pull_request_review", "pull_request_review.dismissed", "pull_request_review.edited", "pull_request_review.submitted", "pull_request_review_comment", "pull_request_review_comment.created", "pull_request_review_comment.deleted", "pull_request_review_comment.edited", "pull_request_review_thread", "pull_request_review_thread.resolved", "pull_request_review_thread.unresolved", "push", "registry_package", "registry_package.published", "registry_package.updated", "release", "release.created", "release.deleted", "release.edited", "release.prereleased", "release.published", "release.released", "release.unpublished", "repository", "repository.archived", "repository.created", "repository.deleted", "repository.edited", "repository.privatized", "repository.publicized", "repository.renamed", "repository.transferred", "repository.unarchived", "repository_dispatch", "repository_import", "repository_vulnerability_alert", "repository_vulnerability_alert.create", "repository_vulnerability_alert.dismiss", "repository_vulnerability_alert.reopen", "repository_vulnerability_alert.resolve", "secret_scanning_alert", "secret_scanning_alert.created", "secret_scanning_alert.reopened", "secret_scanning_alert.resolved", "security_advisory", "security_advisory.performed", "security_advisory.published", "security_advisory.updated", "security_advisory.withdrawn", "sponsorship", "sponsorship.cancelled", "sponsorship.created", "sponsorship.edited", "sponsorship.pending_cancellation", "sponsorship.pending_tier_change", "sponsorship.tier_changed", "star", "star.created", "star.deleted", "status", "team", "team.added_to_repository", "team.created", "team.deleted", "team.edited", "team.removed_from_repository", "team_add", "watch", "watch.started", "workflow_dispatch", "workflow_job", "workflow_job.completed", "workflow_job.in_progress", "workflow_job.queued", "workflow_run", "workflow_run.completed", "workflow_run.in_progress", "workflow_run.requested"];
+// pkg/dist-src/generated/webhook-names.js
+var emitterEventNames = [
+  "branch_protection_rule",
+  "branch_protection_rule.created",
+  "branch_protection_rule.deleted",
+  "branch_protection_rule.edited",
+  "check_run",
+  "check_run.completed",
+  "check_run.created",
+  "check_run.requested_action",
+  "check_run.rerequested",
+  "check_suite",
+  "check_suite.completed",
+  "check_suite.requested",
+  "check_suite.rerequested",
+  "code_scanning_alert",
+  "code_scanning_alert.appeared_in_branch",
+  "code_scanning_alert.closed_by_user",
+  "code_scanning_alert.created",
+  "code_scanning_alert.fixed",
+  "code_scanning_alert.reopened",
+  "code_scanning_alert.reopened_by_user",
+  "commit_comment",
+  "commit_comment.created",
+  "create",
+  "delete",
+  "dependabot_alert",
+  "dependabot_alert.created",
+  "dependabot_alert.dismissed",
+  "dependabot_alert.fixed",
+  "dependabot_alert.reintroduced",
+  "dependabot_alert.reopened",
+  "deploy_key",
+  "deploy_key.created",
+  "deploy_key.deleted",
+  "deployment",
+  "deployment.created",
+  "deployment_status",
+  "deployment_status.created",
+  "discussion",
+  "discussion.answered",
+  "discussion.category_changed",
+  "discussion.created",
+  "discussion.deleted",
+  "discussion.edited",
+  "discussion.labeled",
+  "discussion.locked",
+  "discussion.pinned",
+  "discussion.transferred",
+  "discussion.unanswered",
+  "discussion.unlabeled",
+  "discussion.unlocked",
+  "discussion.unpinned",
+  "discussion_comment",
+  "discussion_comment.created",
+  "discussion_comment.deleted",
+  "discussion_comment.edited",
+  "fork",
+  "github_app_authorization",
+  "github_app_authorization.revoked",
+  "gollum",
+  "installation",
+  "installation.created",
+  "installation.deleted",
+  "installation.new_permissions_accepted",
+  "installation.suspend",
+  "installation.unsuspend",
+  "installation_repositories",
+  "installation_repositories.added",
+  "installation_repositories.removed",
+  "installation_target",
+  "installation_target.renamed",
+  "issue_comment",
+  "issue_comment.created",
+  "issue_comment.deleted",
+  "issue_comment.edited",
+  "issues",
+  "issues.assigned",
+  "issues.closed",
+  "issues.deleted",
+  "issues.demilestoned",
+  "issues.edited",
+  "issues.labeled",
+  "issues.locked",
+  "issues.milestoned",
+  "issues.opened",
+  "issues.pinned",
+  "issues.reopened",
+  "issues.transferred",
+  "issues.unassigned",
+  "issues.unlabeled",
+  "issues.unlocked",
+  "issues.unpinned",
+  "label",
+  "label.created",
+  "label.deleted",
+  "label.edited",
+  "marketplace_purchase",
+  "marketplace_purchase.cancelled",
+  "marketplace_purchase.changed",
+  "marketplace_purchase.pending_change",
+  "marketplace_purchase.pending_change_cancelled",
+  "marketplace_purchase.purchased",
+  "member",
+  "member.added",
+  "member.edited",
+  "member.removed",
+  "membership",
+  "membership.added",
+  "membership.removed",
+  "merge_group",
+  "merge_group.checks_requested",
+  "meta",
+  "meta.deleted",
+  "milestone",
+  "milestone.closed",
+  "milestone.created",
+  "milestone.deleted",
+  "milestone.edited",
+  "milestone.opened",
+  "org_block",
+  "org_block.blocked",
+  "org_block.unblocked",
+  "organization",
+  "organization.deleted",
+  "organization.member_added",
+  "organization.member_invited",
+  "organization.member_removed",
+  "organization.renamed",
+  "package",
+  "package.published",
+  "package.updated",
+  "page_build",
+  "ping",
+  "project",
+  "project.closed",
+  "project.created",
+  "project.deleted",
+  "project.edited",
+  "project.reopened",
+  "project_card",
+  "project_card.converted",
+  "project_card.created",
+  "project_card.deleted",
+  "project_card.edited",
+  "project_card.moved",
+  "project_column",
+  "project_column.created",
+  "project_column.deleted",
+  "project_column.edited",
+  "project_column.moved",
+  "projects_v2_item",
+  "projects_v2_item.archived",
+  "projects_v2_item.converted",
+  "projects_v2_item.created",
+  "projects_v2_item.deleted",
+  "projects_v2_item.edited",
+  "projects_v2_item.reordered",
+  "projects_v2_item.restored",
+  "public",
+  "pull_request",
+  "pull_request.assigned",
+  "pull_request.auto_merge_disabled",
+  "pull_request.auto_merge_enabled",
+  "pull_request.closed",
+  "pull_request.converted_to_draft",
+  "pull_request.demilestoned",
+  "pull_request.dequeued",
+  "pull_request.edited",
+  "pull_request.labeled",
+  "pull_request.locked",
+  "pull_request.milestoned",
+  "pull_request.opened",
+  "pull_request.queued",
+  "pull_request.ready_for_review",
+  "pull_request.reopened",
+  "pull_request.review_request_removed",
+  "pull_request.review_requested",
+  "pull_request.synchronize",
+  "pull_request.unassigned",
+  "pull_request.unlabeled",
+  "pull_request.unlocked",
+  "pull_request_review",
+  "pull_request_review.dismissed",
+  "pull_request_review.edited",
+  "pull_request_review.submitted",
+  "pull_request_review_comment",
+  "pull_request_review_comment.created",
+  "pull_request_review_comment.deleted",
+  "pull_request_review_comment.edited",
+  "pull_request_review_thread",
+  "pull_request_review_thread.resolved",
+  "pull_request_review_thread.unresolved",
+  "push",
+  "registry_package",
+  "registry_package.published",
+  "registry_package.updated",
+  "release",
+  "release.created",
+  "release.deleted",
+  "release.edited",
+  "release.prereleased",
+  "release.published",
+  "release.released",
+  "release.unpublished",
+  "repository",
+  "repository.archived",
+  "repository.created",
+  "repository.deleted",
+  "repository.edited",
+  "repository.privatized",
+  "repository.publicized",
+  "repository.renamed",
+  "repository.transferred",
+  "repository.unarchived",
+  "repository_dispatch",
+  "repository_import",
+  "repository_vulnerability_alert",
+  "repository_vulnerability_alert.create",
+  "repository_vulnerability_alert.dismiss",
+  "repository_vulnerability_alert.reopen",
+  "repository_vulnerability_alert.resolve",
+  "secret_scanning_alert",
+  "secret_scanning_alert.created",
+  "secret_scanning_alert.reopened",
+  "secret_scanning_alert.resolved",
+  "security_advisory",
+  "security_advisory.performed",
+  "security_advisory.published",
+  "security_advisory.updated",
+  "security_advisory.withdrawn",
+  "sponsorship",
+  "sponsorship.cancelled",
+  "sponsorship.created",
+  "sponsorship.edited",
+  "sponsorship.pending_cancellation",
+  "sponsorship.pending_tier_change",
+  "sponsorship.tier_changed",
+  "star",
+  "star.created",
+  "star.deleted",
+  "status",
+  "team",
+  "team.added_to_repository",
+  "team.created",
+  "team.deleted",
+  "team.edited",
+  "team.removed_from_repository",
+  "team_add",
+  "watch",
+  "watch.started",
+  "workflow_dispatch",
+  "workflow_job",
+  "workflow_job.completed",
+  "workflow_job.in_progress",
+  "workflow_job.queued",
+  "workflow_run",
+  "workflow_run.completed",
+  "workflow_run.in_progress",
+  "workflow_run.requested"
+];
 
+// pkg/dist-src/event-handler/on.js
 function handleEventHandlers(state, webhookName, handler) {
   if (!state.hooks[webhookName]) {
     state.hooks[webhookName] = [];
@@ -5525,7 +6400,9 @@ function handleEventHandlers(state, webhookName, handler) {
 }
 function receiverOn(state, webhookNameOrNames, handler) {
   if (Array.isArray(webhookNameOrNames)) {
-    webhookNameOrNames.forEach(webhookName => receiverOn(state, webhookName, handler));
+    webhookNameOrNames.forEach(
+      (webhookName) => receiverOn(state, webhookName, handler)
+    );
     return;
   }
   if (["*", "error"].includes(webhookNameOrNames)) {
@@ -5534,7 +6411,9 @@ function receiverOn(state, webhookNameOrNames, handler) {
     throw new Error(message);
   }
   if (!emitterEventNames.includes(webhookNameOrNames)) {
-    state.log.warn(`"${webhookNameOrNames}" is not a known webhook name (https://developer.github.com/v3/activity/events/types/)`);
+    state.log.warn(
+      `"${webhookNameOrNames}" is not a known webhook name (https://developer.github.com/v3/activity/events/types/)`
+    );
   }
   handleEventHandlers(state, webhookNameOrNames, handler);
 }
@@ -5545,26 +6424,27 @@ function receiverOnError(state, handler) {
   handleEventHandlers(state, "error", handler);
 }
 
-// Errors thrown or rejected Promises in "error" event handlers are not handled
-// as they are in the webhook event handlers. If errors occur, we log a
-// "Fatal: Error occurred" message to stdout
+// pkg/dist-src/event-handler/receive.js
+var import_aggregate_error = __toESM(__nccwpck_require__(1231));
+
+// pkg/dist-src/event-handler/wrap-error-handler.js
 function wrapErrorHandler(handler, error) {
   let returnValue;
   try {
     returnValue = handler(error);
-  } catch (error) {
+  } catch (error2) {
     console.log('FATAL: Error occurred in "error" event handler');
-    console.log(error);
+    console.log(error2);
   }
   if (returnValue && returnValue.catch) {
-    returnValue.catch(error => {
+    returnValue.catch((error2) => {
       console.log('FATAL: Error occurred in "error" event handler');
-      console.log(error);
+      console.log(error2);
     });
   }
 }
 
-// @ts-ignore to address #245
+// pkg/dist-src/event-handler/receive.js
 function getHooks(state, eventPayloadAction, eventName) {
   const hooks = [state.hooks[eventName], state.hooks["*"]];
   if (eventPayloadAction) {
@@ -5572,64 +6452,65 @@ function getHooks(state, eventPayloadAction, eventName) {
   }
   return [].concat(...hooks.filter(Boolean));
 }
-// main handler function
 function receiverHandle(state, event) {
   const errorHandlers = state.hooks.error || [];
   if (event instanceof Error) {
-    const error = Object.assign(new AggregateError([event]), {
+    const error = Object.assign(new import_aggregate_error.default([event]), {
       event,
       errors: [event]
     });
-    errorHandlers.forEach(handler => wrapErrorHandler(handler, error));
+    errorHandlers.forEach((handler) => wrapErrorHandler(handler, error));
     return Promise.reject(error);
   }
   if (!event || !event.name) {
-    throw new AggregateError(["Event name not passed"]);
+    throw new import_aggregate_error.default(["Event name not passed"]);
   }
   if (!event.payload) {
-    throw new AggregateError(["Event payload not passed"]);
+    throw new import_aggregate_error.default(["Event payload not passed"]);
   }
-  // flatten arrays of event listeners and remove undefined values
-  const hooks = getHooks(state, "action" in event.payload ? event.payload.action : null, event.name);
+  const hooks = getHooks(
+    state,
+    "action" in event.payload ? event.payload.action : null,
+    event.name
+  );
   if (hooks.length === 0) {
     return Promise.resolve();
   }
   const errors = [];
-  const promises = hooks.map(handler => {
+  const promises = hooks.map((handler) => {
     let promise = Promise.resolve(event);
     if (state.transform) {
       promise = promise.then(state.transform);
     }
-    return promise.then(event => {
-      return handler(event);
-    }).catch(error => errors.push(Object.assign(error, {
-      event
-    })));
+    return promise.then((event2) => {
+      return handler(event2);
+    }).catch((error) => errors.push(Object.assign(error, { event })));
   });
   return Promise.all(promises).then(() => {
     if (errors.length === 0) {
       return;
     }
-    const error = new AggregateError(errors);
+    const error = new import_aggregate_error.default(errors);
     Object.assign(error, {
       event,
       errors
     });
-    errorHandlers.forEach(handler => wrapErrorHandler(handler, error));
+    errorHandlers.forEach((handler) => wrapErrorHandler(handler, error));
     throw error;
   });
 }
 
+// pkg/dist-src/event-handler/remove-listener.js
 function removeListener(state, webhookNameOrNames, handler) {
   if (Array.isArray(webhookNameOrNames)) {
-    webhookNameOrNames.forEach(webhookName => removeListener(state, webhookName, handler));
+    webhookNameOrNames.forEach(
+      (webhookName) => removeListener(state, webhookName, handler)
+    );
     return;
   }
   if (!state.hooks[webhookNameOrNames]) {
     return;
   }
-  // remove last hook that has been added, that way
-  // it behaves the same as removeListener
   for (let i = state.hooks[webhookNameOrNames].length - 1; i >= 0; i--) {
     if (state.hooks[webhookNameOrNames][i] === handler) {
       state.hooks[webhookNameOrNames].splice(i, 1);
@@ -5638,6 +6519,7 @@ function removeListener(state, webhookNameOrNames, handler) {
   }
 }
 
+// pkg/dist-src/event-handler/index.js
 function createEventHandler(options) {
   const state = {
     hooks: {},
@@ -5655,33 +6537,50 @@ function createEventHandler(options) {
   };
 }
 
-/**
- * GitHub sends its JSON with no indentation and no line break at the end
- */
+// pkg/dist-src/sign.js
+var import_webhooks_methods = __nccwpck_require__(9768);
+
+// pkg/dist-src/to-normalized-json-string.js
 function toNormalizedJsonString(payload) {
   const payloadString = JSON.stringify(payload);
-  return payloadString.replace(/[^\\]\\u[\da-f]{4}/g, s => {
+  return payloadString.replace(/[^\\]\\u[\da-f]{4}/g, (s) => {
     return s.substr(0, 3) + s.substr(3).toUpperCase();
   });
 }
 
+// pkg/dist-src/sign.js
 async function sign(secret, payload) {
-  return webhooksMethods.sign(secret, typeof payload === "string" ? payload : toNormalizedJsonString(payload));
+  return (0, import_webhooks_methods.sign)(
+    secret,
+    typeof payload === "string" ? payload : toNormalizedJsonString(payload)
+  );
 }
 
+// pkg/dist-src/verify.js
+var import_webhooks_methods2 = __nccwpck_require__(9768);
 async function verify(secret, payload, signature) {
-  return webhooksMethods.verify(secret, typeof payload === "string" ? payload : toNormalizedJsonString(payload), signature);
+  return (0, import_webhooks_methods2.verify)(
+    secret,
+    typeof payload === "string" ? payload : toNormalizedJsonString(payload),
+    signature
+  );
 }
 
+// pkg/dist-src/verify-and-receive.js
+var import_webhooks_methods3 = __nccwpck_require__(9768);
 async function verifyAndReceive(state, event) {
-  // verify will validate that the secret is not undefined
-  const matchesSignature = await webhooksMethods.verify(state.secret, typeof event.payload === "object" ? toNormalizedJsonString(event.payload) : event.payload, event.signature);
+  const matchesSignature = await (0, import_webhooks_methods3.verify)(
+    state.secret,
+    typeof event.payload === "object" ? toNormalizedJsonString(event.payload) : event.payload,
+    event.signature
+  );
   if (!matchesSignature) {
-    const error = new Error("[@octokit/webhooks] signature does not match event payload and secret");
-    return state.eventHandler.receive(Object.assign(error, {
-      event,
-      status: 400
-    }));
+    const error = new Error(
+      "[@octokit/webhooks] signature does not match event payload and secret"
+    );
+    return state.eventHandler.receive(
+      Object.assign(error, { event, status: 400 })
+    );
   }
   return state.eventHandler.receive({
     id: event.id,
@@ -5690,42 +6589,46 @@ async function verifyAndReceive(state, event) {
   });
 }
 
-const WEBHOOK_HEADERS = ["x-github-event", "x-hub-signature-256", "x-github-delivery"];
-// https://docs.github.com/en/developers/webhooks-and-events/webhook-events-and-payloads#delivery-headers
+// pkg/dist-src/middleware/node/get-missing-headers.js
+var WEBHOOK_HEADERS = [
+  "x-github-event",
+  "x-hub-signature-256",
+  "x-github-delivery"
+];
 function getMissingHeaders(request) {
-  return WEBHOOK_HEADERS.filter(header => !(header in request.headers));
+  return WEBHOOK_HEADERS.filter((header) => !(header in request.headers));
 }
 
-// @ts-ignore to address #245
+// pkg/dist-src/middleware/node/get-payload.js
+var import_aggregate_error2 = __toESM(__nccwpck_require__(1231));
 function getPayload(request) {
-  // If request.body already exists we can stop here
-  // See https://github.com/octokit/webhooks.js/pull/23
   if (request.body) {
     if (typeof request.body !== "string") {
-      console.warn("[@octokit/webhooks] Passing the payload as a JSON object in `request.body` is deprecated and will be removed in a future release of `@octokit/webhooks`, please pass it as a a `string` instead.");
+      console.warn(
+        "[@octokit/webhooks] Passing the payload as a JSON object in `request.body` is deprecated and will be removed in a future release of `@octokit/webhooks`, please pass it as a a `string` instead."
+      );
     }
     return Promise.resolve(request.body);
   }
   return new Promise((resolve, reject) => {
     let data = "";
     request.setEncoding("utf8");
-    // istanbul ignore next
-    request.on("error", error => reject(new AggregateError([error])));
-    request.on("data", chunk => data += chunk);
+    request.on("error", (error) => reject(new import_aggregate_error2.default([error])));
+    request.on("data", (chunk) => data += chunk);
     request.on("end", () => {
       try {
-        // Call JSON.parse() only to check if the payload is valid JSON
         JSON.parse(data);
         resolve(data);
       } catch (error) {
         error.message = "Invalid JSON";
         error.status = 400;
-        reject(new AggregateError([error]));
+        reject(new import_aggregate_error2.default([error]));
       }
     });
   });
 }
 
+// pkg/dist-src/middleware/node/middleware.js
 async function middleware(webhooks, options, request, response, next) {
   let pathname;
   try {
@@ -5734,9 +6637,11 @@ async function middleware(webhooks, options, request, response, next) {
     response.writeHead(422, {
       "content-type": "application/json"
     });
-    response.end(JSON.stringify({
-      error: `Request URL could not be parsed: ${request.url}`
-    }));
+    response.end(
+      JSON.stringify({
+        error: `Request URL could not be parsed: ${request.url}`
+      })
+    );
     return;
   }
   const isUnknownRoute = request.method !== "POST" || pathname !== options.path;
@@ -5748,17 +6653,16 @@ async function middleware(webhooks, options, request, response, next) {
       return options.onUnhandledRequest(request, response);
     }
   }
-  // Check if the Content-Type header is `application/json` and allow for charset to be specified in it
-  // Otherwise, return a 415 Unsupported Media Type error
-  // See https://github.com/octokit/webhooks.js/issues/158
   if (!request.headers["content-type"] || !request.headers["content-type"].startsWith("application/json")) {
     response.writeHead(415, {
       "content-type": "application/json",
       accept: "application/json"
     });
-    response.end(JSON.stringify({
-      error: `Unsupported "Content-Type" header value. Must be "application/json"`
-    }));
+    response.end(
+      JSON.stringify({
+        error: `Unsupported "Content-Type" header value. Must be "application/json"`
+      })
+    );
     return;
   }
   const missingHeaders = getMissingHeaders(request).join(", ");
@@ -5766,63 +6670,73 @@ async function middleware(webhooks, options, request, response, next) {
     response.writeHead(400, {
       "content-type": "application/json"
     });
-    response.end(JSON.stringify({
-      error: `Required headers missing: ${missingHeaders}`
-    }));
+    response.end(
+      JSON.stringify({
+        error: `Required headers missing: ${missingHeaders}`
+      })
+    );
     return;
   }
   const eventName = request.headers["x-github-event"];
   const signatureSHA256 = request.headers["x-hub-signature-256"];
   const id = request.headers["x-github-delivery"];
   options.log.debug(`${eventName} event received (id: ${id})`);
-  // GitHub will abort the request if it does not receive a response within 10s
-  // See https://github.com/octokit/webhooks.js/issues/185
   let didTimeout = false;
   const timeout = setTimeout(() => {
     didTimeout = true;
     response.statusCode = 202;
     response.end("still processing\n");
-  }, 9000).unref();
+  }, 9e3).unref();
   try {
     const payload = await getPayload(request);
     await webhooks.verifyAndReceive({
-      id: id,
+      id,
       name: eventName,
-      payload: payload,
+      payload,
       signature: signatureSHA256
     });
     clearTimeout(timeout);
-    if (didTimeout) return;
+    if (didTimeout)
+      return;
     response.end("ok\n");
   } catch (error) {
     clearTimeout(timeout);
-    if (didTimeout) return;
+    if (didTimeout)
+      return;
     const err = Array.from(error)[0];
     const errorMessage = err.message ? `${err.name}: ${err.message}` : "Error: An Unspecified error occurred";
     response.statusCode = typeof err.status !== "undefined" ? err.status : 500;
     options.log.error(error);
-    response.end(JSON.stringify({
-      error: errorMessage
-    }));
+    response.end(
+      JSON.stringify({
+        error: errorMessage
+      })
+    );
   }
 }
 
+// pkg/dist-src/middleware/node/on-unhandled-request-default.js
 function onUnhandledRequestDefault(request, response) {
   response.writeHead(404, {
     "content-type": "application/json"
   });
-  response.end(JSON.stringify({
-    error: `Unknown route: ${request.method} ${request.url}`
-  }));
+  response.end(
+    JSON.stringify({
+      error: `Unknown route: ${request.method} ${request.url}`
+    })
+  );
 }
 
+// pkg/dist-src/middleware/node/index.js
 function createNodeMiddleware(webhooks, {
   path = "/api/github/webhooks",
   onUnhandledRequest = onUnhandledRequestDefault,
   log = createLogger()
 } = {}) {
   const deprecateOnUnhandledRequest = (request, response) => {
-    console.warn("[@octokit/webhooks] `onUnhandledRequest()` is deprecated and will be removed in a future release of `@octokit/webhooks`");
+    console.warn(
+      "[@octokit/webhooks] `onUnhandledRequest()` is deprecated and will be removed in a future release of `@octokit/webhooks`"
+    );
     return onUnhandledRequest(request, response);
   };
   return middleware.bind(null, webhooks, {
@@ -5832,8 +6746,8 @@ function createNodeMiddleware(webhooks, {
   });
 }
 
-// U holds the return value of `transform` function in Options
-class Webhooks {
+// pkg/dist-src/index.js
+var Webhooks = class {
   constructor(options) {
     if (!options || !options.secret) {
       throw new Error("[@octokit/webhooks] options.secret required");
@@ -5847,7 +6761,9 @@ class Webhooks {
     this.sign = sign.bind(null, options.secret);
     this.verify = (eventPayload, signature) => {
       if (typeof eventPayload === "object") {
-        console.warn("[@octokit/webhooks] Passing a JSON payload object to `verify()` is deprecated and the functionality will be removed in a future release of `@octokit/webhooks`");
+        console.warn(
+          "[@octokit/webhooks] Passing a JSON payload object to `verify()` is deprecated and the functionality will be removed in a future release of `@octokit/webhooks`"
+        );
       }
       return verify(options.secret, eventPayload, signature);
     };
@@ -5856,20 +6772,18 @@ class Webhooks {
     this.onError = state.eventHandler.onError;
     this.removeListener = state.eventHandler.removeListener;
     this.receive = state.eventHandler.receive;
-    this.verifyAndReceive = options => {
-      if (typeof options.payload === "object") {
-        console.warn("[@octokit/webhooks] Passing a JSON payload object to `verifyAndReceive()` is deprecated and the functionality will be removed in a future release of `@octokit/webhooks`");
+    this.verifyAndReceive = (options2) => {
+      if (typeof options2.payload === "object") {
+        console.warn(
+          "[@octokit/webhooks] Passing a JSON payload object to `verifyAndReceive()` is deprecated and the functionality will be removed in a future release of `@octokit/webhooks`"
+        );
       }
-      return verifyAndReceive(state, options);
+      return verifyAndReceive(state, options2);
     };
   }
-}
-
-exports.Webhooks = Webhooks;
-exports.createEventHandler = createEventHandler;
-exports.createNodeMiddleware = createNodeMiddleware;
-exports.emitterEventNames = emitterEventNames;
-//# sourceMappingURL=index.js.map
+};
+// Annotate the CommonJS export names for ESM import in node:
+0 && (0);
 
 
 /***/ }),
