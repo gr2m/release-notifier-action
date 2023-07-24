@@ -1,7 +1,8 @@
 const { inspect } = require("util");
 
 const core = require("@actions/core");
-const { App } = require("@octokit/app");
+const { App, Octokit } = require("octokit");
+const { fetch } = require("undici");
 
 const eventPayload = require(process.env.TEST_GITHUB_EVENT_PATH ||
   process.env.GITHUB_EVENT_PATH);
@@ -13,6 +14,10 @@ async function main() {
     const app = new App({
       appId: +core.getInput("app_id"),
       privateKey: core.getInput("private_key"),
+      Octokit: Octokit.defaults({
+        userAgent: "gr2m/release-notifier-action",
+        request: { fetch },
+      }),
     });
     const eventType =
       core.getInput("dispatch_event_type") ||
