@@ -41614,7 +41614,10 @@ if (util.nodeMajor > 16 || (util.nodeMajor === 16 && util.nodeMinor >= 8)) {
     try {
       return await fetchImpl(...arguments)
     } catch (err) {
-      Error.captureStackTrace(err, this)
+      if (typeof err === 'object') {
+        Error.captureStackTrace(err, this)
+      }
+
       throw err
     }
   }
@@ -41895,8 +41898,8 @@ module.exports = {
 "use strict";
 
 
-const { InvalidArgumentError, RequestAbortedError, SocketError } = __nccwpck_require__(8045)
 const { AsyncResource } = __nccwpck_require__(852)
+const { InvalidArgumentError, RequestAbortedError, SocketError } = __nccwpck_require__(8045)
 const util = __nccwpck_require__(3983)
 const { addSignal, removeSignal } = __nccwpck_require__(7032)
 
@@ -41945,7 +41948,13 @@ class ConnectHandler extends AsyncResource {
     removeSignal(this)
 
     this.callback = null
-    const headers = this.responseHeaders === 'raw' ? util.parseRawHeaders(rawHeaders) : util.parseHeaders(rawHeaders)
+
+    let headers = rawHeaders
+    // Indicates is an HTTP2Session
+    if (headers != null) {
+      headers = this.responseHeaders === 'raw' ? util.parseRawHeaders(rawHeaders) : util.parseHeaders(rawHeaders)
+    }
+
     this.runInAsyncScope(callback, null, null, {
       statusCode,
       headers,
@@ -42353,7 +42362,6 @@ class RequestHandler extends AsyncResource {
 
     this.callback = null
     this.res = body
-
     if (callback !== null) {
       if (this.throwOnError && statusCode >= 400) {
         this.runInAsyncScope(getResolveErrorBodyCallback, null,
@@ -43739,11 +43747,7 @@ class Cache {
       const reader = stream.getReader()
 
       // 11.3
-      readAllBytes(
-        reader,
-        (bytes) => bodyReadPromise.resolve(bytes),
-        (error) => bodyReadPromise.reject(error)
-      )
+      readAllBytes(reader).then(bodyReadPromise.resolve, bodyReadPromise.reject)
     } else {
       bodyReadPromise.resolve(undefined)
     }
@@ -44438,6 +44442,8 @@ module.exports = {
 
 const assert = __nccwpck_require__(9491)
 const net = __nccwpck_require__(1808)
+const http2 = __nccwpck_require__(5158)
+const { pipeline } = __nccwpck_require__(2781)
 const util = __nccwpck_require__(3983)
 const timers = __nccwpck_require__(9459)
 const Request = __nccwpck_require__(2905)
@@ -44499,8 +44505,30 @@ const {
   kDispatch,
   kInterceptors,
   kLocalAddress,
-  kMaxResponseSize
+  kMaxResponseSize,
+  kHTTPConnVersion,
+  // HTTP2
+  kHost,
+  kHTTP2Session,
+  kHTTP2SessionState,
+  kHTTP2BuildRequest,
+  kHTTP2CopyHeaders,
+  kHTTP1BuildRequest
 } = __nccwpck_require__(2785)
+const {
+  constants: {
+    HTTP2_HEADER_AUTHORITY,
+    HTTP2_HEADER_METHOD,
+    HTTP2_HEADER_PATH,
+    HTTP2_HEADER_CONTENT_LENGTH,
+    HTTP2_HEADER_EXPECT,
+    HTTP2_HEADER_STATUS
+  }
+} = http2
+
+// Experimental
+let h2ExperimentalWarned = false
+
 const FastBuffer = Buffer[Symbol.species]
 
 const kClosedResolve = Symbol('kClosedResolve')
@@ -44554,7 +44582,10 @@ class Client extends DispatcherBase {
     localAddress,
     maxResponseSize,
     autoSelectFamily,
-    autoSelectFamilyAttemptTimeout
+    autoSelectFamilyAttemptTimeout,
+    // h2
+    allowH2,
+    maxConcurrentStreams
   } = {}) {
     super()
 
@@ -44637,10 +44668,20 @@ class Client extends DispatcherBase {
       throw new InvalidArgumentError('autoSelectFamilyAttemptTimeout must be a positive number')
     }
 
+    // h2
+    if (allowH2 != null && typeof allowH2 !== 'boolean') {
+      throw new InvalidArgumentError('allowH2 must be a valid boolean value')
+    }
+
+    if (maxConcurrentStreams != null && (typeof maxConcurrentStreams !== 'number' || maxConcurrentStreams < 1)) {
+      throw new InvalidArgumentError('maxConcurrentStreams must be a possitive integer, greater than 0')
+    }
+
     if (typeof connect !== 'function') {
       connect = buildConnector({
         ...tls,
         maxCachedSessions,
+        allowH2,
         socketPath,
         timeout: connectTimeout,
         ...(util.nodeHasAutoSelectFamily && autoSelectFamily ? { autoSelectFamily, autoSelectFamilyAttemptTimeout } : undefined),
@@ -44672,6 +44713,18 @@ class Client extends DispatcherBase {
     this[kMaxRequests] = maxRequestsPerClient
     this[kClosedResolve] = null
     this[kMaxResponseSize] = maxResponseSize > -1 ? maxResponseSize : -1
+    this[kHTTPConnVersion] = 'h1'
+
+    // HTTP/2
+    this[kHTTP2Session] = null
+    this[kHTTP2SessionState] = !allowH2
+      ? null
+      : {
+        // streams: null, // Fixed queue of streams - For future support of `push`
+          openStreams: 0, // Keep track of them to decide wether or not unref the session
+          maxConcurrentStreams: maxConcurrentStreams != null ? maxConcurrentStreams : 100 // Max peerConcurrentStreams for a Node h2 server
+        }
+    this[kHost] = `${this[kUrl].hostname}${this[kUrl].port ? `:${this[kUrl].port}` : ''}`
 
     // kQueue is built up of 3 sections separated by
     // the kRunningIdx and kPendingIdx indices.
@@ -44730,7 +44783,9 @@ class Client extends DispatcherBase {
   [kDispatch] (opts, handler) {
     const origin = opts.origin || this[kUrl].origin
 
-    const request = new Request(origin, opts, handler)
+    const request = this[kHTTPConnVersion] === 'h2'
+      ? Request[kHTTP2BuildRequest](origin, opts, handler)
+      : Request[kHTTP1BuildRequest](origin, opts, handler)
 
     this[kQueue].push(request)
     if (this[kResuming]) {
@@ -44751,6 +44806,8 @@ class Client extends DispatcherBase {
   }
 
   async [kClose] () {
+    // TODO: for H2 we need to gracefully flush the remaining enqueued
+    // request and close each stream.
     return new Promise((resolve) => {
       if (!this[kSize]) {
         resolve(null)
@@ -44777,6 +44834,12 @@ class Client extends DispatcherBase {
         resolve()
       }
 
+      if (this[kHTTP2Session] != null) {
+        util.destroy(this[kHTTP2Session], err)
+        this[kHTTP2Session] = null
+        this[kHTTP2SessionState] = null
+      }
+
       if (!this[kSocket]) {
         queueMicrotask(callback)
       } else {
@@ -44786,6 +44849,64 @@ class Client extends DispatcherBase {
       resume(this)
     })
   }
+}
+
+function onHttp2SessionError (err) {
+  assert(err.code !== 'ERR_TLS_CERT_ALTNAME_INVALID')
+
+  this[kSocket][kError] = err
+
+  onError(this[kClient], err)
+}
+
+function onHttp2FrameError (type, code, id) {
+  const err = new InformationalError(`HTTP/2: "frameError" received - type ${type}, code ${code}`)
+
+  if (id === 0) {
+    this[kSocket][kError] = err
+    onError(this[kClient], err)
+  }
+}
+
+function onHttp2SessionEnd () {
+  util.destroy(this, new SocketError('other side closed'))
+  util.destroy(this[kSocket], new SocketError('other side closed'))
+}
+
+function onHTTP2GoAway (code) {
+  const client = this[kClient]
+  const err = new InformationalError(`HTTP/2: "GOAWAY" frame received with code ${code}`)
+  client[kSocket] = null
+  client[kHTTP2Session] = null
+
+  if (client.destroyed) {
+    assert(this[kPending] === 0)
+
+    // Fail entire queue.
+    const requests = client[kQueue].splice(client[kRunningIdx])
+    for (let i = 0; i < requests.length; i++) {
+      const request = requests[i]
+      errorRequest(this, request, err)
+    }
+  } else if (client[kRunning] > 0) {
+    // Fail head of pipeline.
+    const request = client[kQueue][client[kRunningIdx]]
+    client[kQueue][client[kRunningIdx]++] = null
+
+    errorRequest(client, request, err)
+  }
+
+  client[kPendingIdx] = client[kRunningIdx]
+
+  assert(client[kRunning] === 0)
+
+  client.emit('disconnect',
+    client[kUrl],
+    [client],
+    err
+  )
+
+  resume(client)
 }
 
 const constants = __nccwpck_require__(953)
@@ -45378,16 +45499,18 @@ function onSocketReadable () {
 }
 
 function onSocketError (err) {
-  const { [kParser]: parser } = this
+  const { [kClient]: client, [kParser]: parser } = this
 
   assert(err.code !== 'ERR_TLS_CERT_ALTNAME_INVALID')
 
-  // On Mac OS, we get an ECONNRESET even if there is a full body to be forwarded
-  // to the user.
-  if (err.code === 'ECONNRESET' && parser.statusCode && !parser.shouldKeepAlive) {
-    // We treat all incoming data so for as a valid response.
-    parser.onMessageComplete()
-    return
+  if (client[kHTTPConnVersion] !== 'h2') {
+    // On Mac OS, we get an ECONNRESET even if there is a full body to be forwarded
+    // to the user.
+    if (err.code === 'ECONNRESET' && parser.statusCode && !parser.shouldKeepAlive) {
+      // We treat all incoming data so for as a valid response.
+      parser.onMessageComplete()
+      return
+    }
   }
 
   this[kError] = err
@@ -45416,27 +45539,31 @@ function onError (client, err) {
 }
 
 function onSocketEnd () {
-  const { [kParser]: parser } = this
+  const { [kParser]: parser, [kClient]: client } = this
 
-  if (parser.statusCode && !parser.shouldKeepAlive) {
-    // We treat all incoming data so far as a valid response.
-    parser.onMessageComplete()
-    return
+  if (client[kHTTPConnVersion] !== 'h2') {
+    if (parser.statusCode && !parser.shouldKeepAlive) {
+      // We treat all incoming data so far as a valid response.
+      parser.onMessageComplete()
+      return
+    }
   }
 
   util.destroy(this, new SocketError('other side closed', util.getSocketInfo(this)))
 }
 
 function onSocketClose () {
-  const { [kClient]: client } = this
+  const { [kClient]: client, [kParser]: parser } = this
 
-  if (!this[kError] && this[kParser].statusCode && !this[kParser].shouldKeepAlive) {
-    // We treat all incoming data so far as a valid response.
-    this[kParser].onMessageComplete()
+  if (client[kHTTPConnVersion] === 'h1' && parser) {
+    if (!this[kError] && parser.statusCode && !parser.shouldKeepAlive) {
+      // We treat all incoming data so far as a valid response.
+      parser.onMessageComplete()
+    }
+
+    this[kParser].destroy()
+    this[kParser] = null
   }
-
-  this[kParser].destroy()
-  this[kParser] = null
 
   const err = this[kError] || new SocketError('closed', util.getSocketInfo(this))
 
@@ -45524,24 +45651,54 @@ async function connect (client) {
       return
     }
 
-    if (!llhttpInstance) {
-      llhttpInstance = await llhttpPromise
-      llhttpPromise = null
-    }
-
     client[kConnecting] = false
 
     assert(socket)
 
-    socket[kNoRef] = false
-    socket[kWriting] = false
-    socket[kReset] = false
-    socket[kBlocking] = false
-    socket[kError] = null
-    socket[kParser] = new Parser(client, socket, llhttpInstance)
-    socket[kClient] = client
+    const isH2 = socket.alpnProtocol === 'h2'
+    if (isH2) {
+      if (!h2ExperimentalWarned) {
+        h2ExperimentalWarned = true
+        process.emitWarning('H2 support is experimental, expect them to change at any time.', {
+          code: 'UNDICI-H2'
+        })
+      }
+
+      const session = http2.connect(client[kUrl], {
+        createConnection: () => socket,
+        peerMaxConcurrentStreams: client[kHTTP2SessionState].maxConcurrentStreams
+      })
+
+      client[kHTTPConnVersion] = 'h2'
+      session[kClient] = client
+      session[kSocket] = socket
+      session.on('error', onHttp2SessionError)
+      session.on('frameError', onHttp2FrameError)
+      session.on('end', onHttp2SessionEnd)
+      session.on('goaway', onHTTP2GoAway)
+      session.on('close', onSocketClose)
+      session.unref()
+
+      client[kHTTP2Session] = session
+      socket[kHTTP2Session] = session
+    } else {
+      if (!llhttpInstance) {
+        llhttpInstance = await llhttpPromise
+        llhttpPromise = null
+      }
+
+      socket[kNoRef] = false
+      socket[kWriting] = false
+      socket[kReset] = false
+      socket[kBlocking] = false
+      socket[kParser] = new Parser(client, socket, llhttpInstance)
+    }
+
     socket[kCounter] = 0
     socket[kMaxRequests] = client[kMaxRequests]
+    socket[kClient] = client
+    socket[kError] = null
+
     socket
       .on('error', onSocketError)
       .on('readable', onSocketReadable)
@@ -45640,7 +45797,7 @@ function _resume (client, sync) {
 
     const socket = client[kSocket]
 
-    if (socket && !socket.destroyed) {
+    if (socket && !socket.destroyed && socket.alpnProtocol !== 'h2') {
       if (client[kSize] === 0) {
         if (!socket[kNoRef] && socket.unref) {
           socket.unref()
@@ -45705,7 +45862,7 @@ function _resume (client, sync) {
       return
     }
 
-    if (!socket) {
+    if (!socket && !client[kHTTP2Session]) {
       connect(client)
       return
     }
@@ -45766,6 +45923,11 @@ function _resume (client, sync) {
 }
 
 function write (client, request) {
+  if (client[kHTTPConnVersion] === 'h2') {
+    writeH2(client, client[kHTTP2Session], request)
+    return
+  }
+
   const { body, method, path, host, upgrade, headers, blocking, reset } = request
 
   // https://tools.ietf.org/html/rfc7231#section-4.3.1
@@ -45921,8 +46083,285 @@ function write (client, request) {
   return true
 }
 
-function writeStream ({ body, client, request, socket, contentLength, header, expectsPayload }) {
+function writeH2 (client, session, request) {
+  const { body, method, path, host, upgrade, expectContinue, signal, headers: reqHeaders } = request
+
+  let headers
+  if (typeof reqHeaders === 'string') headers = Request[kHTTP2CopyHeaders](reqHeaders.trim())
+  else headers = reqHeaders
+
+  if (upgrade) {
+    errorRequest(client, request, new Error('Upgrade not supported for H2'))
+    return false
+  }
+
+  try {
+    // TODO(HTTP/2): Should we call onConnect immediately or on stream ready event?
+    request.onConnect((err) => {
+      if (request.aborted || request.completed) {
+        return
+      }
+
+      errorRequest(client, request, err || new RequestAbortedError())
+    })
+  } catch (err) {
+    errorRequest(client, request, err)
+  }
+
+  if (request.aborted) {
+    return false
+  }
+
+  let stream
+  const h2State = client[kHTTP2SessionState]
+
+  headers[HTTP2_HEADER_AUTHORITY] = host || client[kHost]
+  headers[HTTP2_HEADER_PATH] = path
+
+  if (method === 'CONNECT') {
+    session.ref()
+    // we are already connected, streams are pending, first request
+    // will create a new stream. We trigger a request to create the stream and wait until
+    // `ready` event is triggered
+    stream = session.request(headers, { endStream: false, signal })
+
+    if (stream.id && !stream.pending) {
+      request.onUpgrade(null, null, stream)
+      ++h2State.openStreams
+    } else {
+      stream.once('ready', () => {
+        request.onUpgrade(null, null, stream)
+        ++h2State.openStreams
+      })
+    }
+
+    stream.once('close', () => {
+      h2State.openStreams -= 1
+      // TODO(HTTP/2): unref only if current streams count is 0
+      if (h2State.openStreams === 0) session.unref()
+    })
+
+    return true
+  } else {
+    headers[HTTP2_HEADER_METHOD] = method
+  }
+
+  // https://tools.ietf.org/html/rfc7231#section-4.3.1
+  // https://tools.ietf.org/html/rfc7231#section-4.3.2
+  // https://tools.ietf.org/html/rfc7231#section-4.3.5
+
+  // Sending a payload body on a request that does not
+  // expect it can cause undefined behavior on some
+  // servers and corrupt connection state. Do not
+  // re-use the connection for further requests.
+
+  const expectsPayload = (
+    method === 'PUT' ||
+    method === 'POST' ||
+    method === 'PATCH'
+  )
+
+  if (body && typeof body.read === 'function') {
+    // Try to read EOF in order to get length.
+    body.read(0)
+  }
+
+  let contentLength = util.bodyLength(body)
+
+  if (contentLength == null) {
+    contentLength = request.contentLength
+  }
+
+  if (contentLength === 0 || !expectsPayload) {
+    // https://tools.ietf.org/html/rfc7230#section-3.3.2
+    // A user agent SHOULD NOT send a Content-Length header field when
+    // the request message does not contain a payload body and the method
+    // semantics do not anticipate such a body.
+
+    contentLength = null
+  }
+
+  if (request.contentLength != null && request.contentLength !== contentLength) {
+    if (client[kStrictContentLength]) {
+      errorRequest(client, request, new RequestContentLengthMismatchError())
+      return false
+    }
+
+    process.emitWarning(new RequestContentLengthMismatchError())
+  }
+
+  if (contentLength != null) {
+    assert(body, 'no body must not have content length')
+    headers[HTTP2_HEADER_CONTENT_LENGTH] = `${contentLength}`
+  }
+
+  session.ref()
+
+  if (expectContinue) {
+    headers[HTTP2_HEADER_EXPECT] = '100-continue'
+    /**
+     * @type {import('node:http2').ClientHttp2Stream}
+     */
+    stream = session.request(headers, { endStream: false, signal })
+
+    stream.once('continue', writeBodyH2)
+  } else {
+    /** @type {import('node:http2').ClientHttp2Stream} */
+    stream = session.request(headers, { endStream: false, signal })
+    writeBodyH2()
+  }
+
+  // Increment counter as we have new several streams open
+  ++h2State.openStreams
+
+  stream.once('response', headers => {
+    if (request.onHeaders(Number(headers[HTTP2_HEADER_STATUS]), headers, stream.resume.bind(stream), '') === false) {
+      stream.pause()
+    }
+  })
+
+  stream.once('end', () => {
+    request.onComplete([])
+  })
+
+  stream.on('data', (chunk) => {
+    if (request.onData(chunk) === false) stream.pause()
+  })
+
+  stream.once('close', () => {
+    h2State.openStreams -= 1
+    // TODO(HTTP/2): unref only if current streams count is 0
+    if (h2State.openStreams === 0) session.unref()
+  })
+
+  stream.once('error', function (err) {
+    if (client[kHTTP2Session] && !client[kHTTP2Session].destroyed && !this.closed && !this.destroyed) {
+      h2State.streams -= 1
+      util.destroy(stream, err)
+    }
+  })
+
+  stream.once('frameError', (type, code) => {
+    const err = new InformationalError(`HTTP/2: "frameError" received - type ${type}, code ${code}`)
+    errorRequest(client, request, err)
+
+    if (client[kHTTP2Session] && !client[kHTTP2Session].destroyed && !this.closed && !this.destroyed) {
+      h2State.streams -= 1
+      util.destroy(stream, err)
+    }
+  })
+
+  // stream.on('aborted', () => {
+  //   // TODO(HTTP/2): Support aborted
+  // })
+
+  // stream.on('timeout', () => {
+  //   // TODO(HTTP/2): Support timeout
+  // })
+
+  // stream.on('push', headers => {
+  //   // TODO(HTTP/2): Suppor push
+  // })
+
+  // stream.on('trailers', headers => {
+  //   // TODO(HTTP/2): Support trailers
+  // })
+
+  return true
+
+  function writeBodyH2 () {
+    /* istanbul ignore else: assertion */
+    if (!body) {
+      request.onRequestSent()
+    } else if (util.isBuffer(body)) {
+      assert(contentLength === body.byteLength, 'buffer body must have content length')
+      stream.cork()
+      stream.write(body)
+      stream.uncork()
+      request.onBodySent(body)
+      request.onRequestSent()
+    } else if (util.isBlobLike(body)) {
+      if (typeof body.stream === 'function') {
+        writeIterable({
+          client,
+          request,
+          contentLength,
+          h2stream: stream,
+          expectsPayload,
+          body: body.stream(),
+          socket: client[kSocket],
+          header: ''
+        })
+      } else {
+        writeBlob({
+          body,
+          client,
+          request,
+          contentLength,
+          expectsPayload,
+          h2stream: stream,
+          header: '',
+          socket: client[kSocket]
+        })
+      }
+    } else if (util.isStream(body)) {
+      writeStream({
+        body,
+        client,
+        request,
+        contentLength,
+        expectsPayload,
+        socket: client[kSocket],
+        h2stream: stream,
+        header: ''
+      })
+    } else if (util.isIterable(body)) {
+      writeIterable({
+        body,
+        client,
+        request,
+        contentLength,
+        expectsPayload,
+        header: '',
+        h2stream: stream,
+        socket: client[kSocket]
+      })
+    } else {
+      assert(false)
+    }
+  }
+}
+
+function writeStream ({ h2stream, body, client, request, socket, contentLength, header, expectsPayload }) {
   assert(contentLength !== 0 || client[kRunning] === 0, 'stream body cannot be pipelined')
+
+  if (client[kHTTPConnVersion] === 'h2') {
+    // For HTTP/2, is enough to pipe the stream
+    const pipe = pipeline(
+      body,
+      h2stream,
+      (err) => {
+        if (err) {
+          util.destroy(body, err)
+          util.destroy(h2stream, err)
+        } else {
+          request.onRequestSent()
+        }
+      }
+    )
+
+    pipe.on('data', onPipeData)
+    pipe.once('end', () => {
+      pipe.removeListener('data', onPipeData)
+      util.destroy(pipe)
+    })
+
+    function onPipeData (chunk) {
+      request.onBodySent(chunk)
+    }
+
+    return
+  }
 
   let finished = false
 
@@ -46004,9 +46443,10 @@ function writeStream ({ body, client, request, socket, contentLength, header, ex
     .on('error', onFinished)
 }
 
-async function writeBlob ({ body, client, request, socket, contentLength, header, expectsPayload }) {
+async function writeBlob ({ h2stream, body, client, request, socket, contentLength, header, expectsPayload }) {
   assert(contentLength === body.size, 'blob body must have content length')
 
+  const isH2 = client[kHTTPConnVersion] === 'h2'
   try {
     if (contentLength != null && contentLength !== body.size) {
       throw new RequestContentLengthMismatchError()
@@ -46014,10 +46454,16 @@ async function writeBlob ({ body, client, request, socket, contentLength, header
 
     const buffer = Buffer.from(await body.arrayBuffer())
 
-    socket.cork()
-    socket.write(`${header}content-length: ${contentLength}\r\n\r\n`, 'latin1')
-    socket.write(buffer)
-    socket.uncork()
+    if (isH2) {
+      h2stream.cork()
+      h2stream.write(buffer)
+      h2stream.uncork()
+    } else {
+      socket.cork()
+      socket.write(`${header}content-length: ${contentLength}\r\n\r\n`, 'latin1')
+      socket.write(buffer)
+      socket.uncork()
+    }
 
     request.onBodySent(buffer)
     request.onRequestSent()
@@ -46028,11 +46474,11 @@ async function writeBlob ({ body, client, request, socket, contentLength, header
 
     resume(client)
   } catch (err) {
-    util.destroy(socket, err)
+    util.destroy(isH2 ? h2stream : socket, err)
   }
 }
 
-async function writeIterable ({ body, client, request, socket, contentLength, header, expectsPayload }) {
+async function writeIterable ({ h2stream, body, client, request, socket, contentLength, header, expectsPayload }) {
   assert(contentLength !== 0 || client[kRunning] === 0, 'iterator body cannot be pipelined')
 
   let callback = null
@@ -46053,6 +46499,33 @@ async function writeIterable ({ body, client, request, socket, contentLength, he
       callback = resolve
     }
   })
+
+  if (client[kHTTPConnVersion] === 'h2') {
+    h2stream
+      .on('close', onDrain)
+      .on('drain', onDrain)
+
+    try {
+      // It's up to the user to somehow abort the async iterable.
+      for await (const chunk of body) {
+        if (socket[kError]) {
+          throw socket[kError]
+        }
+
+        if (!h2stream.write(chunk)) {
+          await waitForDrain()
+        }
+      }
+    } catch (err) {
+      h2stream.destroy(err)
+    } finally {
+      h2stream
+        .off('close', onDrain)
+        .off('drain', onDrain)
+    }
+
+    return
+  }
 
   socket
     .on('close', onDrain)
@@ -47189,7 +47662,7 @@ if (global.FinalizationRegistry) {
   }
 }
 
-function buildConnector ({ maxCachedSessions, socketPath, timeout, ...opts }) {
+function buildConnector ({ allowH2, maxCachedSessions, socketPath, timeout, ...opts }) {
   if (maxCachedSessions != null && (!Number.isInteger(maxCachedSessions) || maxCachedSessions < 0)) {
     throw new InvalidArgumentError('maxCachedSessions must be a positive integer or zero')
   }
@@ -47197,7 +47670,7 @@ function buildConnector ({ maxCachedSessions, socketPath, timeout, ...opts }) {
   const options = { path: socketPath, ...opts }
   const sessionCache = new SessionCache(maxCachedSessions == null ? 100 : maxCachedSessions)
   timeout = timeout == null ? 10e3 : timeout
-
+  allowH2 = allowH2 != null ? allowH2 : false
   return function connect ({ hostname, host, protocol, port, servername, localAddress, httpSocket }, callback) {
     let socket
     if (protocol === 'https:') {
@@ -47217,6 +47690,8 @@ function buildConnector ({ maxCachedSessions, socketPath, timeout, ...opts }) {
         servername,
         session,
         localAddress,
+        // TODO(HTTP/2): Add support for h2c
+        ALPNProtocols: allowH2 ? ['http/1.1', 'h2'] : ['http/1.1'],
         socket: httpSocket, // upgrade socket connection
         port: port || 443,
         host: hostname
@@ -47540,6 +48015,7 @@ const {
   NotSupportedError
 } = __nccwpck_require__(8045)
 const assert = __nccwpck_require__(9491)
+const { kHTTP2BuildRequest, kHTTP2CopyHeaders, kHTTP1BuildRequest } = __nccwpck_require__(2785)
 const util = __nccwpck_require__(3983)
 
 // tokenRegExp and headerCharRegex have been lifted from
@@ -47597,7 +48073,8 @@ class Request {
     headersTimeout,
     bodyTimeout,
     reset,
-    throwOnError
+    throwOnError,
+    expectContinue
   }, handler) {
     if (typeof path !== 'string') {
       throw new InvalidArgumentError('path must be a string')
@@ -47631,6 +48108,10 @@ class Request {
 
     if (reset != null && typeof reset !== 'boolean') {
       throw new InvalidArgumentError('invalid reset')
+    }
+
+    if (expectContinue != null && typeof expectContinue !== 'boolean') {
+      throw new InvalidArgumentError('invalid expectContinue')
     }
 
     this.headersTimeout = headersTimeout
@@ -47684,6 +48165,9 @@ class Request {
     this.contentType = null
 
     this.headers = ''
+
+    // Only for H2
+    this.expectContinue = expectContinue != null ? expectContinue : false
 
     if (Array.isArray(headers)) {
       if (headers.length % 2 !== 0) {
@@ -47804,13 +48288,62 @@ class Request {
     return this[kHandler].onError(error)
   }
 
+  // TODO: adjust to support H2
   addHeader (key, value) {
     processHeader(this, key, value)
     return this
   }
+
+  static [kHTTP1BuildRequest] (origin, opts, handler) {
+    // TODO: Migrate header parsing here, to make Requests
+    // HTTP agnostic
+    return new Request(origin, opts, handler)
+  }
+
+  static [kHTTP2BuildRequest] (origin, opts, handler) {
+    const headers = opts.headers
+    opts = { ...opts, headers: null }
+
+    const request = new Request(origin, opts, handler)
+
+    request.headers = {}
+
+    if (Array.isArray(headers)) {
+      if (headers.length % 2 !== 0) {
+        throw new InvalidArgumentError('headers array must be even')
+      }
+      for (let i = 0; i < headers.length; i += 2) {
+        processHeader(request, headers[i], headers[i + 1], true)
+      }
+    } else if (headers && typeof headers === 'object') {
+      const keys = Object.keys(headers)
+      for (let i = 0; i < keys.length; i++) {
+        const key = keys[i]
+        processHeader(request, key, headers[key], true)
+      }
+    } else if (headers != null) {
+      throw new InvalidArgumentError('headers must be an object or an array')
+    }
+
+    return request
+  }
+
+  static [kHTTP2CopyHeaders] (raw) {
+    const rawHeaders = raw.split('\r\n')
+
+    const headers = {}
+    for (const header of rawHeaders) {
+      const [key, value] = header.split(': ')
+
+      if (headers[key]) headers[key] += `,${value}`
+      else headers[key] = value
+    }
+
+    return headers
+  }
 }
 
-function processHeaderValue (key, val) {
+function processHeaderValue (key, val, skipAppend) {
   if (val && typeof val === 'object') {
     throw new InvalidArgumentError(`invalid ${key} header`)
   }
@@ -47821,10 +48354,10 @@ function processHeaderValue (key, val) {
     throw new InvalidArgumentError(`invalid ${key} header`)
   }
 
-  return `${key}: ${val}\r\n`
+  return skipAppend ? val : `${key}: ${val}\r\n`
 }
 
-function processHeader (request, key, val) {
+function processHeader (request, key, val, skipAppend = false) {
   if (val && (typeof val === 'object' && !Array.isArray(val))) {
     throw new InvalidArgumentError(`invalid ${key} header`)
   } else if (val === undefined) {
@@ -47892,10 +48425,16 @@ function processHeader (request, key, val) {
   } else {
     if (Array.isArray(val)) {
       for (let i = 0; i < val.length; i++) {
-        request.headers += processHeaderValue(key, val[i])
+        if (skipAppend) {
+          if (request.headers[key]) request.headers[key] += `,${processHeaderValue(key, val[i], skipAppend)}`
+          else request.headers[key] = processHeaderValue(key, val[i], skipAppend)
+        } else {
+          request.headers += processHeaderValue(key, val[i])
+        }
       }
     } else {
-      request.headers += processHeaderValue(key, val)
+      if (skipAppend) request.headers[key] = processHeaderValue(key, val, skipAppend)
+      else request.headers += processHeaderValue(key, val)
     }
   }
 }
@@ -47961,7 +48500,13 @@ module.exports = {
   kProxy: Symbol('proxy agent options'),
   kCounter: Symbol('socket request counter'),
   kInterceptors: Symbol('dispatch interceptors'),
-  kMaxResponseSize: Symbol('max response size')
+  kMaxResponseSize: Symbol('max response size'),
+  kHTTP2Session: Symbol('http2Session'),
+  kHTTP2SessionState: Symbol('http2Session state'),
+  kHTTP2BuildRequest: Symbol('http2 build request'),
+  kHTTP1BuildRequest: Symbol('http1 build request'),
+  kHTTP2CopyHeaders: Symbol('http2 copy headers'),
+  kHTTPConnVersion: Symbol('http connection version')
 }
 
 
@@ -48172,6 +48717,7 @@ function destroy (stream, err) {
       // See: https://github.com/nodejs/node/pull/38505/files
       stream.socket = null
     }
+
     stream.destroy(err)
   } else if (err) {
     process.nextTick((stream, err) => {
@@ -48191,6 +48737,9 @@ function parseKeepAliveTimeout (val) {
 }
 
 function parseHeaders (headers, obj = {}) {
+  // For H2 support
+  if (!Array.isArray(headers)) return headers
+
   for (let i = 0; i < headers.length; i += 2) {
     const key = headers[i].toString().toLowerCase()
     let val = obj[key]
@@ -48328,6 +48877,12 @@ function getSocketInfo (socket) {
   }
 }
 
+async function * convertIterableToBuffer (iterable) {
+  for await (const chunk of iterable) {
+    yield Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+  }
+}
+
 let ReadableStream
 function ReadableStreamFrom (iterable) {
   if (!ReadableStream) {
@@ -48335,8 +48890,7 @@ function ReadableStreamFrom (iterable) {
   }
 
   if (ReadableStream.from) {
-    // https://github.com/whatwg/streams/pull/1083
-    return ReadableStream.from(iterable)
+    return ReadableStream.from(convertIterableToBuffer(iterable))
   }
 
   let iterator
@@ -49089,6 +49643,7 @@ function bodyMixinMethods (instance) {
         try {
           busboy = Busboy({
             headers,
+            preservePath: true,
             defParamCharset: 'utf8'
           })
         } catch (err) {
@@ -49234,7 +49789,7 @@ async function specConsumeBody (object, convertBytesToJSValue, instance) {
 
   // 6. Otherwise, fully read object’s body given successSteps,
   //    errorSteps, and object’s relevant global object.
-  fullyReadBody(object[kState].body, successSteps, errorSteps)
+  await fullyReadBody(object[kState].body, successSteps, errorSteps)
 
   // 7. Return promise.
   return promise.promise
@@ -53094,7 +53649,7 @@ async function httpNetworkFetch (
       fetchParams.controller.connection.destroy()
 
       // 2. Return the appropriate network error for fetchParams.
-      return makeAppropriateNetworkError(fetchParams)
+      return makeAppropriateNetworkError(fetchParams, err)
     }
 
     return makeNetworkError(err)
@@ -53313,19 +53868,37 @@ async function httpNetworkFetch (
           let location = ''
 
           const headers = new Headers()
-          for (let n = 0; n < headersList.length; n += 2) {
-            const key = headersList[n + 0].toString('latin1')
-            const val = headersList[n + 1].toString('latin1')
 
-            if (key.toLowerCase() === 'content-encoding') {
-              // https://www.rfc-editor.org/rfc/rfc7231#section-3.1.2.1
-              // "All content-coding values are case-insensitive..."
-              codings = val.toLowerCase().split(',').map((x) => x.trim()).reverse()
-            } else if (key.toLowerCase() === 'location') {
-              location = val
+          // For H2, the headers are a plain JS object
+          // We distinguish between them and iterate accordingly
+          if (Array.isArray(headersList)) {
+            for (let n = 0; n < headersList.length; n += 2) {
+              const key = headersList[n + 0].toString('latin1')
+              const val = headersList[n + 1].toString('latin1')
+              if (key.toLowerCase() === 'content-encoding') {
+                // https://www.rfc-editor.org/rfc/rfc7231#section-3.1.2.1
+                // "All content-coding values are case-insensitive..."
+                codings = val.toLowerCase().split(',').map((x) => x.trim())
+              } else if (key.toLowerCase() === 'location') {
+                location = val
+              }
+
+              headers.append(key, val)
             }
+          } else {
+            const keys = Object.keys(headersList)
+            for (const key of keys) {
+              const val = headersList[key]
+              if (key.toLowerCase() === 'content-encoding') {
+                // https://www.rfc-editor.org/rfc/rfc7231#section-3.1.2.1
+                // "All content-coding values are case-insensitive..."
+                codings = val.toLowerCase().split(',').map((x) => x.trim()).reverse()
+              } else if (key.toLowerCase() === 'location') {
+                location = val
+              }
 
-            headers.append(key, val)
+              headers.append(key, val)
+            }
           }
 
           this.body = new Readable({ read: resume })
@@ -54462,7 +55035,7 @@ class Response {
   }
 
   // https://fetch.spec.whatwg.org/#dom-response-json
-  static json (data = undefined, init = {}) {
+  static json (data, init = {}) {
     webidl.argumentLengthCheck(arguments, 1, { header: 'Response.json' })
 
     if (init !== null) {
@@ -54839,15 +55412,15 @@ function filterResponse (response, type) {
 }
 
 // https://fetch.spec.whatwg.org/#appropriate-network-error
-function makeAppropriateNetworkError (fetchParams) {
+function makeAppropriateNetworkError (fetchParams, err = null) {
   // 1. Assert: fetchParams is canceled.
   assert(isCancelled(fetchParams))
 
   // 2. Return an aborted network error if fetchParams is aborted;
   // otherwise return a network error.
   return isAborted(fetchParams)
-    ? makeNetworkError(new DOMException('The operation was aborted.', 'AbortError'))
-    : makeNetworkError('Request was cancelled.')
+    ? makeNetworkError(Object.assign(new DOMException('The operation was aborted.', 'AbortError'), { cause: err }))
+    : makeNetworkError(Object.assign(new DOMException('Request was cancelled.'), { cause: err }))
 }
 
 // https://whatpr.org/fetch/1392.html#initialize-a-response
@@ -55569,14 +56142,35 @@ function bytesMatch (bytes, metadataList) {
     const algorithm = item.algo
 
     // 2. Let expectedValue be the val component of item.
-    const expectedValue = item.hash
+    let expectedValue = item.hash
+
+    // See https://github.com/web-platform-tests/wpt/commit/e4c5cc7a5e48093220528dfdd1c4012dc3837a0e
+    // "be liberal with padding". This is annoying, and it's not even in the spec.
+
+    if (expectedValue.endsWith('==')) {
+      expectedValue = expectedValue.slice(0, -2)
+    }
 
     // 3. Let actualValue be the result of applying algorithm to bytes.
-    const actualValue = crypto.createHash(algorithm).update(bytes).digest('base64')
+    let actualValue = crypto.createHash(algorithm).update(bytes).digest('base64')
+
+    if (actualValue.endsWith('==')) {
+      actualValue = actualValue.slice(0, -2)
+    }
 
     // 4. If actualValue is a case-sensitive match for expectedValue,
     //    return true.
     if (actualValue === expectedValue) {
+      return true
+    }
+
+    let actualBase64URL = crypto.createHash(algorithm).update(bytes).digest('base64url')
+
+    if (actualBase64URL.endsWith('==')) {
+      actualBase64URL = actualBase64URL.slice(0, -2)
+    }
+
+    if (actualBase64URL === expectedValue) {
       return true
     }
   }
@@ -55825,17 +56419,17 @@ function iteratorResult (pair, kind) {
 /**
  * @see https://fetch.spec.whatwg.org/#body-fully-read
  */
-function fullyReadBody (body, processBody, processBodyError) {
+async function fullyReadBody (body, processBody, processBodyError) {
   // 1. If taskDestination is null, then set taskDestination to
   //    the result of starting a new parallel queue.
 
   // 2. Let successSteps given a byte sequence bytes be to queue a
   //    fetch task to run processBody given bytes, with taskDestination.
-  const successSteps = (bytes) => queueMicrotask(() => processBody(bytes))
+  const successSteps = processBody
 
   // 3. Let errorSteps be to queue a fetch task to run processBodyError,
   //    with taskDestination.
-  const errorSteps = (error) => queueMicrotask(() => processBodyError(error))
+  const errorSteps = processBodyError
 
   // 4. Let reader be the result of getting a reader for body’s stream.
   //    If that threw an exception, then run errorSteps with that
@@ -55850,7 +56444,12 @@ function fullyReadBody (body, processBody, processBodyError) {
   }
 
   // 5. Read all bytes from reader, given successSteps and errorSteps.
-  readAllBytes(reader, successSteps, errorSteps)
+  try {
+    const result = await readAllBytes(reader)
+    successSteps(result)
+  } catch (e) {
+    errorSteps(e)
+  }
 }
 
 /** @type {ReadableStream} */
@@ -55919,36 +56518,23 @@ function isomorphicEncode (input) {
  * @see https://streams.spec.whatwg.org/#readablestreamdefaultreader-read-all-bytes
  * @see https://streams.spec.whatwg.org/#read-loop
  * @param {ReadableStreamDefaultReader} reader
- * @param {(bytes: Uint8Array) => void} successSteps
- * @param {(error: Error) => void} failureSteps
  */
-async function readAllBytes (reader, successSteps, failureSteps) {
+async function readAllBytes (reader) {
   const bytes = []
   let byteLength = 0
 
   while (true) {
-    let done
-    let chunk
-
-    try {
-      ({ done, value: chunk } = await reader.read())
-    } catch (e) {
-      // 1. Call failureSteps with e.
-      failureSteps(e)
-      return
-    }
+    const { done, value: chunk } = await reader.read()
 
     if (done) {
       // 1. Call successSteps with bytes.
-      successSteps(Buffer.concat(bytes, byteLength))
-      return
+      return Buffer.concat(bytes, byteLength)
     }
 
     // 1. If chunk is not a Uint8Array object, call failureSteps
     //    with a TypeError and abort these steps.
     if (!isUint8Array(chunk)) {
-      failureSteps(new TypeError('Received non-Uint8Array chunk'))
-      return
+      throw new TypeError('Received non-Uint8Array chunk')
     }
 
     // 2. Append the bytes represented by chunk to bytes.
@@ -61637,6 +62223,7 @@ module.exports = {
 const { webidl } = __nccwpck_require__(1744)
 const { DOMException } = __nccwpck_require__(1037)
 const { URLSerializer } = __nccwpck_require__(685)
+const { getGlobalOrigin } = __nccwpck_require__(1246)
 const { staticPropertyDescriptors, states, opcodes, emptyBuffer } = __nccwpck_require__(9188)
 const {
   kWebSocketURL,
@@ -61691,18 +62278,28 @@ class WebSocket extends EventTarget {
     url = webidl.converters.USVString(url)
     protocols = options.protocols
 
-    // 1. Let urlRecord be the result of applying the URL parser to url.
+    // 1. Let baseURL be this's relevant settings object's API base URL.
+    const baseURL = getGlobalOrigin()
+
+    // 1. Let urlRecord be the result of applying the URL parser to url with baseURL.
     let urlRecord
 
     try {
-      urlRecord = new URL(url)
+      urlRecord = new URL(url, baseURL)
     } catch (e) {
-      // 2. If urlRecord is failure, then throw a "SyntaxError" DOMException.
+      // 3. If urlRecord is failure, then throw a "SyntaxError" DOMException.
       throw new DOMException(e, 'SyntaxError')
     }
 
-    // 3. If urlRecord’s scheme is not "ws" or "wss", then throw a
-    //    "SyntaxError" DOMException.
+    // 4. If urlRecord’s scheme is "http", then set urlRecord’s scheme to "ws".
+    if (urlRecord.protocol === 'http:') {
+      urlRecord.protocol = 'ws:'
+    } else if (urlRecord.protocol === 'https:') {
+      // 5. Otherwise, if urlRecord’s scheme is "https", set urlRecord’s scheme to "wss".
+      urlRecord.protocol = 'wss:'
+    }
+
+    // 6. If urlRecord’s scheme is not "ws" or "wss", then throw a "SyntaxError" DOMException.
     if (urlRecord.protocol !== 'ws:' && urlRecord.protocol !== 'wss:') {
       throw new DOMException(
         `Expected a ws: or wss: protocol, got ${urlRecord.protocol}`,
@@ -61710,19 +62307,19 @@ class WebSocket extends EventTarget {
       )
     }
 
-    // 4. If urlRecord’s fragment is non-null, then throw a "SyntaxError"
+    // 7. If urlRecord’s fragment is non-null, then throw a "SyntaxError"
     //    DOMException.
-    if (urlRecord.hash) {
+    if (urlRecord.hash || urlRecord.href.endsWith('#')) {
       throw new DOMException('Got fragment', 'SyntaxError')
     }
 
-    // 5. If protocols is a string, set protocols to a sequence consisting
+    // 8. If protocols is a string, set protocols to a sequence consisting
     //    of just that string.
     if (typeof protocols === 'string') {
       protocols = [protocols]
     }
 
-    // 6. If any of the values in protocols occur more than once or otherwise
+    // 9. If any of the values in protocols occur more than once or otherwise
     //    fail to match the requirements for elements that comprise the value
     //    of `Sec-WebSocket-Protocol` fields as defined by The WebSocket
     //    protocol, then throw a "SyntaxError" DOMException.
@@ -61734,12 +62331,12 @@ class WebSocket extends EventTarget {
       throw new DOMException('Invalid Sec-WebSocket-Protocol value', 'SyntaxError')
     }
 
-    // 7. Set this's url to urlRecord.
-    this[kWebSocketURL] = urlRecord
+    // 10. Set this's url to urlRecord.
+    this[kWebSocketURL] = new URL(urlRecord.href)
 
-    // 8. Let client be this's relevant settings object.
+    // 11. Let client be this's relevant settings object.
 
-    // 9. Run this step in parallel:
+    // 12. Run this step in parallel:
 
     //    1. Establish a WebSocket connection given urlRecord, protocols,
     //       and client.
@@ -63554,6 +64151,14 @@ module.exports = require("http");
 
 /***/ }),
 
+/***/ 5158:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("http2");
+
+/***/ }),
+
 /***/ 5687:
 /***/ ((module) => {
 
@@ -64517,6 +65122,15 @@ class LRUCache {
             if (v !== oldVal) {
                 if (this.#hasFetchMethod && this.#isBackgroundFetch(oldVal)) {
                     oldVal.__abortController.abort(new Error('replaced'));
+                    const { __staleWhileFetching: s } = oldVal;
+                    if (s !== undefined && !noDisposeOnSet) {
+                        if (this.#hasDispose) {
+                            this.#dispose?.(s, k, 'set');
+                        }
+                        if (this.#hasDisposeAfter) {
+                            this.#disposed?.push([s, k, 'set']);
+                        }
+                    }
                 }
                 else if (!noDisposeOnSet) {
                     if (this.#hasDispose) {
