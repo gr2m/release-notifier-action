@@ -48764,7 +48764,7 @@ function bodyLength (body) {
     return 0
   } else if (isStream(body)) {
     const state = body._readableState
-    return state && state.ended === true && Number.isFinite(state.length)
+    return state && state.objectMode === false && state.ended === true && Number.isFinite(state.length)
       ? state.length
       : null
   } else if (isBlobLike(body)) {
@@ -60984,7 +60984,6 @@ module.exports = {
 "use strict";
 
 
-const { randomBytes, createHash } = __nccwpck_require__(6113)
 const diagnosticsChannel = __nccwpck_require__(7643)
 const { uid, states } = __nccwpck_require__(9188)
 const {
@@ -61005,6 +61004,14 @@ const channels = {}
 channels.open = diagnosticsChannel.channel('undici:websocket:open')
 channels.close = diagnosticsChannel.channel('undici:websocket:close')
 channels.socketError = diagnosticsChannel.channel('undici:websocket:socket_error')
+
+/** @type {import('crypto')} */
+let crypto
+try {
+  crypto = __nccwpck_require__(6113)
+} catch {
+
+}
 
 /**
  * @see https://websockets.spec.whatwg.org/#concept-websocket-establish
@@ -61050,7 +61057,7 @@ function establishWebSocketConnection (url, protocols, ws, onEstablish, options)
   // 5. Let keyValue be a nonce consisting of a randomly selected
   //    16-byte value that has been forgiving-base64-encoded and
   //    isomorphic encoded.
-  const keyValue = randomBytes(16).toString('base64')
+  const keyValue = crypto.randomBytes(16).toString('base64')
 
   // 6. Append (`Sec-WebSocket-Key`, keyValue) to request’s
   //    header list.
@@ -61132,7 +61139,7 @@ function establishWebSocketConnection (url, protocols, ws, onEstablish, options)
       //    trailing whitespace, the client MUST _Fail the WebSocket
       //    Connection_.
       const secWSAccept = response.headersList.get('Sec-WebSocket-Accept')
-      const digest = createHash('sha1').update(keyValue + uid).digest('base64')
+      const digest = crypto.createHash('sha1').update(keyValue + uid).digest('base64')
       if (secWSAccept !== digest) {
         failWebsocketConnection(ws, 'Incorrect hash received in Sec-WebSocket-Accept header.')
         return
@@ -61646,8 +61653,15 @@ module.exports = {
 "use strict";
 
 
-const { randomBytes } = __nccwpck_require__(6113)
 const { maxUnsigned16Bit } = __nccwpck_require__(9188)
+
+/** @type {import('crypto')} */
+let crypto
+try {
+  crypto = __nccwpck_require__(6113)
+} catch {
+
+}
 
 class WebsocketFrameSend {
   /**
@@ -61655,7 +61669,7 @@ class WebsocketFrameSend {
    */
   constructor (data) {
     this.frameData = data
-    this.maskKey = randomBytes(4)
+    this.maskKey = crypto.randomBytes(4)
   }
 
   createFrame (opcode) {
