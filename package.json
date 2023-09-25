@@ -42,7 +42,7 @@
     "@semantic-release/git": "^10.0.1",
     "@vercel/ncc": "^0.38.0",
     "nock": "^13.3.3",
-    "semantic-release": "^22.0.1",
+    "semantic-release": "^22.0.5",
     "tap": "^18.1.4"
   }
 }
