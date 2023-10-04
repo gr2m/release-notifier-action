@@ -79,6 +79,27 @@ jobs:
           dispatch_event_type: my-project-release
 ```
 
+If your event has **more than 10** top-level properties, you can embed it in a JSON string `{"event_payload":"<payload_as_json_string>"}` to overcome Github api limits.
+
+```yml
+name: Release Notification
+on:
+  release:
+    types:
+      - published
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: gr2m/release-notifier-action@v1
+        with:
+          app_id: ${{ secrets.APP_ID }}
+          private_key: ${{ secrets.APP_PRIVATE_KEY }}
+          dispatch_event_type: my-project-release
+          embed: true
+```
+
 ## How it works
 
 Each time you create, edit, or delete a release on your repository, the action will load all installations using the credentials you provided. For each installation, the action dispatch creates a [repository dispatch event](https://docs.github.com/en/free-pro-team@latest/rest/reference/repos#create-a-repository-dispatch-event) and sets the event type to what you configured in `inputs.dispatchEventType`.
