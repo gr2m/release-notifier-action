@@ -28,7 +28,9 @@ async function main() {
       `ℹ️  event client payload: ${inspect(eventPayload, { depth: Infinity })}`
     );
 
-    const embed = core.getBooleanInput("embed_payload", { required: false });
+    const embed = core.getBooleanInput("embed_payload_as_json_string", {
+      required: false,
+    });
     embed && core.debug(`⚠️ Event payload will be embedded as JSON string`);
 
     await app.eachRepository(async ({ octokit, repository }) => {

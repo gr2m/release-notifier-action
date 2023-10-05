@@ -97,7 +97,7 @@ jobs:
           app_id: ${{ secrets.APP_ID }}
           private_key: ${{ secrets.APP_PRIVATE_KEY }}
           dispatch_event_type: my-project-release
-          embed: true
+          embed_payload_as_json_string: true
 ```
 
 ## How it works
