@@ -25741,58 +25741,54 @@ function makeDispatcher (fn) {
 module.exports.setGlobalDispatcher = setGlobalDispatcher
 module.exports.getGlobalDispatcher = getGlobalDispatcher
 
-if (util.nodeMajor > 16 || (util.nodeMajor === 16 && util.nodeMinor >= 8)) {
-  let fetchImpl = null
-  module.exports.fetch = async function fetch (resource) {
-    if (!fetchImpl) {
-      fetchImpl = (__nccwpck_require__(4881).fetch)
-    }
-
-    try {
-      return await fetchImpl(...arguments)
-    } catch (err) {
-      if (typeof err === 'object') {
-        Error.captureStackTrace(err, this)
-      }
-
-      throw err
-    }
+let fetchImpl = null
+module.exports.fetch = async function fetch (resource) {
+  if (!fetchImpl) {
+    fetchImpl = (__nccwpck_require__(4881).fetch)
   }
-  module.exports.Headers = __nccwpck_require__(554).Headers
-  module.exports.Response = __nccwpck_require__(7823).Response
-  module.exports.Request = __nccwpck_require__(8359).Request
-  module.exports.FormData = __nccwpck_require__(2015).FormData
-  module.exports.File = __nccwpck_require__(8511).File
-  module.exports.FileReader = __nccwpck_require__(1446).FileReader
 
-  const { setGlobalOrigin, getGlobalOrigin } = __nccwpck_require__(1246)
+  try {
+    return await fetchImpl(...arguments)
+  } catch (err) {
+    if (typeof err === 'object') {
+      Error.captureStackTrace(err, this)
+    }
 
-  module.exports.setGlobalOrigin = setGlobalOrigin
-  module.exports.getGlobalOrigin = getGlobalOrigin
-
-  const { CacheStorage } = __nccwpck_require__(7907)
-  const { kConstruct } = __nccwpck_require__(9174)
-
-  // Cache & CacheStorage are tightly coupled with fetch. Even if it may run
-  // in an older version of Node, it doesn't have any use without fetch.
-  module.exports.caches = new CacheStorage(kConstruct)
+    throw err
+  }
 }
+module.exports.Headers = __nccwpck_require__(554).Headers
+module.exports.Response = __nccwpck_require__(7823).Response
+module.exports.Request = __nccwpck_require__(8359).Request
+module.exports.FormData = __nccwpck_require__(2015).FormData
+module.exports.File = __nccwpck_require__(8511).File
+module.exports.FileReader = __nccwpck_require__(1446).FileReader
 
-if (util.nodeMajor >= 16) {
-  const { deleteCookie, getCookies, getSetCookies, setCookie } = __nccwpck_require__(1724)
+const { setGlobalOrigin, getGlobalOrigin } = __nccwpck_require__(1246)
 
-  module.exports.deleteCookie = deleteCookie
-  module.exports.getCookies = getCookies
-  module.exports.getSetCookies = getSetCookies
-  module.exports.setCookie = setCookie
+module.exports.setGlobalOrigin = setGlobalOrigin
+module.exports.getGlobalOrigin = getGlobalOrigin
 
-  const { parseMIMEType, serializeAMimeType } = __nccwpck_require__(685)
+const { CacheStorage } = __nccwpck_require__(7907)
+const { kConstruct } = __nccwpck_require__(9174)
 
-  module.exports.parseMIMEType = parseMIMEType
-  module.exports.serializeAMimeType = serializeAMimeType
-}
+// Cache & CacheStorage are tightly coupled with fetch. Even if it may run
+// in an older version of Node, it doesn't have any use without fetch.
+module.exports.caches = new CacheStorage(kConstruct)
 
-if (util.nodeMajor >= 18 && hasCrypto) {
+const { deleteCookie, getCookies, getSetCookies, setCookie } = __nccwpck_require__(1724)
+
+module.exports.deleteCookie = deleteCookie
+module.exports.getCookies = getCookies
+module.exports.getSetCookies = getSetCookies
+module.exports.setCookie = setCookie
+
+const { parseMIMEType, serializeAMimeType } = __nccwpck_require__(685)
+
+module.exports.parseMIMEType = parseMIMEType
+module.exports.serializeAMimeType = serializeAMimeType
+
+if (hasCrypto) {
   const { WebSocket } = __nccwpck_require__(4284)
 
   module.exports.WebSocket = WebSocket
@@ -28846,7 +28842,7 @@ class Client extends DispatcherBase {
     }
 
     if (maxConcurrentStreams != null && (typeof maxConcurrentStreams !== 'number' || maxConcurrentStreams < 1)) {
-      throw new InvalidArgumentError('maxConcurrentStreams must be a possitive integer, greater than 0')
+      throw new InvalidArgumentError('maxConcurrentStreams must be a positive integer, greater than 0')
     }
 
     if (typeof connect !== 'function') {
@@ -28893,7 +28889,7 @@ class Client extends DispatcherBase {
       ? null
       : {
         // streams: null, // Fixed queue of streams - For future support of `push`
-          openStreams: 0, // Keep track of them to decide wether or not unref the session
+          openStreams: 0, // Keep track of them to decide whether or not unref the session
           maxConcurrentStreams: maxConcurrentStreams != null ? maxConcurrentStreams : 100 // Max peerConcurrentStreams for a Node h2 server
         }
     this[kHost] = `${this[kUrl].hostname}${this[kUrl].port ? `:${this[kUrl].port}` : ''}`
@@ -30303,7 +30299,7 @@ function writeH2 (client, session, request) {
   }
 
   // https://tools.ietf.org/html/rfc7540#section-8.3
-  // :path and :scheme headers must be omited when sending CONNECT
+  // :path and :scheme headers must be omitted when sending CONNECT
 
   headers[HTTP2_HEADER_PATH] = path
   headers[HTTP2_HEADER_SCHEME] = 'https'
@@ -30430,7 +30426,7 @@ function writeH2 (client, session, request) {
   // })
 
   // stream.on('push', headers => {
-  //   // TODO(HTTP/2): Suppor push
+  //   // TODO(HTTP/2): Support push
   // })
 
   // stream.on('trailers', headers => {
@@ -30888,8 +30884,6 @@ module.exports = Client
 "use strict";
 
 
-/* istanbul ignore file: only for Node 12 */
-
 const { kConnected, kSize } = __nccwpck_require__(2785)
 
 class CompatWeakRef {
@@ -30929,10 +30923,7 @@ module.exports = function () {
       FinalizationRegistry: CompatFinalizer
     }
   }
-  return {
-    WeakRef: global.WeakRef || CompatWeakRef,
-    FinalizationRegistry: global.FinalizationRegistry || CompatFinalizer
-  }
+  return { WeakRef, FinalizationRegistry }
 }
 
 
@@ -31963,10 +31954,137 @@ function setupTimeout (onConnectTimeout, timeout) {
 }
 
 function onConnectTimeout (socket) {
-  util.destroy(socket, new ConnectTimeoutError())
+  let message = 'Connect Timeout Error'
+  if (Array.isArray(socket.autoSelectFamilyAttemptedAddresses)) {
+    message = +` (attempted addresses: ${socket.autoSelectFamilyAttemptedAddresses.join(', ')})`
+  }
+  util.destroy(socket, new ConnectTimeoutError(message))
 }
 
 module.exports = buildConnector
+
+
+/***/ }),
+
+/***/ 4462:
+/***/ ((module) => {
+
+/** @type {Record<string, string | undefined>} */
+const headerNameLowerCasedRecord = {}
+
+// https://developer.mozilla.org/docs/Web/HTTP/Headers
+const wellknownHeaderNames = [
+  'Accept',
+  'Accept-Encoding',
+  'Accept-Language',
+  'Accept-Ranges',
+  'Access-Control-Allow-Credentials',
+  'Access-Control-Allow-Headers',
+  'Access-Control-Allow-Methods',
+  'Access-Control-Allow-Origin',
+  'Access-Control-Expose-Headers',
+  'Access-Control-Max-Age',
+  'Access-Control-Request-Headers',
+  'Access-Control-Request-Method',
+  'Age',
+  'Allow',
+  'Alt-Svc',
+  'Alt-Used',
+  'Authorization',
+  'Cache-Control',
+  'Clear-Site-Data',
+  'Connection',
+  'Content-Disposition',
+  'Content-Encoding',
+  'Content-Language',
+  'Content-Length',
+  'Content-Location',
+  'Content-Range',
+  'Content-Security-Policy',
+  'Content-Security-Policy-Report-Only',
+  'Content-Type',
+  'Cookie',
+  'Cross-Origin-Embedder-Policy',
+  'Cross-Origin-Opener-Policy',
+  'Cross-Origin-Resource-Policy',
+  'Date',
+  'Device-Memory',
+  'Downlink',
+  'ECT',
+  'ETag',
+  'Expect',
+  'Expect-CT',
+  'Expires',
+  'Forwarded',
+  'From',
+  'Host',
+  'If-Match',
+  'If-Modified-Since',
+  'If-None-Match',
+  'If-Range',
+  'If-Unmodified-Since',
+  'Keep-Alive',
+  'Last-Modified',
+  'Link',
+  'Location',
+  'Max-Forwards',
+  'Origin',
+  'Permissions-Policy',
+  'Pragma',
+  'Proxy-Authenticate',
+  'Proxy-Authorization',
+  'RTT',
+  'Range',
+  'Referer',
+  'Referrer-Policy',
+  'Refresh',
+  'Retry-After',
+  'Sec-WebSocket-Accept',
+  'Sec-WebSocket-Extensions',
+  'Sec-WebSocket-Key',
+  'Sec-WebSocket-Protocol',
+  'Sec-WebSocket-Version',
+  'Server',
+  'Server-Timing',
+  'Service-Worker-Allowed',
+  'Service-Worker-Navigation-Preload',
+  'Set-Cookie',
+  'SourceMap',
+  'Strict-Transport-Security',
+  'Supports-Loading-Mode',
+  'TE',
+  'Timing-Allow-Origin',
+  'Trailer',
+  'Transfer-Encoding',
+  'Upgrade',
+  'Upgrade-Insecure-Requests',
+  'User-Agent',
+  'Vary',
+  'Via',
+  'WWW-Authenticate',
+  'X-Content-Type-Options',
+  'X-DNS-Prefetch-Control',
+  'X-Frame-Options',
+  'X-Permitted-Cross-Domain-Policies',
+  'X-Powered-By',
+  'X-Requested-With',
+  'X-XSS-Protection'
+]
+
+for (let i = 0; i < wellknownHeaderNames.length; ++i) {
+  const key = wellknownHeaderNames[i]
+  const lowerCasedKey = key.toLowerCase()
+  headerNameLowerCasedRecord[key] = headerNameLowerCasedRecord[lowerCasedKey] =
+    lowerCasedKey
+}
+
+// Note: object prototypes should not be able to be referenced. e.g. `Object#hasOwnProperty`.
+Object.setPrototypeOf(headerNameLowerCasedRecord, null)
+
+module.exports = {
+  wellknownHeaderNames,
+  headerNameLowerCasedRecord
+}
 
 
 /***/ }),
@@ -32411,10 +32529,6 @@ class Request {
     }
 
     if (util.isFormDataLike(this.body)) {
-      if (util.nodeMajor < 16 || (util.nodeMajor === 16 && util.nodeMinor < 8)) {
-        throw new InvalidArgumentError('Form-Data bodies are only supported in node v16.8 and newer.')
-      }
-
       if (!extractBody) {
         extractBody = (__nccwpck_require__(1472).extractBody)
       }
@@ -32801,6 +32915,7 @@ const { InvalidArgumentError } = __nccwpck_require__(8045)
 const { Blob } = __nccwpck_require__(4300)
 const nodeUtil = __nccwpck_require__(3837)
 const { stringify } = __nccwpck_require__(3477)
+const { headerNameLowerCasedRecord } = __nccwpck_require__(4462)
 
 const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(v => Number(v))
 
@@ -33015,19 +33130,21 @@ function parseHeaders (headers, obj = {}) {
   if (!Array.isArray(headers)) return headers
 
   for (let i = 0; i < headers.length; i += 2) {
-    const key = headers[i].toString().toLowerCase()
-    let val = obj[key]
+    const key = headers[i].toString()
+    const lowerCasedKey = headerNameLowerCasedRecord[key] ?? key.toLowerCase()
+    let val = obj[lowerCasedKey]
 
     if (!val) {
-      if (Array.isArray(headers[i + 1])) {
-        obj[key] = headers[i + 1].map(x => x.toString('utf8'))
+      const headersValue = headers[i + 1]
+      if (typeof headersValue === 'string') {
+        obj[lowerCasedKey] = headersValue
       } else {
-        obj[key] = headers[i + 1].toString('utf8')
+        obj[lowerCasedKey] = Array.isArray(headersValue) ? headersValue.map(x => x.toString('utf8')) : headersValue.toString('utf8')
       }
     } else {
       if (!Array.isArray(val)) {
         val = [val]
-        obj[key] = val
+        obj[lowerCasedKey] = val
       }
       val.push(headers[i + 1].toString('utf8'))
     }
@@ -33151,21 +33268,9 @@ function getSocketInfo (socket) {
   }
 }
 
-async function * convertIterableToBuffer (iterable) {
-  for await (const chunk of iterable) {
-    yield Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-  }
-}
-
-let ReadableStream
+/** @type {globalThis['ReadableStream']} */
 function ReadableStreamFrom (iterable) {
-  if (!ReadableStream) {
-    ReadableStream = (__nccwpck_require__(5356).ReadableStream)
-  }
-
-  if (ReadableStream.from) {
-    return ReadableStream.from(convertIterableToBuffer(iterable))
-  }
+  // We cannot use ReadableStream.from here because it does not return a byte stream.
 
   let iterator
   return new ReadableStream(
@@ -33178,18 +33283,21 @@ function ReadableStreamFrom (iterable) {
         if (done) {
           queueMicrotask(() => {
             controller.close()
+            controller.byobRequest?.respond(0)
           })
         } else {
           const buf = Buffer.isBuffer(value) ? value : Buffer.from(value)
-          controller.enqueue(new Uint8Array(buf))
+          if (buf.byteLength) {
+            controller.enqueue(new Uint8Array(buf))
+          }
         }
         return controller.desiredSize > 0
       },
       async cancel (reason) {
         await iterator.return()
-      }
-    },
-    0
+      },
+      type: 'bytes'
+    }
   )
 }
 
@@ -33551,7 +33659,6 @@ const {
 const { FormData } = __nccwpck_require__(2015)
 const { kState } = __nccwpck_require__(5861)
 const { webidl } = __nccwpck_require__(1744)
-const { DOMException, structuredClone } = __nccwpck_require__(1037)
 const { Blob, File: NativeFile } = __nccwpck_require__(4300)
 const { kBodyUsed } = __nccwpck_require__(2785)
 const assert = __nccwpck_require__(9491)
@@ -33560,8 +33667,6 @@ const { isUint8Array, isArrayBuffer } = __nccwpck_require__(9830)
 const { File: UndiciFile } = __nccwpck_require__(8511)
 const { parseMIMEType, serializeAMimeType } = __nccwpck_require__(685)
 
-let ReadableStream = globalThis.ReadableStream
-
 /** @type {globalThis['File']} */
 const File = NativeFile ?? UndiciFile
 const textEncoder = new TextEncoder()
@@ -33569,10 +33674,6 @@ const textDecoder = new TextDecoder()
 
 // https://fetch.spec.whatwg.org/#concept-bodyinit-extract
 function extractBody (object, keepalive = false) {
-  if (!ReadableStream) {
-    ReadableStream = (__nccwpck_require__(5356).ReadableStream)
-  }
-
   // 1. Let stream be null.
   let stream = null
 
@@ -33585,16 +33686,19 @@ function extractBody (object, keepalive = false) {
     stream = object.stream()
   } else {
     // 4. Otherwise, set stream to a new ReadableStream object, and set
-    //    up stream.
+    //    up stream with byte reading support.
     stream = new ReadableStream({
       async pull (controller) {
-        controller.enqueue(
-          typeof source === 'string' ? textEncoder.encode(source) : source
-        )
+        const buffer = typeof source === 'string' ? textEncoder.encode(source) : source
+
+        if (buffer.byteLength) {
+          controller.enqueue(buffer)
+        }
+
         queueMicrotask(() => readableStreamClose(controller))
       },
       start () {},
-      type: undefined
+      type: 'bytes'
     })
   }
 
@@ -33761,13 +33865,17 @@ function extractBody (object, keepalive = false) {
           // When running action is done, close stream.
           queueMicrotask(() => {
             controller.close()
+            controller.byobRequest?.respond(0)
           })
         } else {
           // Whenever one or more bytes are available and stream is not errored,
           // enqueue a Uint8Array wrapping an ArrayBuffer containing the available
           // bytes into stream.
           if (!isErrored(stream)) {
-            controller.enqueue(new Uint8Array(value))
+            const buffer = new Uint8Array(value)
+            if (buffer.byteLength) {
+              controller.enqueue(buffer)
+            }
           }
         }
         return controller.desiredSize > 0
@@ -33775,7 +33883,7 @@ function extractBody (object, keepalive = false) {
       async cancel (reason) {
         await iterator.return()
       },
-      type: undefined
+      type: 'bytes'
     })
   }
 
@@ -33789,11 +33897,6 @@ function extractBody (object, keepalive = false) {
 
 // https://fetch.spec.whatwg.org/#bodyinit-safely-extract
 function safelyExtractBody (object, keepalive = false) {
-  if (!ReadableStream) {
-    // istanbul ignore next
-    ReadableStream = (__nccwpck_require__(5356).ReadableStream)
-  }
-
   // To safely extract a body and a `Content-Type` value from
   // a byte sequence or BodyInit object object, run these steps:
 
@@ -34146,12 +34249,10 @@ module.exports = {
 /***/ }),
 
 /***/ 1037:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+/***/ ((module) => {
 
 "use strict";
 
-
-const { MessageChannel, receiveMessageOnPort } = __nccwpck_require__(1267)
 
 const corsSafeListedMethods = ['GET', 'HEAD', 'POST']
 const corsSafeListedMethodsSet = new Set(corsSafeListedMethods)
@@ -34243,41 +34344,7 @@ const subresource = [
 ]
 const subresourceSet = new Set(subresource)
 
-/** @type {globalThis['DOMException']} */
-const DOMException = globalThis.DOMException ?? (() => {
-  // DOMException was only made a global in Node v17.0.0,
-  // but fetch supports >= v16.8.
-  try {
-    atob('~')
-  } catch (err) {
-    return Object.getPrototypeOf(err).constructor
-  }
-})()
-
-let channel
-
-/** @type {globalThis['structuredClone']} */
-const structuredClone =
-  globalThis.structuredClone ??
-  // https://github.com/nodejs/node/blob/b27ae24dcc4251bad726d9d84baf678d1f707fed/lib/internal/structured_clone.js
-  // structuredClone was added in v17.0.0, but fetch supports v16.8
-  function structuredClone (value, options = undefined) {
-    if (arguments.length === 0) {
-      throw new TypeError('missing argument')
-    }
-
-    if (!channel) {
-      channel = new MessageChannel()
-    }
-    channel.port1.unref()
-    channel.port2.unref()
-    channel.port1.postMessage(value, options?.transfer)
-    return receiveMessageOnPort(channel.port2).message
-  }
-
 module.exports = {
-  DOMException,
-  structuredClone,
   subresource,
   forbiddenMethods,
   requestBodyHeader,
@@ -34435,7 +34502,13 @@ function URLSerializer (url, excludeFragment = false) {
   const href = url.href
   const hashLength = url.hash.length
 
-  return hashLength === 0 ? href : href.substring(0, href.length - hashLength)
+  const serialized = hashLength === 0 ? href : href.substring(0, href.length - hashLength)
+
+  if (!hashLength && href.endsWith('#')) {
+    return serialized.slice(0, -1)
+  }
+
+  return serialized
 }
 
 // https://infra.spec.whatwg.org/#collect-a-sequence-of-code-points
@@ -34852,7 +34925,7 @@ function serializeAMimeType (mimeType) {
     // 4. If value does not solely contain HTTP token code
     //    points or value is the empty string, then:
     if (!HTTP_TOKEN_CODEPOINTS.test(value)) {
-      // 1. Precede each occurence of U+0022 (") or
+      // 1. Precede each occurrence of U+0022 (") or
       //    U+005C (\) in value with U+005C (\).
       value = value.replace(/(\\|")/g, '\\$1')
 
@@ -36254,25 +36327,25 @@ const {
   isomorphicEncode,
   urlIsLocal,
   urlIsHttpHttpsScheme,
-  urlHasHttpsScheme
+  urlHasHttpsScheme,
+  simpleRangeHeaderValue,
+  buildContentRange
 } = __nccwpck_require__(2538)
 const { kState, kHeaders, kGuard, kRealm } = __nccwpck_require__(5861)
 const assert = __nccwpck_require__(9491)
-const { safelyExtractBody } = __nccwpck_require__(1472)
+const { safelyExtractBody, extractBody } = __nccwpck_require__(1472)
 const {
   redirectStatusSet,
   nullBodyStatus,
   safeMethodsSet,
   requestBodyHeader,
-  subresourceSet,
-  DOMException
+  subresourceSet
 } = __nccwpck_require__(1037)
-const { kHeadersList } = __nccwpck_require__(2785)
+const { kHeadersList, kConstruct } = __nccwpck_require__(2785)
 const EE = __nccwpck_require__(2361)
 const { Readable, pipeline } = __nccwpck_require__(2781)
 const { addAbortListener, isErrored, isReadable, nodeMajor, nodeMinor } = __nccwpck_require__(3983)
-const { dataURLProcessor, serializeAMimeType } = __nccwpck_require__(685)
-const { TransformStream } = __nccwpck_require__(5356)
+const { dataURLProcessor, serializeAMimeType, parseMIMEType } = __nccwpck_require__(685)
 const { getGlobalDispatcher } = __nccwpck_require__(1892)
 const { webidl } = __nccwpck_require__(1744)
 const { STATUS_CODES } = __nccwpck_require__(3685)
@@ -36280,7 +36353,6 @@ const GET_OR_HEAD = ['GET', 'HEAD']
 
 /** @type {import('buffer').resolveObjectURL} */
 let resolveObjectURL
-let ReadableStream = globalThis.ReadableStream
 
 class Fetch extends EE {
   constructor (dispatcher) {
@@ -36446,9 +36518,10 @@ function fetch (input, init = {}) {
 
     // 4. Set responseObject to the result of creating a Response object,
     // given response, "immutable", and relevantRealm.
-    responseObject = new Response()
+    responseObject = new Response(kConstruct)
     responseObject[kState] = response
     responseObject[kRealm] = relevantRealm
+    responseObject[kHeaders] = new Headers(kConstruct)
     responseObject[kHeaders][kHeadersList] = response.headersList
     responseObject[kHeaders][kGuard] = 'immutable'
     responseObject[kHeaders][kRealm] = relevantRealm
@@ -36618,9 +36691,9 @@ function fetching ({
   // 5. Let timingInfo be a new fetch timing info whose start time and
   // post-redirect start time are the coarsened shared current time given
   // crossOriginIsolatedCapability.
-  const currenTime = coarsenedSharedCurrentTime(crossOriginIsolatedCapability)
+  const currentTime = coarsenedSharedCurrentTime(crossOriginIsolatedCapability)
   const timingInfo = createOpaqueTimingInfo({
-    startTime: currenTime
+    startTime: currentTime
   })
 
   // 6. Let fetchParams be a new fetch params whose
@@ -37029,38 +37102,118 @@ function schemeFetch (fetchParams) {
         return Promise.resolve(makeNetworkError('NetworkError when attempting to fetch resource.'))
       }
 
-      const blobURLEntryObject = resolveObjectURL(blobURLEntry.toString())
+      const blob = resolveObjectURL(blobURLEntry.toString())
 
       // 2. If request’s method is not `GET`, blobURLEntry is null, or blobURLEntry’s
       //    object is not a Blob object, then return a network error.
-      if (request.method !== 'GET' || !isBlobLike(blobURLEntryObject)) {
+      if (request.method !== 'GET' || !isBlobLike(blob)) {
         return Promise.resolve(makeNetworkError('invalid method'))
       }
 
-      // 3. Let bodyWithType be the result of safely extracting blobURLEntry’s object.
-      const bodyWithType = safelyExtractBody(blobURLEntryObject)
+      // 3. Let blob be blobURLEntry’s object.
+      // Note: done above
 
-      // 4. Let body be bodyWithType’s body.
-      const body = bodyWithType[0]
+      // 4. Let response be a new response.
+      const response = makeResponse()
 
-      // 5. Let length be body’s length, serialized and isomorphic encoded.
-      const length = isomorphicEncode(`${body.length}`)
+      // 5. Let fullLength be blob’s size.
+      const fullLength = blob.size
 
-      // 6. Let type be bodyWithType’s type if it is non-null; otherwise the empty byte sequence.
-      const type = bodyWithType[1] ?? ''
+      // 6. Let serializedFullLength be fullLength, serialized and isomorphic encoded.
+      const serializedFullLength = isomorphicEncode(`${fullLength}`)
 
-      // 7. Return a new response whose status message is `OK`, header list is
-      //    « (`Content-Length`, length), (`Content-Type`, type) », and body is body.
-      const response = makeResponse({
-        statusText: 'OK',
-        headersList: [
-          ['content-length', { name: 'Content-Length', value: length }],
-          ['content-type', { name: 'Content-Type', value: type }]
-        ]
-      })
+      // 7. Let type be blob’s type.
+      const type = blob.type
 
-      response.body = body
+      // 8. If request’s header list does not contain `Range`:
+      // 9. Otherwise:
+      if (!request.headersList.contains('range')) {
+        // 1. Let bodyWithType be the result of safely extracting blob.
+        // Note: in the FileAPI a blob "object" is a Blob *or* a MediaSource.
+        // In node, this can only ever be a Blob. Therefore we can safely
+        // use extractBody directly.
+        const bodyWithType = extractBody(blob)
 
+        // 2. Set response’s status message to `OK`.
+        response.statusText = 'OK'
+
+        // 3. Set response’s body to bodyWithType’s body.
+        response.body = bodyWithType[0]
+
+        // 4. Set response’s header list to « (`Content-Length`, serializedFullLength), (`Content-Type`, type) ».
+        response.headersList.set('content-length', serializedFullLength)
+        response.headersList.set('content-type', type)
+      } else {
+        // 1. Set response’s range-requested flag.
+        response.rangeRequested = true
+
+        // 2. Let rangeHeader be the result of getting `Range` from request’s header list.
+        const rangeHeader = request.headersList.get('range')
+
+        // 3. Let rangeValue be the result of parsing a single range header value given rangeHeader and true.
+        const rangeValue = simpleRangeHeaderValue(rangeHeader, true)
+
+        // 4. If rangeValue is failure, then return a network error.
+        if (rangeValue === 'failure') {
+          return Promise.resolve(makeNetworkError('failed to fetch the data URL'))
+        }
+
+        // 5. Let (rangeStart, rangeEnd) be rangeValue.
+        let { rangeStartValue: rangeStart, rangeEndValue: rangeEnd } = rangeValue
+
+        // 6. If rangeStart is null:
+        // 7. Otherwise:
+        if (rangeStart === null) {
+          // 1. Set rangeStart to fullLength − rangeEnd.
+          rangeStart = fullLength - rangeEnd
+
+          // 2. Set rangeEnd to rangeStart + rangeEnd − 1.
+          rangeEnd = rangeStart + rangeEnd - 1
+        } else {
+          // 1. If rangeStart is greater than or equal to fullLength, then return a network error.
+          if (rangeStart >= fullLength) {
+            return Promise.resolve(makeNetworkError('Range start is greater than the blob\'s size.'))
+          }
+
+          // 2. If rangeEnd is null or rangeEnd is greater than or equal to fullLength, then set
+          //    rangeEnd to fullLength − 1.
+          if (rangeEnd === null || rangeEnd >= fullLength) {
+            rangeEnd = fullLength - 1
+          }
+        }
+
+        // 8. Let slicedBlob be the result of invoking slice blob given blob, rangeStart,
+        //    rangeEnd + 1, and type.
+        const slicedBlob = blob.slice(rangeStart, rangeEnd, type)
+
+        // 9. Let slicedBodyWithType be the result of safely extracting slicedBlob.
+        // Note: same reason as mentioned above as to why we use extractBody
+        const slicedBodyWithType = extractBody(slicedBlob)
+
+        // 10. Set response’s body to slicedBodyWithType’s body.
+        response.body = slicedBodyWithType[0]
+
+        // 11. Let serializedSlicedLength be slicedBlob’s size, serialized and isomorphic encoded.
+        const serializedSlicedLength = isomorphicEncode(`${slicedBlob.size}`)
+
+        // 12. Let contentRange be the result of invoking build a content range given rangeStart,
+        //     rangeEnd, and fullLength.
+        const contentRange = buildContentRange(rangeStart, rangeEnd, fullLength)
+
+        // 13. Set response’s status to 206.
+        response.status = 206
+
+        // 14. Set response’s status message to `Partial Content`.
+        response.statusText = 'Partial Content'
+
+        // 15. Set response’s header list to « (`Content-Length`, serializedSlicedLength),
+        //     (`Content-Type`, type), (`Content-Range`, contentRange) ».
+        response.headersList.set('content-length', serializedSlicedLength)
+        response.headersList.set('content-type', type)
+        response.headersList.set('content-range', contentRange)
+      }
+
+      // 10. Return response.
       return Promise.resolve(response)
     }
     case 'data:': {
@@ -37122,92 +37275,147 @@ function finalizeResponse (fetchParams, response) {
 
 // https://fetch.spec.whatwg.org/#fetch-finale
 function fetchFinale (fetchParams, response) {
-  // 1. If response is a network error, then:
-  if (response.type === 'error') {
-    // 1. Set response’s URL list to « fetchParams’s request’s URL list[0] ».
-    response.urlList = [fetchParams.request.urlList[0]]
+  // 1. Let timingInfo be fetchParams’s timing info.
+  let timingInfo = fetchParams.timingInfo
 
-    // 2. Set response’s timing info to the result of creating an opaque timing
-    // info for fetchParams’s timing info.
-    response.timingInfo = createOpaqueTimingInfo({
-      startTime: fetchParams.timingInfo.startTime
-    })
-  }
+  // 2. If response is not a network error and fetchParams’s request’s client is a secure context,
+  //    then set timingInfo’s server-timing headers to the result of getting, decoding, and splitting
+  //    `Server-Timing` from response’s internal response’s header list.
+  // TODO
 
-  // 2. Let processResponseEndOfBody be the following steps:
+  // 3. Let processResponseEndOfBody be the following steps:
   const processResponseEndOfBody = () => {
-    // 1. Set fetchParams’s request’s done flag.
-    fetchParams.request.done = true
+    // 1. Let unsafeEndTime be the unsafe shared current time.
+    const unsafeEndTime = Date.now() // ?
 
-    // If fetchParams’s process response end-of-body is not null,
-    // then queue a fetch task to run fetchParams’s process response
-    // end-of-body given response with fetchParams’s task destination.
-    if (fetchParams.processResponseEndOfBody != null) {
-      queueMicrotask(() => fetchParams.processResponseEndOfBody(response))
+    // 2. If fetchParams’s request’s destination is "document", then set fetchParams’s controller’s
+    //    full timing info to fetchParams’s timing info.
+    if (fetchParams.request.destination === 'document') {
+      fetchParams.controller.fullTimingInfo = timingInfo
     }
+
+    // 3. Set fetchParams’s controller’s report timing steps to the following steps given a global object global:
+    fetchParams.controller.reportTimingSteps = () => {
+      // 1. If fetchParams’s request’s URL’s scheme is not an HTTP(S) scheme, then return.
+      if (fetchParams.request.url.protocol !== 'https:') {
+        return
+      }
+
+      // 2. Set timingInfo’s end time to the relative high resolution time given unsafeEndTime and global.
+      timingInfo.endTime = unsafeEndTime
+
+      // 3. Let cacheState be response’s cache state.
+      let cacheState = response.cacheState
+
+      // 4. Let bodyInfo be response’s body info.
+      const bodyInfo = response.bodyInfo
+
+      // 5. If response’s timing allow passed flag is not set, then set timingInfo to the result of creating an
+      //    opaque timing info for timingInfo and set cacheState to the empty string.
+      if (!response.timingAllowPassed) {
+        timingInfo = createOpaqueTimingInfo(timingInfo)
+
+        cacheState = ''
+      }
+
+      // 6. Let responseStatus be 0.
+      let responseStatus = 0
+
+      // 7. If fetchParams’s request’s mode is not "navigate" or response’s has-cross-origin-redirects is false:
+      if (fetchParams.request.mode !== 'navigator' || !response.hasCrossOriginRedirects) {
+        // 1. Set responseStatus to response’s status.
+        responseStatus = response.status
+
+        // 2. Let mimeType be the result of extracting a MIME type from response’s header list.
+        const mimeType = parseMIMEType(response.headersList.get('content-type')) // TODO: fix
+
+        // 3. If mimeType is not failure, then set bodyInfo’s content type to the result of minimizing a supported MIME type given mimeType.
+        if (mimeType !== 'failure') {
+          // TODO
+        }
+      }
+
+      // 8. If fetchParams’s request’s initiator type is non-null, then mark resource timing given timingInfo,
+      //    fetchParams’s request’s URL, fetchParams’s request’s initiator type, global, cacheState, bodyInfo,
+      //    and responseStatus.
+      if (fetchParams.request.initiatorType != null) {
+        // TODO: update markresourcetiming
+        markResourceTiming(timingInfo, fetchParams.request.url, fetchParams.request.initiatorType, globalThis, cacheState, bodyInfo, responseStatus)
+      }
+    }
+
+    // 4. Let processResponseEndOfBodyTask be the following steps:
+    const processResponseEndOfBodyTask = () => {
+      // 1. Set fetchParams’s request’s done flag.
+      fetchParams.request.done = true
+
+      // 2. If fetchParams’s process response end-of-body is non-null, then run fetchParams’s process
+      //    response end-of-body given response.
+      if (fetchParams.processResponseEndOfBody != null) {
+        queueMicrotask(() => fetchParams.processResponseEndOfBody(response))
+      }
+
+      // 3. If fetchParams’s request’s initiator type is non-null and fetchParams’s request’s client’s
+      //    global object is fetchParams’s task destination, then run fetchParams’s controller’s report
+      //    timing steps given fetchParams’s request’s client’s global object.
+      if (fetchParams.request.initiatorType != null) {
+        fetchParams.controller.reportTimingSteps()
+      }
+    }
+
+    // 5. Queue a fetch task to run processResponseEndOfBodyTask with fetchParams’s task destination
+    queueMicrotask(() => processResponseEndOfBodyTask())
   }
 
-  // 3. If fetchParams’s process response is non-null, then queue a fetch task
-  // to run fetchParams’s process response given response, with fetchParams’s
-  // task destination.
+  // 4. If fetchParams’s process response is non-null, then queue a fetch task to run fetchParams’s
+  //    process response given response, with fetchParams’s task destination.
   if (fetchParams.processResponse != null) {
     queueMicrotask(() => fetchParams.processResponse(response))
   }
 
-  // 4. If response’s body is null, then run processResponseEndOfBody.
-  if (response.body == null) {
+  // 5. Let internalResponse be response, if response is a network error; otherwise response’s internal response.
+  const internalResponse = response.type === 'error' ? response : (response.internalResponse ?? response)
+
+  // 6. If internalResponse’s body is null, then run processResponseEndOfBody.
+  // 7. Otherwise:
+  if (internalResponse.body == null) {
     processResponseEndOfBody()
   } else {
-  // 5. Otherwise:
-
-    // 1. Let transformStream be a new a TransformStream.
-
-    // 2. Let identityTransformAlgorithm be an algorithm which, given chunk,
-    // enqueues chunk in transformStream.
-    const identityTransformAlgorithm = (chunk, controller) => {
-      controller.enqueue(chunk)
-    }
-
-    // 3. Set up transformStream with transformAlgorithm set to identityTransformAlgorithm
-    // and flushAlgorithm set to processResponseEndOfBody.
+    // 1. Let transformStream be a new TransformStream.
+    // 2. Let identityTransformAlgorithm be an algorithm which, given chunk, enqueues chunk in transformStream.
+    // 3. Set up transformStream with transformAlgorithm set to identityTransformAlgorithm and flushAlgorithm
+    //    set to processResponseEndOfBody.
     const transformStream = new TransformStream({
       start () {},
-      transform: identityTransformAlgorithm,
+      transform (chunk, controller) {
+        controller.enqueue(chunk)
+      },
       flush: processResponseEndOfBody
-    }, {
-      size () {
-        return 1
-      }
-    }, {
-      size () {
-        return 1
-      }
     })
 
-    // 4. Set response’s body to the result of piping response’s body through transformStream.
-    response.body = { stream: response.body.stream.pipeThrough(transformStream) }
-  }
+    // 4. Set internalResponse’s body’s stream to the result of internalResponse’s body’s stream piped through transformStream.
+    internalResponse.body.stream.pipeThrough(transformStream)
 
-  // 6. If fetchParams’s process response consume body is non-null, then:
-  if (fetchParams.processResponseConsumeBody != null) {
-    // 1. Let processBody given nullOrBytes be this step: run fetchParams’s
-    // process response consume body given response and nullOrBytes.
-    const processBody = (nullOrBytes) => fetchParams.processResponseConsumeBody(response, nullOrBytes)
+    const byteStream = new ReadableStream({
+      readableStream: transformStream.readable,
+      async start (controller) {
+        const reader = this.readableStream.getReader()
 
-    // 2. Let processBodyError be this step: run fetchParams’s process
-    // response consume body given response and failure.
-    const processBodyError = (failure) => fetchParams.processResponseConsumeBody(response, failure)
+        while (true) {
+          const { done, value } = await reader.read()
 
-    // 3. If response’s body is null, then queue a fetch task to run processBody
-    // given null, with fetchParams’s task destination.
-    if (response.body == null) {
-      queueMicrotask(() => processBody(null))
-    } else {
-      // 4. Otherwise, fully read response’s body given processBody, processBodyError,
-      // and fetchParams’s task destination.
-      return fullyReadBody(response.body, processBody, processBodyError)
-    }
-    return Promise.resolve()
+          if (done) {
+            queueMicrotask(() => readableStreamClose(controller))
+            break
+          }
+
+          controller.enqueue(value)
+        }
+      },
+      type: 'bytes'
+    })
+
+    internalResponse.body.stream = byteStream
   }
 }
 
@@ -38009,13 +38217,8 @@ async function httpNetworkFetch (
   // TODO
 
   // 15. Let stream be a new ReadableStream.
-  // 16. Set up stream with pullAlgorithm set to pullAlgorithm,
-  // cancelAlgorithm set to cancelAlgorithm, highWaterMark set to
-  // highWaterMark, and sizeAlgorithm set to sizeAlgorithm.
-  if (!ReadableStream) {
-    ReadableStream = (__nccwpck_require__(5356).ReadableStream)
-  }
-
+  // 16. Set up stream with byte reading support with pullAlgorithm set to pullAlgorithm,
+  //     cancelAlgorithm set to cancelAlgorithm.
   const stream = new ReadableStream(
     {
       async start (controller) {
@@ -38026,13 +38229,8 @@ async function httpNetworkFetch (
       },
       async cancel (reason) {
         await cancelAlgorithm(reason)
-      }
-    },
-    {
-      highWaterMark: 0,
-      size () {
-        return 1
-      }
+      },
+      type: 'bytes'
     }
   )
 
@@ -38112,7 +38310,10 @@ async function httpNetworkFetch (
 
       // 7. Enqueue a Uint8Array wrapping an ArrayBuffer containing bytes
       // into stream.
-      fetchParams.controller.controller.enqueue(new Uint8Array(bytes))
+      const buffer = new Uint8Array(bytes)
+      if (buffer.byteLength) {
+        fetchParams.controller.controller.enqueue(buffer)
+      }
 
       // 8. If stream is errored, then terminate the ongoing fetch.
       if (isErrored(stream)) {
@@ -38398,8 +38599,6 @@ const { URLSerializer } = __nccwpck_require__(685)
 const { kHeadersList, kConstruct } = __nccwpck_require__(2785)
 const assert = __nccwpck_require__(9491)
 const { getMaxListeners, setMaxListeners, getEventListeners, defaultMaxListeners } = __nccwpck_require__(2361)
-
-let TransformStream = globalThis.TransformStream
 
 const kAbortController = Symbol('abortController')
 
@@ -38883,10 +39082,6 @@ class Request {
       }
 
       // 2. Set finalBody to the result of creating a proxy for inputBody.
-      if (!TransformStream) {
-        TransformStream = (__nccwpck_require__(5356).TransformStream)
-      }
-
       // https://streams.spec.whatwg.org/#readablestream-create-a-proxy
       const identityTransform = new TransformStream()
       inputBody.stream.pipeThrough(identityTransform)
@@ -39336,8 +39531,7 @@ const {
 } = __nccwpck_require__(2538)
 const {
   redirectStatusSet,
-  nullBodyStatus,
-  DOMException
+  nullBodyStatus
 } = __nccwpck_require__(1037)
 const { kState, kHeaders, kGuard, kRealm } = __nccwpck_require__(5861)
 const { webidl } = __nccwpck_require__(1744)
@@ -39348,7 +39542,6 @@ const { kHeadersList, kConstruct } = __nccwpck_require__(2785)
 const assert = __nccwpck_require__(9491)
 const { types } = __nccwpck_require__(3837)
 
-const ReadableStream = globalThis.ReadableStream || (__nccwpck_require__(5356).ReadableStream)
 const textEncoder = new TextEncoder('utf-8')
 
 // https://fetch.spec.whatwg.org/#response-class
@@ -39361,9 +39554,10 @@ class Response {
     // The static error() method steps are to return the result of creating a
     // Response object, given a new network error, "immutable", and this’s
     // relevant Realm.
-    const responseObject = new Response()
+    const responseObject = new Response(kConstruct)
     responseObject[kState] = makeNetworkError()
     responseObject[kRealm] = relevantRealm
+    responseObject[kHeaders] = new Headers(kConstruct)
     responseObject[kHeaders][kHeadersList] = responseObject[kState].headersList
     responseObject[kHeaders][kGuard] = 'immutable'
     responseObject[kHeaders][kRealm] = relevantRealm
@@ -39389,8 +39583,11 @@ class Response {
     // 3. Let responseObject be the result of creating a Response object, given a new response,
     //    "response", and this’s relevant Realm.
     const relevantRealm = { settingsObject: {} }
-    const responseObject = new Response()
+    const responseObject = new Response(kConstruct)
+    responseObject[kState] = makeResponse({})
     responseObject[kRealm] = relevantRealm
+    responseObject[kHeaders] = new Headers(kConstruct)
+    responseObject[kHeaders][kHeadersList] = responseObject[kState].headersList
     responseObject[kHeaders][kGuard] = 'response'
     responseObject[kHeaders][kRealm] = relevantRealm
 
@@ -39430,8 +39627,11 @@ class Response {
 
     // 4. Let responseObject be the result of creating a Response object,
     // given a new response, "immutable", and this’s relevant Realm.
-    const responseObject = new Response()
+    const responseObject = new Response(kConstruct)
+    responseObject[kState] = makeResponse({})
     responseObject[kRealm] = relevantRealm
+    responseObject[kHeaders] = new Headers(kConstruct)
+    responseObject[kHeaders][kHeadersList] = responseObject[kState].headersList
     responseObject[kHeaders][kGuard] = 'immutable'
     responseObject[kHeaders][kRealm] = relevantRealm
 
@@ -39450,6 +39650,10 @@ class Response {
 
   // https://fetch.spec.whatwg.org/#dom-response
   constructor (body = null, init = {}) {
+    if (body === kConstruct) {
+      return
+    }
+
     if (body !== null) {
       body = webidl.converters.BodyInit(body)
     }
@@ -39581,9 +39785,10 @@ class Response {
 
     // 3. Return the result of creating a Response object, given
     // clonedResponse, this’s headers’s guard, and this’s relevant Realm.
-    const clonedResponseObject = new Response()
+    const clonedResponseObject = new Response(kConstruct)
     clonedResponseObject[kState] = clonedResponse
     clonedResponseObject[kRealm] = this[kRealm]
+    clonedResponseObject[kHeaders] = new Headers(kConstruct)
     clonedResponseObject[kHeaders][kHeadersList] = clonedResponse.headersList
     clonedResponseObject[kHeaders][kGuard] = this[kHeaders][kGuard]
     clonedResponseObject[kHeaders][kRealm] = this[kHeaders][kRealm]
@@ -39656,10 +39861,10 @@ function makeResponse (init) {
     cacheState: '',
     statusText: '',
     ...init,
-    headersList: init.headersList
-      ? new HeadersList(init.headersList)
+    headersList: init?.headersList
+      ? new HeadersList(init?.headersList)
       : new HeadersList(),
-    urlList: init.urlList ? [...init.urlList] : []
+    urlList: init?.urlList ? [...init.urlList] : []
   }
 }
 
@@ -40808,14 +41013,7 @@ async function fullyReadBody (body, processBody, processBodyError) {
   }
 }
 
-/** @type {ReadableStream} */
-let ReadableStream = globalThis.ReadableStream
-
 function isReadableStreamLike (stream) {
-  if (!ReadableStream) {
-    ReadableStream = (__nccwpck_require__(5356).ReadableStream)
-  }
-
   return stream instanceof ReadableStream || (
     stream[Symbol.toStringTag] === 'ReadableStream' &&
     typeof stream.tee === 'function'
@@ -40846,9 +41044,10 @@ function isomorphicDecode (input) {
 function readableStreamClose (controller) {
   try {
     controller.close()
+    controller.byobRequest?.respond(0)
   } catch (err) {
     // TODO: add comment explaining why this error occurs.
-    if (!err.message.includes('Controller is already closed')) {
+    if (!err.message.includes('Controller is already closed') && !err.message.includes('ReadableStream is already closed')) {
       throw err
     }
   }
@@ -40936,10 +41135,172 @@ function urlIsHttpHttpsScheme (url) {
   return protocol === 'http:' || protocol === 'https:'
 }
 
+/** @type {import('./dataURL')['collectASequenceOfCodePoints']} */
+let collectASequenceOfCodePoints
+
 /**
- * Fetch supports node >= 16.8.0, but Object.hasOwn was added in v16.9.0.
+ * @see https://fetch.spec.whatwg.org/#simple-range-header-value
+ * @param {string} value
+ * @param {boolean} allowWhitespace
  */
-const hasOwn = Object.hasOwn || ((dict, key) => Object.prototype.hasOwnProperty.call(dict, key))
+function simpleRangeHeaderValue (value, allowWhitespace) {
+  // Note: avoid circular require
+  collectASequenceOfCodePoints ??= (__nccwpck_require__(685).collectASequenceOfCodePoints)
+
+  // 1. Let data be the isomorphic decoding of value.
+  // Note: isomorphic decoding takes a sequence of bytes (ie. a Uint8Array) and turns it into a string,
+  // nothing more. We obviously don't need to do that if value is a string already.
+  const data = value
+
+  // 2. If data does not start with "bytes", then return failure.
+  if (!data.startsWith('bytes')) {
+    return 'failure'
+  }
+
+  // 3. Let position be a position variable for data, initially pointing at the 5th code point of data.
+  const position = { position: 5 }
+
+  // 4. If allowWhitespace is true, collect a sequence of code points that are HTTP tab or space,
+  //    from data given position.
+  if (allowWhitespace) {
+    collectASequenceOfCodePoints(
+      (char) => char === '\t' || char === ' ',
+      data,
+      position
+    )
+  }
+
+  // 5. If the code point at position within data is not U+003D (=), then return failure.
+  if (data.charCodeAt(position.position) !== 0x3D) {
+    return 'failure'
+  }
+
+  // 6. Advance position by 1.
+  position.position++
+
+  // 7. If allowWhitespace is true, collect a sequence of code points that are HTTP tab or space, from
+  //    data given position.
+  if (allowWhitespace) {
+    collectASequenceOfCodePoints(
+      (char) => char === '\t' || char === ' ',
+      data,
+      position
+    )
+  }
+
+  // 8. Let rangeStart be the result of collecting a sequence of code points that are ASCII digits,
+  //    from data given position.
+  const rangeStart = collectASequenceOfCodePoints(
+    (char) => {
+      const code = char.charCodeAt(0)
+
+      return code >= 0x30 && code <= 0x39
+    },
+    data,
+    position
+  )
+
+  // 9. Let rangeStartValue be rangeStart, interpreted as decimal number, if rangeStart is not the
+  //    empty string; otherwise null.
+  const rangeStartValue = rangeStart.length ? Number(rangeStart) : null
+
+  // 10. If allowWhitespace is true, collect a sequence of code points that are HTTP tab or space,
+  //     from data given position.
+  if (allowWhitespace) {
+    collectASequenceOfCodePoints(
+      (char) => char === '\t' || char === ' ',
+      data,
+      position
+    )
+  }
+
+  // 11. If the code point at position within data is not U+002D (-), then return failure.
+  if (data.charCodeAt(position.position) !== 0x2D) {
+    return 'failure'
+  }
+
+  // 12. Advance position by 1.
+  position.position++
+
+  // 13. If allowWhitespace is true, collect a sequence of code points that are HTTP tab
+  //     or space, from data given position.
+  // Note from Khafra: its the same fucking step again lol
+  if (allowWhitespace) {
+    collectASequenceOfCodePoints(
+      (char) => char === '\t' || char === ' ',
+      data,
+      position
+    )
+  }
+
+  // 14. Let rangeEnd be the result of collecting a sequence of code points that are
+  //     ASCII digits, from data given position.
+  // Note from Khafra: you wouldn't guess it, but this is also the same step as #8
+  const rangeEnd = collectASequenceOfCodePoints(
+    (char) => {
+      const code = char.charCodeAt(0)
+
+      return code >= 0x30 && code <= 0x39
+    },
+    data,
+    position
+  )
+
+  // 15. Let rangeEndValue be rangeEnd, interpreted as decimal number, if rangeEnd
+  //     is not the empty string; otherwise null.
+  // Note from Khafra: THE SAME STEP, AGAIN!!!
+  // Note: why interpret as a decimal if we only collect ascii digits?
+  const rangeEndValue = rangeEnd.length ? Number(rangeEnd) : null
+
+  // 16. If position is not past the end of data, then return failure.
+  if (position.position < data.length) {
+    return 'failure'
+  }
+
+  // 17. If rangeEndValue and rangeStartValue are null, then return failure.
+  if (rangeEndValue === null && rangeStartValue === null) {
+    return 'failure'
+  }
+
+  // 18. If rangeStartValue and rangeEndValue are numbers, and rangeStartValue is
+  //     greater than rangeEndValue, then return failure.
+  // Note: ... when can they not be numbers?
+  if (rangeStartValue > rangeEndValue) {
+    return 'failure'
+  }
+
+  // 19. Return (rangeStartValue, rangeEndValue).
+  return { rangeStartValue, rangeEndValue }
+}
+
+/**
+ * @see https://fetch.spec.whatwg.org/#build-a-content-range
+ * @param {number} rangeStart
+ * @param {number} rangeEnd
+ * @param {number} fullLength
+ */
+function buildContentRange (rangeStart, rangeEnd, fullLength) {
+  // 1. Let contentRange be `bytes `.
+  let contentRange = 'bytes '
+
+  // 2. Append rangeStart, serialized and isomorphic encoded, to contentRange.
+  contentRange += isomorphicEncode(`${rangeStart}`)
+
+  // 3. Append 0x2D (-) to contentRange.
+  contentRange += '-'
+
+  // 4. Append rangeEnd, serialized and isomorphic encoded to contentRange.
+  contentRange += isomorphicEncode(`${rangeEnd}`)
+
+  // 5. Append 0x2F (/) to contentRange.
+  contentRange += '/'
+
+  // 6. Append fullLength, serialized and isomorphic encoded to contentRange.
+  contentRange += isomorphicEncode(`${fullLength}`)
+
+  // 7. Return contentRange.
+  return contentRange
+}
 
 module.exports = {
   isAborted,
@@ -40973,7 +41334,6 @@ module.exports = {
   makeIterator,
   isValidHeaderName,
   isValidHeaderValue,
-  hasOwn,
   isErrorLike,
   fullyReadBody,
   bytesMatch,
@@ -40985,7 +41345,9 @@ module.exports = {
   urlHasHttpsScheme,
   urlIsHttpHttpsScheme,
   readAllBytes,
-  normalizeMethodRecord
+  normalizeMethodRecord,
+  simpleRangeHeaderValue,
+  buildContentRange
 }
 
 
@@ -40998,7 +41360,7 @@ module.exports = {
 
 
 const { types } = __nccwpck_require__(3837)
-const { hasOwn, toUSVString } = __nccwpck_require__(2538)
+const { toUSVString } = __nccwpck_require__(2538)
 
 /** @type {import('../../types/webidl').Webidl} */
 const webidl = {}
@@ -41343,7 +41705,7 @@ webidl.dictionaryConverter = function (converters) {
       const { key, defaultValue, required, converter } = options
 
       if (required === true) {
-        if (!hasOwn(dictionary, key)) {
+        if (!Object.hasOwn(dictionary, key)) {
           throw webidl.errors.exception({
             header: 'Dictionary',
             message: `Missing required key "${key}".`
@@ -41352,7 +41714,7 @@ webidl.dictionaryConverter = function (converters) {
       }
 
       let value = dictionary[key]
-      const hasDefault = hasOwn(options, 'defaultValue')
+      const hasDefault = Object.hasOwn(options, 'defaultValue')
 
       // Only use defaultValue if value is undefined and
       // a defaultValue options was provided.
@@ -42414,7 +42776,6 @@ const {
 } = __nccwpck_require__(9054)
 const { ProgressEvent } = __nccwpck_require__(5504)
 const { getEncoding } = __nccwpck_require__(4854)
-const { DOMException } = __nccwpck_require__(1037)
 const { serializeAMimeType, parseMIMEType } = __nccwpck_require__(685)
 const { types } = __nccwpck_require__(3837)
 const { StringDecoder } = __nccwpck_require__(1576)
@@ -43023,7 +43384,7 @@ class RedirectHandler {
 
         For status 300, which is "Multiple Choices", the spec mentions both generating a Location
         response header AND a response body with the other possible location to follow.
-        Since the spec explicitily chooses not to specify a format for such body and leave it to
+        Since the spec explicitly chooses not to specify a format for such body and leave it to
         servers and browsers implementors, we ignore the body as there is no specified way to eventually parse it.
       */
     } else {
@@ -43039,7 +43400,7 @@ class RedirectHandler {
         TLDR: undici always ignores 3xx response trailers as they are not expected in case of redirections
         and neither are useful if present.
 
-        See comment on onData method above for more detailed informations.
+        See comment on onData method above for more detailed information.
       */
 
       this.location = null
@@ -43283,13 +43644,22 @@ class RetryHandler {
     this.retryCount += 1
 
     if (statusCode >= 300) {
-      this.abort(
-        new RequestRetryError('Request failed', statusCode, {
-          headers,
-          count: this.retryCount
-        })
-      )
-      return false
+      if (this.retryOpts.statusCodes.includes(statusCode) === false) {
+        return this.handler.onHeaders(
+          statusCode,
+          rawHeaders,
+          resume,
+          statusMessage
+        )
+      } else {
+        this.abort(
+          new RequestRetryError('Request failed', statusCode, {
+            headers,
+            count: this.retryCount
+          })
+        )
+        return false
+      }
     }
 
     // Checkpoint for resume from where we left it
@@ -45867,6 +46237,7 @@ function onSocketClose () {
   //    attribute initialized to the result of applying UTF-8
   //    decode without BOM to the WebSocket connection close
   //    reason.
+  // TODO: process.nextTick
   fireEvent('close', ws, CloseEvent, {
     wasClean, code, reason
   })
@@ -46910,6 +47281,7 @@ function failWebsocketConnection (ws, reason) {
   }
 
   if (reason) {
+    // TODO: process.nextTick
     fireEvent('error', ws, ErrorEvent, {
       error: new Error(reason)
     })
@@ -46937,7 +47309,6 @@ module.exports = {
 
 
 const { webidl } = __nccwpck_require__(1744)
-const { DOMException } = __nccwpck_require__(1037)
 const { URLSerializer } = __nccwpck_require__(685)
 const { getGlobalOrigin } = __nccwpck_require__(1246)
 const { staticPropertyDescriptors, states, opcodes, emptyBuffer } = __nccwpck_require__(9188)
@@ -48952,14 +49323,6 @@ module.exports = require("querystring");
 
 "use strict";
 module.exports = require("stream");
-
-/***/ }),
-
-/***/ 5356:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("stream/web");
 
 /***/ }),
 
