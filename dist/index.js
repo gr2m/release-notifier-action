@@ -25688,6 +25688,10 @@ module.exports.createRedirectInterceptor = createRedirectInterceptor
 
 module.exports.buildConnector = buildConnector
 module.exports.errors = errors
+module.exports.util = {
+  parseHeaders: util.parseHeaders,
+  headerNameToString: util.headerNameToString
+}
 
 function makeDispatcher (fn) {
   return (url, opts, handler) => {
@@ -25821,7 +25825,6 @@ const Pool = __nccwpck_require__(4634)
 const Client = __nccwpck_require__(3598)
 const util = __nccwpck_require__(3983)
 const createRedirectInterceptor = __nccwpck_require__(8861)
-const { WeakRef, FinalizationRegistry } = __nccwpck_require__(6436)()
 
 const kOnConnect = Symbol('onConnect')
 const kOnDisconnect = Symbol('onDisconnect')
@@ -25829,7 +25832,6 @@ const kOnConnectionError = Symbol('onConnectionError')
 const kMaxRedirections = Symbol('maxRedirections')
 const kOnDrain = Symbol('onDrain')
 const kFactory = Symbol('factory')
-const kFinalizer = Symbol('finalizer')
 const kOptions = Symbol('options')
 
 function defaultFactory (origin, opts) {
@@ -25869,12 +25871,6 @@ class Agent extends DispatcherBase {
     this[kMaxRedirections] = maxRedirections
     this[kFactory] = factory
     this[kClients] = new Map()
-    this[kFinalizer] = new FinalizationRegistry(/* istanbul ignore next: gc is undeterministic */ key => {
-      const ref = this[kClients].get(key)
-      if (ref !== undefined && ref.deref() === undefined) {
-        this[kClients].delete(key)
-      }
-    })
 
     const agent = this
 
@@ -25897,12 +25893,8 @@ class Agent extends DispatcherBase {
 
   get [kRunning] () {
     let ret = 0
-    for (const ref of this[kClients].values()) {
-      const client = ref.deref()
-      /* istanbul ignore next: gc is undeterministic */
-      if (client) {
-        ret += client[kRunning]
-      }
+    for (const client of this[kClients].values()) {
+      ret += client[kRunning]
     }
     return ret
   }
@@ -25915,9 +25907,8 @@ class Agent extends DispatcherBase {
       throw new InvalidArgumentError('opts.origin must be a non-empty string or URL.')
     }
 
-    const ref = this[kClients].get(key)
+    let dispatcher = this[kClients].get(key)
 
-    let dispatcher = ref ? ref.deref() : null
     if (!dispatcher) {
       dispatcher = this[kFactory](opts.origin, this[kOptions])
         .on('drain', this[kOnDrain])
@@ -25925,8 +25916,10 @@ class Agent extends DispatcherBase {
         .on('disconnect', this[kOnDisconnect])
         .on('connectionError', this[kOnConnectionError])
 
-      this[kClients].set(key, new WeakRef(dispatcher))
-      this[kFinalizer].register(dispatcher, key)
+      // This introduces a tiny memory leak, as dispatchers are never removed from the map.
+      // TODO(mcollina): remove te timer when the client/pool do not have any more
+      // active connections.
+      this[kClients].set(key, dispatcher)
     }
 
     return dispatcher.dispatch(opts, handler)
@@ -25934,26 +25927,20 @@ class Agent extends DispatcherBase {
 
   async [kClose] () {
     const closePromises = []
-    for (const ref of this[kClients].values()) {
-      const client = ref.deref()
-      /* istanbul ignore else: gc is undeterministic */
-      if (client) {
-        closePromises.push(client.close())
-      }
+    for (const client of this[kClients].values()) {
+      closePromises.push(client.close())
     }
+    this[kClients].clear()
 
     await Promise.all(closePromises)
   }
 
   async [kDestroy] (err) {
     const destroyPromises = []
-    for (const ref of this[kClients].values()) {
-      const client = ref.deref()
-      /* istanbul ignore else: gc is undeterministic */
-      if (client) {
-        destroyPromises.push(client.destroy(err))
-      }
+    for (const client of this[kClients].values()) {
+      destroyPromises.push(client.destroy(err))
     }
+    this[kClients].clear()
 
     await Promise.all(destroyPromises)
   }
@@ -26948,11 +26935,9 @@ module.exports.connect = __nccwpck_require__(9744)
 
 const assert = __nccwpck_require__(9491)
 const { Readable } = __nccwpck_require__(2781)
-const { RequestAbortedError, NotSupportedError, InvalidArgumentError } = __nccwpck_require__(8045)
+const { RequestAbortedError, NotSupportedError, InvalidArgumentError, AbortError } = __nccwpck_require__(8045)
 const util = __nccwpck_require__(3983)
-const { ReadableStreamFrom, toUSVString } = __nccwpck_require__(3983)
-
-let Blob
+const { ReadableStreamFrom } = __nccwpck_require__(3983)
 
 const kConsume = Symbol('kConsume')
 const kReading = Symbol('kReading')
@@ -26990,11 +26975,6 @@ module.exports = class BodyReadable extends Readable {
   }
 
   destroy (err) {
-    if (this.destroyed) {
-      // Node < 16
-      return this
-    }
-
     if (!err && !this._readableState.endEmitted) {
       err = new RequestAbortedError()
     }
@@ -27016,17 +26996,6 @@ module.exports = class BodyReadable extends Readable {
     queueMicrotask(() => {
       callback(err)
     })
-  }
-
-  emit (ev, ...args) {
-    if (ev === 'data') {
-      // Node < 16.7
-      this._readableState.dataEmitted = true
-    } else if (ev === 'error') {
-      // Node < 16
-      this._readableState.errorEmitted = true
-    }
-    return super.emit(ev, ...args)
   }
 
   on (ev, ...args) {
@@ -27107,37 +27076,31 @@ module.exports = class BodyReadable extends Readable {
     return this[kBody]
   }
 
-  dump (opts) {
-    let limit = opts && Number.isFinite(opts.limit) ? opts.limit : 262144
-    const signal = opts && opts.signal
+  async dump (opts) {
+    let limit = Number.isFinite(opts?.limit) ? opts.limit : 262144
+    const signal = opts?.signal
 
-    if (signal) {
-      try {
-        if (typeof signal !== 'object' || !('aborted' in signal)) {
-          throw new InvalidArgumentError('signal must be an AbortSignal')
-        }
-        util.throwIfAborted(signal)
-      } catch (err) {
-        return Promise.reject(err)
-      }
+    if (signal != null && (typeof signal !== 'object' || !('aborted' in signal))) {
+      throw new InvalidArgumentError('signal must be an AbortSignal')
     }
+
+    signal?.throwIfAborted()
 
     if (this._readableState.closeEmitted) {
-      return Promise.resolve(null)
+      return null
     }
 
-    return new Promise((resolve, reject) => {
-      const signalListenerCleanup = signal
-        ? util.addAbortListener(signal, () => {
-          this.destroy()
-        })
-        : noop
+    return await new Promise((resolve, reject) => {
+      const onAbort = () => {
+        this.destroy(signal.reason ?? new AbortError())
+      }
+      signal?.addEventListener('abort', onAbort)
 
       this
         .on('close', function () {
-          signalListenerCleanup()
-          if (signal && signal.aborted) {
-            reject(signal.reason || Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }))
+          signal?.removeEventListener('abort', onAbort)
+          if (signal?.aborted) {
+            reject(signal.reason ?? new AbortError())
           } else {
             resolve(null)
           }
@@ -27233,14 +27196,35 @@ function consumeStart (consume) {
   }
 }
 
+/**
+ * @param {Buffer[]} chunks
+ * @param {number} length
+ */
+function chunksDecode (chunks, length) {
+  if (chunks.length === 0 || length === 0) {
+    return ''
+  }
+  const buffer = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks, length)
+
+  const start =
+   buffer.length >= 3 &&
+   // Skip BOM.
+      buffer[0] === 0xef &&
+      buffer[1] === 0xbb &&
+      buffer[2] === 0xbf
+     ? 3
+     : 0
+  return buffer.utf8Slice(start, buffer.length - start)
+}
+
 function consumeEnd (consume) {
   const { type, body, resolve, stream, length } = consume
 
   try {
     if (type === 'text') {
-      resolve(toUSVString(Buffer.concat(body)))
+      resolve(chunksDecode(body, length))
     } else if (type === 'json') {
-      resolve(JSON.parse(Buffer.concat(body)))
+      resolve(JSON.parse(chunksDecode(body, length)))
     } else if (type === 'arrayBuffer') {
       const dst = new Uint8Array(length)
 
@@ -27252,9 +27236,6 @@ function consumeEnd (consume) {
 
       resolve(dst.buffer)
     } else if (type === 'blob') {
-      if (!Blob) {
-        Blob = (__nccwpck_require__(4300).Blob)
-      }
       resolve(new Blob(body, { type: stream[kContentType] }))
     }
 
@@ -29356,6 +29337,7 @@ class Parser {
     if (!request) {
       return -1
     }
+    request.onResponseStarted()
   }
 
   onHeaderField (buf) {
@@ -29381,11 +29363,14 @@ class Parser {
     }
 
     const key = this.headers[len - 2]
-    if (key.length === 10 && key.toString().toLowerCase() === 'keep-alive') {
-      this.keepAlive += buf.toString()
-    } else if (key.length === 10 && key.toString().toLowerCase() === 'connection') {
-      this.connection += buf.toString()
-    } else if (key.length === 14 && key.toString().toLowerCase() === 'content-length') {
+    if (key.length === 10) {
+      const headerName = util.bufferToLowerCasedHeaderName(key)
+      if (headerName === 'keep-alive') {
+        this.keepAlive += buf.toString()
+      } else if (headerName === 'connection') {
+        this.connection += buf.toString()
+      }
+    } else if (key.length === 14 && util.bufferToLowerCasedHeaderName(key) === 'content-length') {
       this.contentLength += buf.toString()
     }
 
@@ -30399,6 +30384,7 @@ function writeH2 (client, session, request) {
 
   stream.once('response', headers => {
     const { [HTTP2_HEADER_STATUS]: statusCode, ...realHeaders } = headers
+    request.onResponseStarted()
 
     if (request.onHeaders(Number(statusCode), realHeaders, stream.resume.bind(stream), '') === false) {
       stream.pause()
@@ -31815,7 +31801,7 @@ let tls // include tls conditionally since it is not always available
 let SessionCache
 // FIXME: remove workaround when the Node bug is fixed
 // https://github.com/nodejs/node/issues/49344#issuecomment-1741776308
-if (global.FinalizationRegistry && !process.env.NODE_V8_COVERAGE) {
+if (global.FinalizationRegistry && !(process.env.NODE_V8_COVERAGE || process.env.UNDICI_NO_FG)) {
   SessionCache = class WeakSessionCache {
     constructor (maxCachedSessions) {
       this._maxCachedSessions = maxCachedSessions
@@ -31998,6 +31984,9 @@ module.exports = buildConnector
 /***/ 4462:
 /***/ ((module) => {
 
+"use strict";
+
+
 /** @type {Record<string, string | undefined>} */
 const headerNameLowerCasedRecord = {}
 
@@ -32135,7 +32124,6 @@ class UndiciError extends Error {
 class ConnectTimeoutError extends UndiciError {
   constructor (message) {
     super(message)
-    Error.captureStackTrace(this, ConnectTimeoutError)
     this.name = 'ConnectTimeoutError'
     this.message = message || 'Connect Timeout Error'
     this.code = 'UND_ERR_CONNECT_TIMEOUT'
@@ -32145,7 +32133,6 @@ class ConnectTimeoutError extends UndiciError {
 class HeadersTimeoutError extends UndiciError {
   constructor (message) {
     super(message)
-    Error.captureStackTrace(this, HeadersTimeoutError)
     this.name = 'HeadersTimeoutError'
     this.message = message || 'Headers Timeout Error'
     this.code = 'UND_ERR_HEADERS_TIMEOUT'
@@ -32155,7 +32142,6 @@ class HeadersTimeoutError extends UndiciError {
 class HeadersOverflowError extends UndiciError {
   constructor (message) {
     super(message)
-    Error.captureStackTrace(this, HeadersOverflowError)
     this.name = 'HeadersOverflowError'
     this.message = message || 'Headers Overflow Error'
     this.code = 'UND_ERR_HEADERS_OVERFLOW'
@@ -32165,7 +32151,6 @@ class HeadersOverflowError extends UndiciError {
 class BodyTimeoutError extends UndiciError {
   constructor (message) {
     super(message)
-    Error.captureStackTrace(this, BodyTimeoutError)
     this.name = 'BodyTimeoutError'
     this.message = message || 'Body Timeout Error'
     this.code = 'UND_ERR_BODY_TIMEOUT'
@@ -32175,7 +32160,6 @@ class BodyTimeoutError extends UndiciError {
 class ResponseStatusCodeError extends UndiciError {
   constructor (message, statusCode, headers, body) {
     super(message)
-    Error.captureStackTrace(this, ResponseStatusCodeError)
     this.name = 'ResponseStatusCodeError'
     this.message = message || 'Response Status Code Error'
     this.code = 'UND_ERR_RESPONSE_STATUS_CODE'
@@ -32189,7 +32173,6 @@ class ResponseStatusCodeError extends UndiciError {
 class InvalidArgumentError extends UndiciError {
   constructor (message) {
     super(message)
-    Error.captureStackTrace(this, InvalidArgumentError)
     this.name = 'InvalidArgumentError'
     this.message = message || 'Invalid Argument Error'
     this.code = 'UND_ERR_INVALID_ARG'
@@ -32199,17 +32182,23 @@ class InvalidArgumentError extends UndiciError {
 class InvalidReturnValueError extends UndiciError {
   constructor (message) {
     super(message)
-    Error.captureStackTrace(this, InvalidReturnValueError)
     this.name = 'InvalidReturnValueError'
     this.message = message || 'Invalid Return Value Error'
     this.code = 'UND_ERR_INVALID_RETURN_VALUE'
   }
 }
 
-class RequestAbortedError extends UndiciError {
+class AbortError extends UndiciError {
   constructor (message) {
     super(message)
-    Error.captureStackTrace(this, RequestAbortedError)
+    this.name = 'AbortError'
+    this.message = message || 'The operation was aborted'
+  }
+}
+
+class RequestAbortedError extends AbortError {
+  constructor (message) {
+    super(message)
     this.name = 'AbortError'
     this.message = message || 'Request aborted'
     this.code = 'UND_ERR_ABORTED'
@@ -32219,7 +32208,6 @@ class RequestAbortedError extends UndiciError {
 class InformationalError extends UndiciError {
   constructor (message) {
     super(message)
-    Error.captureStackTrace(this, InformationalError)
     this.name = 'InformationalError'
     this.message = message || 'Request information'
     this.code = 'UND_ERR_INFO'
@@ -32229,7 +32217,6 @@ class InformationalError extends UndiciError {
 class RequestContentLengthMismatchError extends UndiciError {
   constructor (message) {
     super(message)
-    Error.captureStackTrace(this, RequestContentLengthMismatchError)
     this.name = 'RequestContentLengthMismatchError'
     this.message = message || 'Request body length does not match content-length header'
     this.code = 'UND_ERR_REQ_CONTENT_LENGTH_MISMATCH'
@@ -32239,7 +32226,6 @@ class RequestContentLengthMismatchError extends UndiciError {
 class ResponseContentLengthMismatchError extends UndiciError {
   constructor (message) {
     super(message)
-    Error.captureStackTrace(this, ResponseContentLengthMismatchError)
     this.name = 'ResponseContentLengthMismatchError'
     this.message = message || 'Response body length does not match content-length header'
     this.code = 'UND_ERR_RES_CONTENT_LENGTH_MISMATCH'
@@ -32249,7 +32235,6 @@ class ResponseContentLengthMismatchError extends UndiciError {
 class ClientDestroyedError extends UndiciError {
   constructor (message) {
     super(message)
-    Error.captureStackTrace(this, ClientDestroyedError)
     this.name = 'ClientDestroyedError'
     this.message = message || 'The client is destroyed'
     this.code = 'UND_ERR_DESTROYED'
@@ -32259,7 +32244,6 @@ class ClientDestroyedError extends UndiciError {
 class ClientClosedError extends UndiciError {
   constructor (message) {
     super(message)
-    Error.captureStackTrace(this, ClientClosedError)
     this.name = 'ClientClosedError'
     this.message = message || 'The client is closed'
     this.code = 'UND_ERR_CLOSED'
@@ -32269,7 +32253,6 @@ class ClientClosedError extends UndiciError {
 class SocketError extends UndiciError {
   constructor (message, socket) {
     super(message)
-    Error.captureStackTrace(this, SocketError)
     this.name = 'SocketError'
     this.message = message || 'Socket error'
     this.code = 'UND_ERR_SOCKET'
@@ -32280,7 +32263,6 @@ class SocketError extends UndiciError {
 class NotSupportedError extends UndiciError {
   constructor (message) {
     super(message)
-    Error.captureStackTrace(this, NotSupportedError)
     this.name = 'NotSupportedError'
     this.message = message || 'Not supported error'
     this.code = 'UND_ERR_NOT_SUPPORTED'
@@ -32290,7 +32272,6 @@ class NotSupportedError extends UndiciError {
 class BalancedPoolMissingUpstreamError extends UndiciError {
   constructor (message) {
     super(message)
-    Error.captureStackTrace(this, NotSupportedError)
     this.name = 'MissingUpstreamError'
     this.message = message || 'No upstream has been added to the BalancedPool'
     this.code = 'UND_ERR_BPL_MISSING_UPSTREAM'
@@ -32300,7 +32281,6 @@ class BalancedPoolMissingUpstreamError extends UndiciError {
 class HTTPParserError extends Error {
   constructor (message, code, data) {
     super(message)
-    Error.captureStackTrace(this, HTTPParserError)
     this.name = 'HTTPParserError'
     this.code = code ? `HPE_${code}` : undefined
     this.data = data ? data.toString() : undefined
@@ -32310,7 +32290,6 @@ class HTTPParserError extends Error {
 class ResponseExceededMaxSizeError extends UndiciError {
   constructor (message) {
     super(message)
-    Error.captureStackTrace(this, ResponseExceededMaxSizeError)
     this.name = 'ResponseExceededMaxSizeError'
     this.message = message || 'Response content exceeded max size'
     this.code = 'UND_ERR_RES_EXCEEDED_MAX_SIZE'
@@ -32320,7 +32299,6 @@ class ResponseExceededMaxSizeError extends UndiciError {
 class RequestRetryError extends UndiciError {
   constructor (message, code, { headers, data }) {
     super(message)
-    Error.captureStackTrace(this, RequestRetryError)
     this.name = 'RequestRetryError'
     this.message = message || 'Request retry error'
     this.code = 'UND_ERR_REQ_RETRY'
@@ -32331,6 +32309,7 @@ class RequestRetryError extends UndiciError {
 }
 
 module.exports = {
+  AbortError,
   HTTPParserError,
   UndiciError,
   HeadersTimeoutError,
@@ -32369,16 +32348,10 @@ const {
 const assert = __nccwpck_require__(9491)
 const { kHTTP2BuildRequest, kHTTP2CopyHeaders, kHTTP1BuildRequest } = __nccwpck_require__(2785)
 const util = __nccwpck_require__(3983)
+const { headerNameLowerCasedRecord } = __nccwpck_require__(4462)
 
-// tokenRegExp and headerCharRegex have been lifted from
+// headerCharRegex have been lifted from
 // https://github.com/nodejs/node/blob/main/lib/_http_common.js
-
-/**
- * Verifies that the given val is a valid HTTP token
- * per the rules defined in RFC 7230
- * See https://tools.ietf.org/html/rfc7230#section-3.2.6
- */
-const tokenRegExp = /^[\^_`a-zA-Z\-0-9!#$%&'*+.|~]+$/
 
 /**
  * Matches if val contains an invalid field-vchar
@@ -32442,7 +32415,7 @@ class Request {
 
     if (typeof method !== 'string') {
       throw new InvalidArgumentError('method must be a string')
-    } else if (tokenRegExp.exec(method) === null) {
+    } else if (!util.isValidHTTPToken(method)) {
       throw new InvalidArgumentError('invalid request method')
     }
 
@@ -32621,6 +32594,10 @@ class Request {
     }
   }
 
+  onResponseStarted () {
+    return this[kHandler].onResponseStarted?.()
+  }
+
   onHeaders (statusCode, headers, resume, statusText) {
     assert(!this.aborted)
     assert(!this.completed)
@@ -32778,65 +32755,41 @@ function processHeader (request, key, val, skipAppend = false) {
     return
   }
 
-  if (
-    request.host === null &&
-    key.length === 4 &&
-    key.toLowerCase() === 'host'
-  ) {
+  let headerName = headerNameLowerCasedRecord[key]
+
+  if (headerName === undefined) {
+    headerName = key.toLowerCase()
+    if (headerNameLowerCasedRecord[headerName] === undefined && !util.isValidHTTPToken(headerName)) {
+      throw new InvalidArgumentError('invalid header key')
+    }
+  }
+
+  if (request.host === null && headerName === 'host') {
     if (headerCharRegex.exec(val) !== null) {
       throw new InvalidArgumentError(`invalid ${key} header`)
     }
     // Consumed by Client
     request.host = val
-  } else if (
-    request.contentLength === null &&
-    key.length === 14 &&
-    key.toLowerCase() === 'content-length'
-  ) {
+  } else if (request.contentLength === null && headerName === 'content-length') {
     request.contentLength = parseInt(val, 10)
     if (!Number.isFinite(request.contentLength)) {
       throw new InvalidArgumentError('invalid content-length header')
     }
-  } else if (
-    request.contentType === null &&
-    key.length === 12 &&
-    key.toLowerCase() === 'content-type'
-  ) {
+  } else if (request.contentType === null && headerName === 'content-type') {
     request.contentType = val
     if (skipAppend) request.headers[key] = processHeaderValue(key, val, skipAppend)
     else request.headers += processHeaderValue(key, val)
-  } else if (
-    key.length === 17 &&
-    key.toLowerCase() === 'transfer-encoding'
-  ) {
-    throw new InvalidArgumentError('invalid transfer-encoding header')
-  } else if (
-    key.length === 10 &&
-    key.toLowerCase() === 'connection'
-  ) {
+  } else if (headerName === 'transfer-encoding' || headerName === 'keep-alive' || headerName === 'upgrade') {
+    throw new InvalidArgumentError(`invalid ${headerName} header`)
+  } else if (headerName === 'connection') {
     const value = typeof val === 'string' ? val.toLowerCase() : null
     if (value !== 'close' && value !== 'keep-alive') {
       throw new InvalidArgumentError('invalid connection header')
     } else if (value === 'close') {
       request.reset = true
     }
-  } else if (
-    key.length === 10 &&
-    key.toLowerCase() === 'keep-alive'
-  ) {
-    throw new InvalidArgumentError('invalid keep-alive header')
-  } else if (
-    key.length === 7 &&
-    key.toLowerCase() === 'upgrade'
-  ) {
-    throw new InvalidArgumentError('invalid upgrade header')
-  } else if (
-    key.length === 6 &&
-    key.toLowerCase() === 'expect'
-  ) {
+  } else if (headerName === 'expect') {
     throw new NotSupportedError('expect header not supported')
-  } else if (tokenRegExp.exec(key) === null) {
-    throw new InvalidArgumentError('invalid header key')
   } else {
     if (Array.isArray(val)) {
       for (let i = 0; i < val.length; i++) {
@@ -32929,6 +32882,148 @@ module.exports = {
 
 /***/ }),
 
+/***/ 7506:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const {
+  wellknownHeaderNames,
+  headerNameLowerCasedRecord
+} = __nccwpck_require__(4462)
+
+class TstNode {
+  /** @type {any} */
+  value = null
+  /** @type {null | TstNode} */
+  left = null
+  /** @type {null | TstNode} */
+  middle = null
+  /** @type {null | TstNode} */
+  right = null
+  /** @type {number} */
+  code
+  /**
+   * @param {Uint8Array} key
+   * @param {any} value
+   * @param {number} index
+   */
+  constructor (key, value, index) {
+    if (index === undefined || index >= key.length) {
+      throw new TypeError('Unreachable')
+    }
+    this.code = key[index]
+    if (key.length !== ++index) {
+      this.middle = new TstNode(key, value, index)
+    } else {
+      this.value = value
+    }
+  }
+
+  /**
+   * @param {Uint8Array} key
+   * @param {any} value
+   * @param {number} index
+   */
+  add (key, value, index) {
+    if (index === undefined || index >= key.length) {
+      throw new TypeError('Unreachable')
+    }
+    const code = key[index]
+    if (this.code === code) {
+      if (key.length === ++index) {
+        this.value = value
+      } else if (this.middle !== null) {
+        this.middle.add(key, value, index)
+      } else {
+        this.middle = new TstNode(key, value, index)
+      }
+    } else if (this.code < code) {
+      if (this.left !== null) {
+        this.left.add(key, value, index)
+      } else {
+        this.left = new TstNode(key, value, index)
+      }
+    } else {
+      if (this.right !== null) {
+        this.right.add(key, value, index)
+      } else {
+        this.right = new TstNode(key, value, index)
+      }
+    }
+  }
+
+  /**
+   * @param {Uint8Array} key
+   * @return {TstNode | null}
+   */
+  search (key) {
+    const keylength = key.length
+    let index = 0
+    let node = this
+    while (node !== null && index < keylength) {
+      let code = key[index]
+      // A-Z
+      if (code >= 0x41 && code <= 0x5a) {
+        // Lowercase for uppercase.
+        code |= 32
+      }
+      while (node !== null) {
+        if (code === node.code) {
+          if (keylength === ++index) {
+            // Returns Node since it is the last key.
+            return node
+          }
+          node = node.middle
+          break
+        }
+        node = node.code < code ? node.left : node.right
+      }
+    }
+    return null
+  }
+}
+
+class TernarySearchTree {
+  /** @type {TstNode | null} */
+  node = null
+
+  /**
+   * @param {Uint8Array} key
+   * @param {any} value
+   * */
+  insert (key, value) {
+    if (this.node === null) {
+      this.node = new TstNode(key, value, 0)
+    } else {
+      this.node.add(key, value, 0)
+    }
+  }
+
+  /**
+   * @param {Uint8Array} key
+   */
+  lookup (key) {
+    return this.node?.search(key)?.value ?? null
+  }
+}
+
+const tree = new TernarySearchTree()
+
+for (let i = 0; i < wellknownHeaderNames.length; ++i) {
+  const key = headerNameLowerCasedRecord[wellknownHeaderNames[i]]
+  tree.insert(Buffer.from(key), key)
+}
+
+module.exports = {
+  TernarySearchTree,
+  tree
+}
+
+
+/***/ }),
+
 /***/ 3983:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
@@ -32945,6 +33040,7 @@ const { Blob } = __nccwpck_require__(4300)
 const nodeUtil = __nccwpck_require__(3837)
 const { stringify } = __nccwpck_require__(3477)
 const { headerNameLowerCasedRecord } = __nccwpck_require__(4462)
+const { tree } = __nccwpck_require__(7506)
 
 const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(v => Number(v))
 
@@ -33154,26 +33250,51 @@ function parseKeepAliveTimeout (val) {
   return m ? parseInt(m[1], 10) * 1000 : null
 }
 
-function parseHeaders (headers, obj = {}) {
+/**
+ * Retrieves a header name and returns its lowercase value.
+ * @param {string | Buffer} value Header name
+ * @returns {string}
+ */
+function headerNameToString (value) {
+  return typeof value === 'string'
+    ? headerNameLowerCasedRecord[value] ?? value.toLowerCase()
+    : tree.lookup(value) ?? value.toString('latin1').toLowerCase()
+}
+
+/**
+ * Receive the buffer as a string and return its lowercase value.
+ * @param {Buffer} value Header name
+ * @returns {string}
+ */
+function bufferToLowerCasedHeaderName (value) {
+  return tree.lookup(value) ?? value.toString('latin1').toLowerCase()
+}
+
+/**
+ * @param {Record<string, string | string[]> | (Buffer | string | (Buffer | string)[])[]} headers
+ * @param {Record<string, string | string[]>} [obj]
+ * @returns {Record<string, string | string[]>}
+ */
+function parseHeaders (headers, obj) {
   // For H2 support
   if (!Array.isArray(headers)) return headers
 
+  if (obj === undefined) obj = {}
   for (let i = 0; i < headers.length; i += 2) {
-    const key = headers[i].toString()
-    const lowerCasedKey = headerNameLowerCasedRecord[key] ?? key.toLowerCase()
-    let val = obj[lowerCasedKey]
+    const key = headerNameToString(headers[i])
+    let val = obj[key]
 
     if (!val) {
       const headersValue = headers[i + 1]
       if (typeof headersValue === 'string') {
-        obj[lowerCasedKey] = headersValue
+        obj[key] = headersValue
       } else {
-        obj[lowerCasedKey] = Array.isArray(headersValue) ? headersValue.map(x => x.toString('utf8')) : headersValue.toString('utf8')
+        obj[key] = Array.isArray(headersValue) ? headersValue.map(x => x.toString('utf8')) : headersValue.toString('utf8')
       }
     } else {
-      if (!Array.isArray(val)) {
+      if (typeof val === 'string') {
         val = [val]
-        obj[lowerCasedKey] = val
+        obj[key] = val
       }
       val.push(headers[i + 1].toString('utf8'))
     }
@@ -33269,19 +33390,11 @@ function isDisturbed (body) {
 }
 
 function isErrored (body) {
-  return !!(body && (
-    stream.isErrored
-      ? stream.isErrored(body)
-      : /state: 'errored'/.test(nodeUtil.inspect(body)
-      )))
+  return !!(body && stream.isErrored(body))
 }
 
 function isReadable (body) {
-  return !!(body && (
-    stream.isReadable
-      ? stream.isReadable(body)
-      : /state: 'readable'/.test(nodeUtil.inspect(body)
-      )))
+  return !!(body && stream.isReadable(body))
 }
 
 function getSocketInfo (socket) {
@@ -33346,20 +33459,6 @@ function isFormDataLike (object) {
   )
 }
 
-function throwIfAborted (signal) {
-  if (!signal) { return }
-  if (typeof signal.throwIfAborted === 'function') {
-    signal.throwIfAborted()
-  } else {
-    if (signal.aborted) {
-      // DOMException not available < v17.0.0
-      const err = new Error('The operation was aborted')
-      err.name = 'AbortError'
-      throw err
-    }
-  }
-}
-
 function addAbortListener (signal, listener) {
   if ('addEventListener' in signal) {
     signal.addEventListener('abort', listener, { once: true })
@@ -33382,6 +33481,52 @@ function toUSVString (val) {
   }
 
   return `${val}`
+}
+
+/**
+ * @see https://tools.ietf.org/html/rfc7230#section-3.2.6
+ * @param {number} c
+ */
+function isTokenCharCode (c) {
+  switch (c) {
+    case 0x22:
+    case 0x28:
+    case 0x29:
+    case 0x2c:
+    case 0x2f:
+    case 0x3a:
+    case 0x3b:
+    case 0x3c:
+    case 0x3d:
+    case 0x3e:
+    case 0x3f:
+    case 0x40:
+    case 0x5b:
+    case 0x5c:
+    case 0x5d:
+    case 0x7b:
+    case 0x7d:
+      // DQUOTE and "(),/:;<=>?@[\]{}"
+      return false
+    default:
+      // VCHAR %x21-7E
+      return c >= 0x21 && c <= 0x7e
+  }
+}
+
+/**
+ * @param {string} characters
+ */
+function isValidHTTPToken (characters) {
+  if (characters.length === 0) {
+    return false
+  }
+  for (let i = 0; i < characters.length; ++i) {
+    if (!isTokenCharCode(characters.charCodeAt(i))) {
+      return false
+    }
+  }
+  return true
 }
 
 // Parsed accordingly to RFC 9110
@@ -33418,6 +33563,8 @@ module.exports = {
   isIterable,
   isAsyncIterable,
   isDestroyed,
+  headerNameToString,
+  bufferToLowerCasedHeaderName,
   parseRawHeaders,
   parseHeaders,
   parseKeepAliveTimeout,
@@ -33430,8 +33577,9 @@ module.exports = {
   getSocketInfo,
   isFormDataLike,
   buildURL,
-  throwIfAborted,
   addAbortListener,
+  isValidHTTPToken,
+  isTokenCharCode,
   parseRangeHeader,
   nodeMajor,
   nodeMinor,
@@ -34049,7 +34197,7 @@ function bodyMixinMethods (instance) {
       // If mimeType’s essence is "multipart/form-data", then:
       if (/multipart\/form-data/.test(contentType)) {
         const headers = {}
-        for (const [key, value] of this.headers) headers[key.toLowerCase()] = value
+        for (const [key, value] of this.headers) headers[key] = value
 
         const responseFormData = new FormData()
 
@@ -34404,7 +34552,6 @@ module.exports = {
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 const assert = __nccwpck_require__(9491)
-const { atob } = __nccwpck_require__(4300)
 const { isomorphicDecode } = __nccwpck_require__(2538)
 
 const encoder = new TextEncoder()
@@ -34413,7 +34560,8 @@ const encoder = new TextEncoder()
  * @see https://mimesniff.spec.whatwg.org/#http-token-code-point
  */
 const HTTP_TOKEN_CODEPOINTS = /^[!#$%&'*+-.^_|~A-Za-z0-9]+$/
-const HTTP_WHITESPACE_REGEX = /(\u000A|\u000D|\u0009|\u0020)/ // eslint-disable-line
+const HTTP_WHITESPACE_REGEX = /[\u000A|\u000D|\u0009|\u0020]/ // eslint-disable-line
+const ASCII_WHITESPACE_REPLACE_REGEX = /[\u0009\u000A\u000C\u000D\u0020]/g // eslint-disable-line
 /**
  * @see https://mimesniff.spec.whatwg.org/#http-quoted-string-token-code-point
  */
@@ -34593,20 +34741,26 @@ function stringPercentDecode (input) {
   return percentDecode(bytes)
 }
 
+function isHexCharByte (byte) {
+  // 0-9 A-F a-f
+  return (byte >= 0x30 && byte <= 0x39) || (byte >= 0x41 && byte <= 0x46) || (byte >= 0x61 && byte <= 0x66)
+}
+
 // https://url.spec.whatwg.org/#percent-decode
 /** @param {Uint8Array} input */
 function percentDecode (input) {
+  const length = input.length
   // 1. Let output be an empty byte sequence.
-  /** @type {number[]} */
-  const output = []
-
+  /** @type {Uint8Array} */
+  const output = new Uint8Array(length)
+  let j = 0
   // 2. For each byte byte in input:
-  for (let i = 0; i < input.length; i++) {
+  for (let i = 0; i < length; ++i) {
     const byte = input[i]
 
     // 1. If byte is not 0x25 (%), then append byte to output.
     if (byte !== 0x25) {
-      output.push(byte)
+      output[j++] = byte
 
     // 2. Otherwise, if byte is 0x25 (%) and the next two bytes
     // after byte in input are not in the ranges
@@ -34615,9 +34769,9 @@ function percentDecode (input) {
     // to output.
     } else if (
       byte === 0x25 &&
-      !/^[0-9A-Fa-f]{2}$/i.test(String.fromCharCode(input[i + 1], input[i + 2]))
+      !(isHexCharByte(input[i + 1]) && isHexCharByte(input[i + 2]))
     ) {
-      output.push(0x25)
+      output[j++] = 0x25
 
     // 3. Otherwise:
     } else {
@@ -34627,7 +34781,7 @@ function percentDecode (input) {
       const bytePoint = Number.parseInt(nextTwoBytes, 16)
 
       // 2. Append a byte whose value is bytePoint to output.
-      output.push(bytePoint)
+      output[j++] = bytePoint
 
       // 3. Skip the next two bytes in input.
       i += 2
@@ -34635,7 +34789,7 @@ function percentDecode (input) {
   }
 
   // 3. Return output.
-  return Uint8Array.from(output)
+  return length === j ? output : output.subarray(0, j)
 }
 
 // https://mimesniff.spec.whatwg.org/#parse-a-mime-type
@@ -34815,19 +34969,25 @@ function parseMIMEType (input) {
 /** @param {string} data */
 function forgivingBase64 (data) {
   // 1. Remove all ASCII whitespace from data.
-  data = data.replace(/[\u0009\u000A\u000C\u000D\u0020]/g, '')  // eslint-disable-line
+  data = data.replace(ASCII_WHITESPACE_REPLACE_REGEX, '')  // eslint-disable-line
 
+  let dataLength = data.length
   // 2. If data’s code point length divides by 4 leaving
   // no remainder, then:
-  if (data.length % 4 === 0) {
+  if (dataLength % 4 === 0) {
     // 1. If data ends with one or two U+003D (=) code points,
     // then remove them from data.
-    data = data.replace(/=?=$/, '')
+    if (data.charCodeAt(dataLength - 1) === 0x003D) {
+      --dataLength
+      if (data.charCodeAt(dataLength - 1) === 0x003D) {
+        --dataLength
+      }
+    }
   }
 
   // 3. If data’s code point length divides by 4 leaving
   // a remainder of 1, then return failure.
-  if (data.length % 4 === 1) {
+  if (dataLength % 4 === 1) {
     return 'failure'
   }
 
@@ -34836,18 +34996,12 @@ function forgivingBase64 (data) {
   //  U+002F (/)
   //  ASCII alphanumeric
   // then return failure.
-  if (/[^+/0-9A-Za-z]/.test(data)) {
+  if (/[^+/0-9A-Za-z]/.test(data.length === dataLength ? data : data.substring(0, dataLength))) {
     return 'failure'
   }
 
-  const binary = atob(data)
-  const bytes = new Uint8Array(binary.length)
-
-  for (let byte = 0; byte < binary.length; byte++) {
-    bytes[byte] = binary.charCodeAt(byte)
-  }
-
-  return bytes
+  const buffer = Buffer.from(data, 'base64')
+  return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength)
 }
 
 // https://fetch.spec.whatwg.org/#collect-an-http-quoted-string
@@ -34975,55 +35129,54 @@ function serializeAMimeType (mimeType) {
 
 /**
  * @see https://fetch.spec.whatwg.org/#http-whitespace
- * @param {string} char
+ * @param {number} char
  */
 function isHTTPWhiteSpace (char) {
-  return char === '\r' || char === '\n' || char === '\t' || char === ' '
+  // "\r\n\t "
+  return char === 0x00d || char === 0x00a || char === 0x009 || char === 0x020
 }
 
 /**
  * @see https://fetch.spec.whatwg.org/#http-whitespace
  * @param {string} str
+ * @param {boolean} [leading=true]
+ * @param {boolean} [trailing=true]
  */
 function removeHTTPWhitespace (str, leading = true, trailing = true) {
-  let lead = 0
-  let trail = str.length - 1
-
+  let i = 0; let j = str.length
   if (leading) {
-    for (; lead < str.length && isHTTPWhiteSpace(str[lead]); lead++);
+    while (j > i && isHTTPWhiteSpace(str.charCodeAt(i))) --i
   }
-
   if (trailing) {
-    for (; trail > 0 && isHTTPWhiteSpace(str[trail]); trail--);
+    while (j > i && isHTTPWhiteSpace(str.charCodeAt(j - 1))) --j
   }
-
-  return str.slice(lead, trail + 1)
+  return i === 0 && j === str.length ? str : str.substring(i, j)
 }
 
 /**
  * @see https://infra.spec.whatwg.org/#ascii-whitespace
- * @param {string} char
+ * @param {number} char
  */
 function isASCIIWhitespace (char) {
-  return char === '\r' || char === '\n' || char === '\t' || char === '\f' || char === ' '
+  // "\r\n\t\f "
+  return char === 0x00d || char === 0x00a || char === 0x009 || char === 0x00c || char === 0x020
 }
 
 /**
  * @see https://infra.spec.whatwg.org/#strip-leading-and-trailing-ascii-whitespace
+ * @param {string} str
+ * @param {boolean} [leading=true]
+ * @param {boolean} [trailing=true]
  */
 function removeASCIIWhitespace (str, leading = true, trailing = true) {
-  let lead = 0
-  let trail = str.length - 1
-
+  let i = 0; let j = str.length
   if (leading) {
-    for (; lead < str.length && isASCIIWhitespace(str[lead]); lead++);
+    while (j > i && isASCIIWhitespace(str.charCodeAt(i))) --i
   }
-
   if (trailing) {
-    for (; trail > 0 && isASCIIWhitespace(str[trail]); trail--);
+    while (j > i && isASCIIWhitespace(str.charCodeAt(j - 1))) --j
   }
-
-  return str.slice(lead, trail + 1)
+  return i === 0 && j === str.length ? str : str.substring(i, j)
 }
 
 module.exports = {
@@ -35833,7 +35986,7 @@ function appendHeader (headers, name, value) {
   //    forbidden response-header name, return.
 
   // 7. Append (name, value) to headers’s header list.
-  return headers[kHeadersList].append(name, value)
+  return headers[kHeadersList].append(name, value, false)
 
   // 8. If headers’s guard is "request-no-cors", then remove
   //    privileged no-CORS request headers from headers
@@ -35854,14 +36007,17 @@ class HeadersList {
     }
   }
 
-  // https://fetch.spec.whatwg.org/#header-list-contains
-  contains (name) {
+  /**
+   * @see https://fetch.spec.whatwg.org/#header-list-contains
+   * @param {string} name
+   * @param {boolean} isLowerCase
+   */
+  contains (name, isLowerCase) {
     // A header list list contains a header name name if list
     // contains a header whose name is a byte-case-insensitive
     // match for name.
-    name = name.toLowerCase()
 
-    return this[kHeadersMap].has(name)
+    return this[kHeadersMap].has(isLowerCase ? name : name.toLowerCase())
   }
 
   clear () {
@@ -35870,13 +36026,18 @@ class HeadersList {
     this.cookies = null
   }
 
-  // https://fetch.spec.whatwg.org/#concept-header-list-append
-  append (name, value) {
+  /**
+   * @see https://fetch.spec.whatwg.org/#concept-header-list-append
+   * @param {string} name
+   * @param {string} value
+   * @param {boolean} isLowerCase
+   */
+  append (name, value, isLowerCase) {
     this[kHeadersSortedMap] = null
 
     // 1. If list contains name, then set name to the first such
     //    header’s name.
-    const lowercaseName = name.toLowerCase()
+    const lowercaseName = isLowerCase ? name : name.toLowerCase()
     const exists = this[kHeadersMap].get(lowercaseName)
 
     // 2. Append (name, value) to list.
@@ -35891,15 +36052,19 @@ class HeadersList {
     }
 
     if (lowercaseName === 'set-cookie') {
-      this.cookies ??= []
-      this.cookies.push(value)
+      (this.cookies ??= []).push(value)
     }
   }
 
-  // https://fetch.spec.whatwg.org/#concept-header-list-set
-  set (name, value) {
+  /**
+   * @see https://fetch.spec.whatwg.org/#concept-header-list-set
+   * @param {string} name
+   * @param {string} value
+   * @param {boolean} isLowerCase
+   */
+  set (name, value, isLowerCase) {
     this[kHeadersSortedMap] = null
-    const lowercaseName = name.toLowerCase()
+    const lowercaseName = isLowerCase ? name : name.toLowerCase()
 
     if (lowercaseName === 'set-cookie') {
       this.cookies = [value]
@@ -35912,11 +36077,14 @@ class HeadersList {
     this[kHeadersMap].set(lowercaseName, { name, value })
   }
 
-  // https://fetch.spec.whatwg.org/#concept-header-list-delete
-  delete (name) {
+  /**
+   * @see https://fetch.spec.whatwg.org/#concept-header-list-delete
+   * @param {string} name
+   * @param {boolean} isLowerCase
+   */
+  delete (name, isLowerCase) {
     this[kHeadersSortedMap] = null
-
-    name = name.toLowerCase()
+    if (!isLowerCase) name = name.toLowerCase()
 
     if (name === 'set-cookie') {
       this.cookies = null
@@ -35925,15 +36093,18 @@ class HeadersList {
     this[kHeadersMap].delete(name)
   }
 
-  // https://fetch.spec.whatwg.org/#concept-header-list-get
-  get (name) {
-    const value = this[kHeadersMap].get(name.toLowerCase())
-
+  /**
+   * @see https://fetch.spec.whatwg.org/#concept-header-list-get
+   * @param {string} name
+   * @param {boolean} isLowerCase
+   * @returns {string | null}
+   */
+  get (name, isLowerCase) {
     // 1. If list does not contain name, then return null.
     // 2. Return the values of all headers in list whose name
     //    is a byte-case-insensitive match for name,
     //    separated from each other by 0x2C 0x20, in order.
-    return value === undefined ? null : value.value
+    return this[kHeadersMap].get(isLowerCase ? name : name.toLowerCase())?.value ?? null
   }
 
   * [Symbol.iterator] () {
@@ -36023,14 +36194,14 @@ class Headers {
 
     // 6. If this’s header list does not contain name, then
     //    return.
-    if (!this[kHeadersList].contains(name)) {
+    if (!this[kHeadersList].contains(name, false)) {
       return
     }
 
     // 7. Delete name from this’s header list.
     // 8. If this’s guard is "request-no-cors", then remove
     //    privileged no-CORS request headers from this.
-    this[kHeadersList].delete(name)
+    this[kHeadersList].delete(name, false)
   }
 
   // https://fetch.spec.whatwg.org/#dom-headers-get
@@ -36052,7 +36223,7 @@ class Headers {
 
     // 2. Return the result of getting name from this’s header
     //    list.
-    return this[kHeadersList].get(name)
+    return this[kHeadersList].get(name, false)
   }
 
   // https://fetch.spec.whatwg.org/#dom-headers-has
@@ -36074,7 +36245,7 @@ class Headers {
 
     // 2. Return true if this’s header list contains name;
     //    otherwise false.
-    return this[kHeadersList].contains(name)
+    return this[kHeadersList].contains(name, false)
   }
 
   // https://fetch.spec.whatwg.org/#dom-headers-set
@@ -36123,7 +36294,7 @@ class Headers {
     // 7. Set (name, value) in this’s header list.
     // 8. If this’s guard is "request-no-cors", then remove
     //    privileged no-CORS request headers from this
-    this[kHeadersList].set(name, value)
+    this[kHeadersList].set(name, value, false)
   }
 
   // https://fetch.spec.whatwg.org/#dom-headers-getsetcookie
@@ -36325,7 +36496,7 @@ const {
   filterResponse,
   makeResponse
 } = __nccwpck_require__(7823)
-const { Headers } = __nccwpck_require__(554)
+const { Headers, HeadersList } = __nccwpck_require__(554)
 const { Request, makeRequest } = __nccwpck_require__(8359)
 const zlib = __nccwpck_require__(9796)
 const {
@@ -36357,6 +36528,7 @@ const {
   urlIsLocal,
   urlIsHttpHttpsScheme,
   urlHasHttpsScheme,
+  clampAndCoursenConnectionTimingInfo,
   simpleRangeHeaderValue,
   buildContentRange
 } = __nccwpck_require__(2538)
@@ -36373,7 +36545,7 @@ const {
 const { kHeadersList, kConstruct } = __nccwpck_require__(2785)
 const EE = __nccwpck_require__(2361)
 const { Readable, pipeline } = __nccwpck_require__(2781)
-const { addAbortListener, isErrored, isReadable, nodeMajor, nodeMinor } = __nccwpck_require__(3983)
+const { addAbortListener, isErrored, isReadable, nodeMajor, nodeMinor, bufferToLowerCasedHeaderName } = __nccwpck_require__(3983)
 const { dataURLProcessor, serializeAMimeType, parseMIMEType } = __nccwpck_require__(685)
 const { getGlobalDispatcher } = __nccwpck_require__(1892)
 const { webidl } = __nccwpck_require__(1744)
@@ -36791,7 +36963,7 @@ function fetching ({
   }
 
   // 12. If request’s header list does not contain `Accept`, then:
-  if (!request.headersList.contains('accept')) {
+  if (!request.headersList.contains('accept', true)) {
     // 1. Let value be `*/*`.
     const value = '*/*'
 
@@ -36808,14 +36980,14 @@ function fetching ({
     // TODO
 
     // 3. Append `Accept`/value to request’s header list.
-    request.headersList.append('accept', value)
+    request.headersList.append('accept', value, true)
   }
 
   // 13. If request’s header list does not contain `Accept-Language`, then
   // user agents should append `Accept-Language`/an appropriate value to
   // request’s header list.
-  if (!request.headersList.contains('accept-language')) {
-    request.headersList.append('accept-language', '*')
+  if (!request.headersList.contains('accept-language', true)) {
+    request.headersList.append('accept-language', '*', true)
   }
 
   // 14. If request’s priority is null, then use request’s initiator and
@@ -37034,7 +37206,7 @@ async function mainFetch (fetchParams, recursive = false) {
     response.type === 'opaque' &&
     internalResponse.status === 206 &&
     internalResponse.rangeRequested &&
-    !request.headers.contains('range')
+    !request.headers.contains('range', true)
   ) {
     response = internalResponse = makeNetworkError()
   }
@@ -37156,7 +37328,7 @@ function schemeFetch (fetchParams) {
 
       // 8. If request’s header list does not contain `Range`:
       // 9. Otherwise:
-      if (!request.headersList.contains('range')) {
+      if (!request.headersList.contains('range', true)) {
         // 1. Let bodyWithType be the result of safely extracting blob.
         // Note: in the FileAPI a blob "object" is a Blob *or* a MediaSource.
         // In node, this can only ever be a Blob. Therefore we can safely
@@ -37170,14 +37342,14 @@ function schemeFetch (fetchParams) {
         response.body = bodyWithType[0]
 
         // 4. Set response’s header list to « (`Content-Length`, serializedFullLength), (`Content-Type`, type) ».
-        response.headersList.set('content-length', serializedFullLength)
-        response.headersList.set('content-type', type)
+        response.headersList.set('content-length', serializedFullLength, true)
+        response.headersList.set('content-type', type, true)
       } else {
         // 1. Set response’s range-requested flag.
         response.rangeRequested = true
 
         // 2. Let rangeHeader be the result of getting `Range` from request’s header list.
-        const rangeHeader = request.headersList.get('range')
+        const rangeHeader = request.headersList.get('range', true)
 
         // 3. Let rangeValue be the result of parsing a single range header value given rangeHeader and true.
         const rangeValue = simpleRangeHeaderValue(rangeHeader, true)
@@ -37237,9 +37409,9 @@ function schemeFetch (fetchParams) {
 
         // 15. Set response’s header list to « (`Content-Length`, serializedSlicedLength),
         //     (`Content-Type`, type), (`Content-Range`, contentRange) ».
-        response.headersList.set('content-length', serializedSlicedLength)
-        response.headersList.set('content-type', type)
-        response.headersList.set('content-range', contentRange)
+        response.headersList.set('content-length', serializedSlicedLength, true)
+        response.headersList.set('content-type', type, true)
+        response.headersList.set('content-range', contentRange, true)
       }
 
       // 10. Return response.
@@ -37356,7 +37528,7 @@ function fetchFinale (fetchParams, response) {
         responseStatus = response.status
 
         // 2. Let mimeType be the result of extracting a MIME type from response’s header list.
-        const mimeType = parseMIMEType(response.headersList.get('content-type')) // TODO: fix
+        const mimeType = parseMIMEType(response.headersList.get('content-type', true)) // TODO: fix
 
         // 3. If mimeType is not failure, then set bodyInfo’s content type to the result of minimizing a supported MIME type given mimeType.
         if (mimeType !== 'failure') {
@@ -37652,11 +37824,11 @@ function httpRedirectFetch (fetchParams, response) {
   //     delete headerName from request’s header list.
   if (!sameOrigin(requestCurrentURL(request), locationURL)) {
     // https://fetch.spec.whatwg.org/#cors-non-wildcard-request-header-name
-    request.headersList.delete('authorization')
+    request.headersList.delete('authorization', true)
 
     // "Cookie" and "Host" are forbidden request-headers, which undici doesn't implement.
-    request.headersList.delete('cookie')
-    request.headersList.delete('host')
+    request.headersList.delete('cookie', true)
+    request.headersList.delete('host', true)
   }
 
   // 14. If request’s body is non-null, then set request’s body to the first return
@@ -37772,7 +37944,7 @@ async function httpNetworkOrCacheFetch (
   //    `Content-Length`/contentLengthHeaderValue to httpRequest’s header
   //    list.
   if (contentLengthHeaderValue != null) {
-    httpRequest.headersList.append('content-length', contentLengthHeaderValue)
+    httpRequest.headersList.append('content-length', contentLengthHeaderValue, true)
   }
 
   //    9. If contentLengthHeaderValue is non-null, then append (`Content-Length`,
@@ -37788,7 +37960,7 @@ async function httpNetworkOrCacheFetch (
   //    `Referer`/httpRequest’s referrer, serialized and isomorphic encoded,
   //     to httpRequest’s header list.
   if (httpRequest.referrer instanceof URL) {
-    httpRequest.headersList.append('referer', isomorphicEncode(httpRequest.referrer.href))
+    httpRequest.headersList.append('referer', isomorphicEncode(httpRequest.referrer.href), true)
   }
 
   //    12. Append a request `Origin` header for httpRequest.
@@ -37800,8 +37972,8 @@ async function httpNetworkOrCacheFetch (
   //    14. If httpRequest’s header list does not contain `User-Agent`, then
   //    user agents should append `User-Agent`/default `User-Agent` value to
   //    httpRequest’s header list.
-  if (!httpRequest.headersList.contains('user-agent')) {
-    httpRequest.headersList.append('user-agent', typeof esbuildDetection === 'undefined' ? 'undici' : 'node')
+  if (!httpRequest.headersList.contains('user-agent', true)) {
+    httpRequest.headersList.append('user-agent', typeof esbuildDetection === 'undefined' ? 'undici' : 'node', true)
   }
 
   //    15. If httpRequest’s cache mode is "default" and httpRequest’s header
@@ -37810,11 +37982,11 @@ async function httpNetworkOrCacheFetch (
   //    httpRequest’s cache mode to "no-store".
   if (
     httpRequest.cache === 'default' &&
-    (httpRequest.headersList.contains('if-modified-since') ||
-      httpRequest.headersList.contains('if-none-match') ||
-      httpRequest.headersList.contains('if-unmodified-since') ||
-      httpRequest.headersList.contains('if-match') ||
-      httpRequest.headersList.contains('if-range'))
+    (httpRequest.headersList.contains('if-modified-since', true) ||
+      httpRequest.headersList.contains('if-none-match', true) ||
+      httpRequest.headersList.contains('if-unmodified-since', true) ||
+      httpRequest.headersList.contains('if-match', true) ||
+      httpRequest.headersList.contains('if-range', true))
   ) {
     httpRequest.cache = 'no-store'
   }
@@ -37826,44 +37998,44 @@ async function httpNetworkOrCacheFetch (
   if (
     httpRequest.cache === 'no-cache' &&
     !httpRequest.preventNoCacheCacheControlHeaderModification &&
-    !httpRequest.headersList.contains('cache-control')
+    !httpRequest.headersList.contains('cache-control', true)
   ) {
-    httpRequest.headersList.append('cache-control', 'max-age=0')
+    httpRequest.headersList.append('cache-control', 'max-age=0', true)
   }
 
   //    17. If httpRequest’s cache mode is "no-store" or "reload", then:
   if (httpRequest.cache === 'no-store' || httpRequest.cache === 'reload') {
     // 1. If httpRequest’s header list does not contain `Pragma`, then append
     // `Pragma`/`no-cache` to httpRequest’s header list.
-    if (!httpRequest.headersList.contains('pragma')) {
-      httpRequest.headersList.append('pragma', 'no-cache')
+    if (!httpRequest.headersList.contains('pragma', true)) {
+      httpRequest.headersList.append('pragma', 'no-cache', true)
     }
 
     // 2. If httpRequest’s header list does not contain `Cache-Control`,
     // then append `Cache-Control`/`no-cache` to httpRequest’s header list.
-    if (!httpRequest.headersList.contains('cache-control')) {
-      httpRequest.headersList.append('cache-control', 'no-cache')
+    if (!httpRequest.headersList.contains('cache-control', true)) {
+      httpRequest.headersList.append('cache-control', 'no-cache', true)
     }
   }
 
   //    18. If httpRequest’s header list contains `Range`, then append
   //    `Accept-Encoding`/`identity` to httpRequest’s header list.
-  if (httpRequest.headersList.contains('range')) {
-    httpRequest.headersList.append('accept-encoding', 'identity')
+  if (httpRequest.headersList.contains('range', true)) {
+    httpRequest.headersList.append('accept-encoding', 'identity', true)
   }
 
   //    19. Modify httpRequest’s header list per HTTP. Do not append a given
   //    header if httpRequest’s header list contains that header’s name.
   //    TODO: https://github.com/whatwg/fetch/issues/1285#issuecomment-896560129
-  if (!httpRequest.headersList.contains('accept-encoding')) {
+  if (!httpRequest.headersList.contains('accept-encoding', true)) {
     if (urlHasHttpsScheme(requestCurrentURL(httpRequest))) {
-      httpRequest.headersList.append('accept-encoding', 'br, gzip, deflate')
+      httpRequest.headersList.append('accept-encoding', 'br, gzip, deflate', true)
     } else {
-      httpRequest.headersList.append('accept-encoding', 'gzip, deflate')
+      httpRequest.headersList.append('accept-encoding', 'gzip, deflate', true)
     }
   }
 
-  httpRequest.headersList.delete('host')
+  httpRequest.headersList.delete('host', true)
 
   //    20. If includeCredentials is true, then:
   if (includeCredentials) {
@@ -37946,7 +38118,7 @@ async function httpNetworkOrCacheFetch (
 
   // 12. If httpRequest’s header list contains `Range`, then set response’s
   // range-requested flag.
-  if (httpRequest.headersList.contains('range')) {
+  if (httpRequest.headersList.contains('range', true)) {
     response.rangeRequested = true
   }
 
@@ -38391,7 +38563,7 @@ async function httpNetworkFetch (
   // 20. Return response.
   return response
 
-  async function dispatch ({ body }) {
+  function dispatch ({ body }) {
     const url = requestCurrentURL(request)
     /** @type {import('../..').Agent} */
     const agent = fetchParams.controller.dispatcher
@@ -38401,7 +38573,7 @@ async function httpNetworkFetch (
         path: url.pathname + url.search,
         origin: url.origin,
         method: request.method,
-        body: fetchParams.controller.dispatcher.isMockActive ? request.body && (request.body.source || request.body.stream) : body,
+        body: agent.isMockActive ? request.body && (request.body.source || request.body.stream) : body,
         headers: request.headersList.entries,
         maxRedirections: 0,
         upgrade: request.mode === 'websocket' ? 'websocket' : undefined
@@ -38414,67 +38586,83 @@ async function httpNetworkFetch (
           // TODO (fix): Do we need connection here?
           const { connection } = fetchParams.controller
 
+          // Set timingInfo’s final connection timing info to the result of calling clamp and coarsen
+          // connection timing info with connection’s timing info, timingInfo’s post-redirect start
+          // time, and fetchParams’s cross-origin isolated capability.
+          // TODO: implement connection timing
+          timingInfo.finalConnectionTimingInfo = clampAndCoursenConnectionTimingInfo(undefined, timingInfo.postRedirectStartTime, fetchParams.crossOriginIsolatedCapability)
+
           if (connection.destroyed) {
             abort(new DOMException('The operation was aborted.', 'AbortError'))
           } else {
             fetchParams.controller.on('terminated', abort)
             this.abort = connection.abort = abort
           }
+
+          // Set timingInfo’s final network-request start time to the coarsened shared current time given
+          // fetchParams’s cross-origin isolated capability.
+          timingInfo.finalNetworkRequestStartTime = coarsenedSharedCurrentTime(fetchParams.crossOriginIsolatedCapability)
         },
 
-        onHeaders (status, headersList, resume, statusText) {
+        onResponseStarted () {
+          // Set timingInfo’s final network-response start time to the coarsened shared current
+          // time given fetchParams’s cross-origin isolated capability, immediately after the
+          // user agent’s HTTP parser receives the first byte of the response (e.g., frame header
+          // bytes for HTTP/2 or response status line for HTTP/1.x).
+          timingInfo.finalNetworkResponseStartTime = coarsenedSharedCurrentTime(fetchParams.crossOriginIsolatedCapability)
+        },
+
+        onHeaders (status, rawHeaders, resume, statusText) {
           if (status < 200) {
             return
           }
 
+          /** @type {string[]} */
           let codings = []
           let location = ''
 
-          const headers = new Headers()
+          const headersList = new HeadersList()
 
-          // For H2, the headers are a plain JS object
+          // For H2, the rawHeaders are a plain JS object
           // We distinguish between them and iterate accordingly
-          if (Array.isArray(headersList)) {
-            for (let n = 0; n < headersList.length; n += 2) {
-              const key = headersList[n + 0].toString('latin1')
-              const val = headersList[n + 1].toString('latin1')
-              if (key.toLowerCase() === 'content-encoding') {
-                // https://www.rfc-editor.org/rfc/rfc7231#section-3.1.2.1
-                // "All content-coding values are case-insensitive..."
-                codings = val.toLowerCase().split(',').map((x) => x.trim())
-              } else if (key.toLowerCase() === 'location') {
-                location = val
-              }
-
-              headers[kHeadersList].append(key, val)
+          if (Array.isArray(rawHeaders)) {
+            for (let i = 0; i < rawHeaders.length; i += 2) {
+              headersList.append(bufferToLowerCasedHeaderName(rawHeaders[i]), rawHeaders[i + 1].toString('latin1'), true)
             }
+            const contentEncoding = headersList.get('content-encoding', true)
+            if (contentEncoding) {
+              // https://www.rfc-editor.org/rfc/rfc7231#section-3.1.2.1
+              // "All content-coding values are case-insensitive..."
+              codings = contentEncoding.toLowerCase().split(',').map((x) => x.trim())
+            }
+            location = headersList.get('location', true)
           } else {
-            const keys = Object.keys(headersList)
-            for (const key of keys) {
-              const val = headersList[key]
-              if (key.toLowerCase() === 'content-encoding') {
-                // https://www.rfc-editor.org/rfc/rfc7231#section-3.1.2.1
-                // "All content-coding values are case-insensitive..."
-                codings = val.toLowerCase().split(',').map((x) => x.trim()).reverse()
-              } else if (key.toLowerCase() === 'location') {
-                location = val
-              }
-
-              headers[kHeadersList].append(key, val)
+            const keys = Object.keys(rawHeaders)
+            for (let i = 0; i < keys.length; ++i) {
+              headersList.append(keys[i], rawHeaders[keys[i]])
             }
+            // For H2, The header names are already in lowercase,
+            // so we can avoid the `HeadersList#get` call here.
+            const contentEncoding = rawHeaders['content-encoding']
+            if (contentEncoding) {
+              // https://www.rfc-editor.org/rfc/rfc7231#section-3.1.2.1
+              // "All content-coding values are case-insensitive..."
+              codings = contentEncoding.toLowerCase().split(',').map((x) => x.trim()).reverse()
+            }
+            location = rawHeaders.location
           }
 
           this.body = new Readable({ read: resume })
 
           const decoders = []
 
-          const willFollow = request.redirect === 'follow' &&
-            location &&
+          const willFollow = location && request.redirect === 'follow' &&
             redirectStatusSet.has(status)
 
           // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Encoding
           if (request.method !== 'HEAD' && request.method !== 'CONNECT' && !nullBodyStatus.includes(status) && !willFollow) {
-            for (const coding of codings) {
+            for (let i = 0; i < codings.length; ++i) {
+              const coding = codings[i]
               // https://www.rfc-editor.org/rfc/rfc9112.html#section-7.2
               if (coding === 'x-gzip' || coding === 'gzip') {
                 decoders.push(zlib.createGunzip({
@@ -38499,7 +38687,7 @@ async function httpNetworkFetch (
           resolve({
             status,
             statusText,
-            headersList: headers[kHeadersList],
+            headersList,
             body: decoders.length
               ? pipeline(this.body, ...decoders, () => { })
               : this.body.on('error', () => {})
@@ -38553,24 +38741,21 @@ async function httpNetworkFetch (
           reject(error)
         },
 
-        onUpgrade (status, headersList, socket) {
+        onUpgrade (status, rawHeaders, socket) {
           if (status !== 101) {
             return
           }
 
-          const headers = new Headers()
+          const headersList = new HeadersList()
 
-          for (let n = 0; n < headersList.length; n += 2) {
-            const key = headersList[n + 0].toString('latin1')
-            const val = headersList[n + 1].toString('latin1')
-
-            headers[kHeadersList].append(key, val)
+          for (let i = 0; i < rawHeaders.length; i += 2) {
+            headersList.append(bufferToLowerCasedHeaderName(rawHeaders[i]), rawHeaders[i + 1].toString('latin1'), true)
           }
 
           resolve({
             status,
             statusText: STATUS_CODES[status],
-            headersList: headers[kHeadersList],
+            headersList,
             socket
           })
 
@@ -39671,7 +39856,7 @@ class Response {
     const value = isomorphicEncode(URLSerializer(parsedURL))
 
     // 7. Append `Location`/value to responseObject’s response’s header list.
-    responseObject[kState].headersList.append('location', value)
+    responseObject[kState].headersList.append('location', value, true)
 
     // 8. Return responseObject.
     return responseObject
@@ -40041,8 +40226,8 @@ function initializeResponse (response, init, body) {
 
     // 3. If body's type is non-null and response's header list does not contain
     //    `Content-Type`, then append (`Content-Type`, body's type) to response's header list.
-    if (body.type != null && !response[kState].headersList.contains('Content-Type')) {
-      response[kState].headersList.append('content-type', body.type)
+    if (body.type != null && !response[kState].headersList.contains('content-type', true)) {
+      response[kState].headersList.append('content-type', body.type, true)
     }
   }
 }
@@ -40155,7 +40340,7 @@ module.exports = {
 const { redirectStatusSet, referrerPolicySet: referrerPolicyTokens, badPortsSet } = __nccwpck_require__(1037)
 const { getGlobalOrigin } = __nccwpck_require__(1246)
 const { performance } = __nccwpck_require__(4074)
-const { isBlobLike, toUSVString, ReadableStreamFrom } = __nccwpck_require__(3983)
+const { isBlobLike, toUSVString, ReadableStreamFrom, isValidHTTPToken } = __nccwpck_require__(3983)
 const assert = __nccwpck_require__(9491)
 const { isUint8Array } = __nccwpck_require__(9830)
 
@@ -40187,7 +40372,7 @@ function responseLocationURL (response, requestFragment) {
 
   // 2. Let location be the result of extracting header list values given
   // `Location` and response’s header list.
-  let location = response.headersList.get('location')
+  let location = response.headersList.get('location', true)
 
   // 3. If location is a header value, then set location to the result of
   //    parsing location with response’s URL.
@@ -40256,52 +40441,6 @@ function isValidReasonPhrase (statusText) {
 }
 
 /**
- * @see https://tools.ietf.org/html/rfc7230#section-3.2.6
- * @param {number} c
- */
-function isTokenCharCode (c) {
-  switch (c) {
-    case 0x22:
-    case 0x28:
-    case 0x29:
-    case 0x2c:
-    case 0x2f:
-    case 0x3a:
-    case 0x3b:
-    case 0x3c:
-    case 0x3d:
-    case 0x3e:
-    case 0x3f:
-    case 0x40:
-    case 0x5b:
-    case 0x5c:
-    case 0x5d:
-    case 0x7b:
-    case 0x7d:
-      // DQUOTE and "(),/:;<=>?@[\]{}"
-      return false
-    default:
-      // VCHAR %x21-7E
-      return c >= 0x21 && c <= 0x7e
-  }
-}
-
-/**
- * @param {string} characters
- */
-function isValidHTTPToken (characters) {
-  if (characters.length === 0) {
-    return false
-  }
-  for (let i = 0; i < characters.length; ++i) {
-    if (!isTokenCharCode(characters.charCodeAt(i))) {
-      return false
-    }
-  }
-  return true
-}
-
-/**
  * @see https://fetch.spec.whatwg.org/#header-name
  * @param {string} potentialValue
  */
@@ -40351,7 +40490,7 @@ function setRequestReferrerPolicyOnRedirect (request, actualResponse) {
   // 2. Let policy be the empty string.
   // 3. For each token in policy-tokens, if token is a referrer policy and token is not the empty string, then set policy to token.
   // 4. Return policy.
-  const policyHeader = (headersList.get('referrer-policy') ?? '').split(',')
+  const policyHeader = (headersList.get('referrer-policy', true) ?? '').split(',')
 
   // Note: As the referrer-policy can contain multiple policies
   // separated by comma, we need to loop through all of them
@@ -40410,7 +40549,7 @@ function appendFetchMetadata (httpRequest) {
   header = httpRequest.mode
 
   //  4. Set a structured field value `Sec-Fetch-Mode`/header in r’s header list.
-  httpRequest.headersList.set('sec-fetch-mode', header)
+  httpRequest.headersList.set('sec-fetch-mode', header, true)
 
   //  https://w3c.github.io/webappsec-fetch-metadata/#sec-fetch-site-header
   //  TODO
@@ -40427,7 +40566,7 @@ function appendRequestOriginHeader (request) {
   // 2. If request’s response tainting is "cors" or request’s mode is "websocket", then append (`Origin`, serializedOrigin) to request’s header list.
   if (request.responseTainting === 'cors' || request.mode === 'websocket') {
     if (serializedOrigin) {
-      request.headersList.append('origin', serializedOrigin)
+      request.headersList.append('origin', serializedOrigin, true)
     }
 
   // 3. Otherwise, if request’s method is neither `GET` nor `HEAD`, then:
@@ -40458,14 +40597,43 @@ function appendRequestOriginHeader (request) {
 
     if (serializedOrigin) {
       // 2. Append (`Origin`, serializedOrigin) to request’s header list.
-      request.headersList.append('origin', serializedOrigin)
+      request.headersList.append('origin', serializedOrigin, true)
     }
   }
 }
 
-function coarsenedSharedCurrentTime (crossOriginIsolatedCapability) {
+// https://w3c.github.io/hr-time/#dfn-coarsen-time
+function coarsenTime (timestamp, crossOriginIsolatedCapability) {
   // TODO
-  return performance.now()
+  return timestamp
+}
+
+// https://fetch.spec.whatwg.org/#clamp-and-coarsen-connection-timing-info
+function clampAndCoursenConnectionTimingInfo (connectionTimingInfo, defaultStartTime, crossOriginIsolatedCapability) {
+  if (!connectionTimingInfo?.startTime || connectionTimingInfo.startTime < defaultStartTime) {
+    return {
+      domainLookupStartTime: defaultStartTime,
+      domainLookupEndTime: defaultStartTime,
+      connectionStartTime: defaultStartTime,
+      connectionEndTime: defaultStartTime,
+      secureConnectionStartTime: defaultStartTime,
+      ALPNNegotiatedProtocol: connectionTimingInfo?.ALPNNegotiatedProtocol
+    }
+  }
+
+  return {
+    domainLookupStartTime: coarsenTime(connectionTimingInfo.domainLookupStartTime, crossOriginIsolatedCapability),
+    domainLookupEndTime: coarsenTime(connectionTimingInfo.domainLookupEndTime, crossOriginIsolatedCapability),
+    connectionStartTime: coarsenTime(connectionTimingInfo.connectionStartTime, crossOriginIsolatedCapability),
+    connectionEndTime: coarsenTime(connectionTimingInfo.connectionEndTime, crossOriginIsolatedCapability),
+    secureConnectionStartTime: coarsenTime(connectionTimingInfo.secureConnectionStartTime, crossOriginIsolatedCapability),
+    ALPNNegotiatedProtocol: connectionTimingInfo.ALPNNegotiatedProtocol
+  }
+}
+
+// https://w3c.github.io/hr-time/#dfn-coarsened-shared-current-time
+function coarsenedSharedCurrentTime (crossOriginIsolatedCapability) {
+  return coarsenTime(performance.now(), crossOriginIsolatedCapability)
 }
 
 // https://fetch.spec.whatwg.org/#create-an-opaque-timing-info
@@ -41049,22 +41217,27 @@ function isReadableStreamLike (stream) {
   )
 }
 
-const MAXIMUM_ARGUMENT_LENGTH = 65535
-
 /**
  * @see https://infra.spec.whatwg.org/#isomorphic-decode
- * @param {number[]|Uint8Array} input
+ * @param {Uint8Array} input
  */
 function isomorphicDecode (input) {
   // 1. To isomorphic decode a byte sequence input, return a string whose code point
   //    length is equal to input’s length and whose code points have the same values
   //    as the values of input’s bytes, in the same order.
-
-  if (input.length < MAXIMUM_ARGUMENT_LENGTH) {
-    return String.fromCharCode(...input)
+  const length = input.length
+  if ((2 << 15) - 1 > length) {
+    return String.fromCharCode.apply(null, input)
   }
-
-  return input.reduce((previous, current) => previous + String.fromCharCode(current), '')
+  let result = ''; let i = 0
+  let addition = (2 << 15) - 1
+  while (i < length) {
+    if (i + addition > length) {
+      addition = length - i
+    }
+    result += String.fromCharCode.apply(null, input.subarray(i, i += addition))
+  }
+  return result
 }
 
 /**
@@ -41338,6 +41511,7 @@ module.exports = {
   ReadableStreamFrom,
   toUSVString,
   tryUpgradeRequestToAPotentiallyTrustworthyURL,
+  clampAndCoursenConnectionTimingInfo,
   coarsenedSharedCurrentTime,
   determineRequestsReferrer,
   makePolicyContainer,
@@ -43454,7 +43628,7 @@ function parseLocation (statusCode, headers) {
   }
 
   for (let i = 0; i < headers.length; i += 2) {
-    if (headers[i].toString().toLowerCase() === 'location') {
+    if (headers[i].length === 8 && util.headerNameToString(headers[i]) === 'location') {
       return headers[i + 1]
     }
   }
@@ -43462,12 +43636,17 @@ function parseLocation (statusCode, headers) {
 
 // https://tools.ietf.org/html/rfc7231#section-6.4.4
 function shouldRemoveHeader (header, removeContent, unknownOrigin) {
-  return (
-    (header.length === 4 && header.toString().toLowerCase() === 'host') ||
-    (removeContent && header.toString().toLowerCase().indexOf('content-') === 0) ||
-    (unknownOrigin && header.length === 13 && header.toString().toLowerCase() === 'authorization') ||
-    (unknownOrigin && header.length === 6 && header.toString().toLowerCase() === 'cookie')
-  )
+  if (header.length === 4) {
+    return util.headerNameToString(header) === 'host'
+  }
+  if (removeContent && util.headerNameToString(header).startsWith('content-')) {
+    return true
+  }
+  if (unknownOrigin && (header.length === 13 || header.length === 6)) {
+    const name = util.headerNameToString(header)
+    return name === 'authorization' || name === 'cookie'
+  }
+  return false
 }
 
 // https://tools.ietf.org/html/rfc7231#section-6.4
@@ -44227,16 +44406,6 @@ const Dispatcher = __nccwpck_require__(412)
 const Pluralizer = __nccwpck_require__(8891)
 const PendingInterceptorsFormatter = __nccwpck_require__(6823)
 
-class FakeWeakRef {
-  constructor (value) {
-    this.value = value
-  }
-
-  deref () {
-    return this.value
-  }
-}
-
 class MockAgent extends Dispatcher {
   constructor (opts) {
     super(opts)
@@ -44309,7 +44478,7 @@ class MockAgent extends Dispatcher {
   }
 
   [kMockAgentSet] (origin, dispatcher) {
-    this[kClients].set(origin, new FakeWeakRef(dispatcher))
+    this[kClients].set(origin, dispatcher)
   }
 
   [kFactory] (origin) {
@@ -44321,9 +44490,9 @@ class MockAgent extends Dispatcher {
 
   [kMockAgentGet] (origin) {
     // First check if we can immediately find it
-    const ref = this[kClients].get(origin)
-    if (ref) {
-      return ref.deref()
+    const client = this[kClients].get(origin)
+    if (client) {
+      return client
     }
 
     // If the origin is not a string create a dummy parent pool and return to user
@@ -44334,8 +44503,7 @@ class MockAgent extends Dispatcher {
     }
 
     // If we match, create a pool and assign the same dispatches
-    for (const [keyMatcher, nonExplicitRef] of Array.from(this[kClients])) {
-      const nonExplicitDispatcher = nonExplicitRef.deref()
+    for (const [keyMatcher, nonExplicitDispatcher] of Array.from(this[kClients])) {
       if (nonExplicitDispatcher && typeof keyMatcher !== 'string' && matchValue(keyMatcher, origin)) {
         const dispatcher = this[kFactory](origin)
         this[kMockAgentSet](origin, dispatcher)
@@ -44353,7 +44521,7 @@ class MockAgent extends Dispatcher {
     const mockAgentClients = this[kClients]
 
     return Array.from(mockAgentClients.entries())
-      .flatMap(([origin, scope]) => scope.deref()[kDispatches].map(dispatch => ({ ...dispatch, origin })))
+      .flatMap(([origin, scope]) => scope[kDispatches].map(dispatch => ({ ...dispatch, origin })))
       .filter(({ pending }) => pending)
   }
 
