@@ -25962,9 +25962,9 @@ const kSignal = Symbol('kSignal')
 
 function abort (self) {
   if (self.abort) {
-    self.abort()
+    self.abort(self[kSignal]?.reason)
   } else {
-    self.onError(new RequestAbortedError())
+    self.onError(self[kSignal]?.reason ?? new RequestAbortedError())
   }
 }
 
@@ -27641,14 +27641,12 @@ class Cache {
     // 5.5.2
     for (const response of responses) {
       // 5.5.2.1
-      const responseObject = new Response(response.body?.source ?? null)
-      const body = responseObject[kState].body
+      const responseObject = new Response(null)
       responseObject[kState] = response
-      responseObject[kState].body = body
       responseObject[kHeaders][kHeadersList] = response.headersList
       responseObject[kHeaders][kGuard] = 'immutable'
 
-      responseList.push(responseObject)
+      responseList.push(responseObject.clone())
     }
 
     // 6.
@@ -27675,8 +27673,6 @@ class Cache {
     webidl.brandCheck(this, Cache)
     webidl.argumentLengthCheck(arguments, 1, { header: 'Cache.addAll' })
 
-    requests = webidl.converters['sequence<RequestInfo>'](requests)
-
     // 1.
     const responsePromises = []
 
@@ -27684,7 +27680,17 @@ class Cache {
     const requestList = []
 
     // 3.
-    for (const request of requests) {
+    for (let request of requests) {
+      if (request === undefined) {
+        throw webidl.errors.conversionFailed({
+          prefix: 'Cache.addAll',
+          argument: 'Argument 1',
+          types: ['undefined is not allowed']
+        })
+      }
+
+      request = webidl.converters.RequestInfo(request)
+
       if (typeof request === 'string') {
         continue
       }
@@ -28606,6 +28612,7 @@ const net = __nccwpck_require__(1808)
 const http = __nccwpck_require__(3685)
 const { pipeline } = __nccwpck_require__(2781)
 const util = __nccwpck_require__(3983)
+const { channels } = __nccwpck_require__(8438)
 const timers = __nccwpck_require__(9459)
 const Request = __nccwpck_require__(2905)
 const DispatcherBase = __nccwpck_require__(4839)
@@ -28704,21 +28711,6 @@ let h2ExperimentalWarned = false
 const FastBuffer = Buffer[Symbol.species]
 
 const kClosedResolve = Symbol('kClosedResolve')
-
-const channels = {}
-
-try {
-  const diagnosticsChannel = __nccwpck_require__(7643)
-  channels.sendHeaders = diagnosticsChannel.channel('undici:client:sendHeaders')
-  channels.beforeConnect = diagnosticsChannel.channel('undici:client:beforeConnect')
-  channels.connectError = diagnosticsChannel.channel('undici:client:connectError')
-  channels.connected = diagnosticsChannel.channel('undici:client:connected')
-} catch {
-  channels.sendHeaders = { hasSubscribers: false }
-  channels.beforeConnect = { hasSubscribers: false }
-  channels.connectError = { hasSubscribers: false }
-  channels.connected = { hasSubscribers: false }
-}
 
 /**
  * @type {import('../types/client').default}
@@ -29788,6 +29780,7 @@ async function connect (client) {
         hostname,
         protocol,
         port,
+        version: client[kHTTPConnVersion],
         servername: client[kServerName],
         localAddress: client[kLocalAddress]
       },
@@ -29881,6 +29874,7 @@ async function connect (client) {
           hostname,
           protocol,
           port,
+          version: client[kHTTPConnVersion],
           servername: client[kServerName],
           localAddress: client[kLocalAddress]
         },
@@ -29903,6 +29897,7 @@ async function connect (client) {
           hostname,
           protocol,
           port,
+          version: client[kHTTPConnVersion],
           servername: client[kServerName],
           localAddress: client[kLocalAddress]
         },
@@ -30255,19 +30250,6 @@ function writeH2 (client, session, request) {
     return false
   }
 
-  try {
-    // TODO(HTTP/2): Should we call onConnect immediately or on stream ready event?
-    request.onConnect((err) => {
-      if (request.aborted || request.completed) {
-        return
-      }
-
-      errorRequest(client, request, err || new RequestAbortedError())
-    })
-  } catch (err) {
-    errorRequest(client, request, err)
-  }
-
   if (request.aborted) {
     return false
   }
@@ -30279,9 +30261,34 @@ function writeH2 (client, session, request) {
   headers[HTTP2_HEADER_AUTHORITY] = host || client[kHost]
   headers[HTTP2_HEADER_METHOD] = method
 
+  try {
+    // We are already connected, streams are pending.
+    // We can call on connect, and wait for abort
+    request.onConnect((err) => {
+      if (request.aborted || request.completed) {
+        return
+      }
+
+      err = err || new RequestAbortedError()
+
+      if (stream != null) {
+        util.destroy(stream, err)
+
+        h2State.openStreams -= 1
+        if (h2State.openStreams === 0) {
+          session.unref()
+        }
+      }
+
+      errorRequest(client, request, err)
+    })
+  } catch (err) {
+    errorRequest(client, request, err)
+  }
+
   if (method === 'CONNECT') {
     session.ref()
-    // we are already connected, streams are pending, first request
+    // We are already connected, streams are pending, first request
     // will create a new stream. We trigger a request to create the stream and wait until
     // `ready` event is triggered
     // We disabled endStream to allow the user to write to the stream
@@ -30927,6 +30934,8 @@ class CompatFinalizer {
       })
     }
   }
+
+  unregister (key) {}
 }
 
 module.exports = function () {
@@ -32107,6 +32116,216 @@ module.exports = {
 
 /***/ }),
 
+/***/ 8438:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+const diagnosticsChannel = __nccwpck_require__(7643)
+const util = __nccwpck_require__(3837)
+
+const undiciDebugLog = util.debuglog('undici')
+const fetchDebuglog = util.debuglog('fetch')
+const websocketDebuglog = util.debuglog('websocket')
+let isClientSet = false
+const channels = {
+  // Client
+  beforeConnect: diagnosticsChannel.channel('undici:client:beforeConnect'),
+  connected: diagnosticsChannel.channel('undici:client:connected'),
+  connectError: diagnosticsChannel.channel('undici:client:connectError'),
+  sendHeaders: diagnosticsChannel.channel('undici:client:sendHeaders'),
+  // Request
+  create: diagnosticsChannel.channel('undici:request:create'),
+  bodySent: diagnosticsChannel.channel('undici:request:bodySent'),
+  headers: diagnosticsChannel.channel('undici:request:headers'),
+  trailers: diagnosticsChannel.channel('undici:request:trailers'),
+  error: diagnosticsChannel.channel('undici:request:error'),
+  // WebSocket
+  open: diagnosticsChannel.channel('undici:websocket:open'),
+  close: diagnosticsChannel.channel('undici:websocket:close'),
+  socketError: diagnosticsChannel.channel('undici:websocket:socket_error'),
+  ping: diagnosticsChannel.channel('undici:websocket:ping'),
+  pong: diagnosticsChannel.channel('undici:websocket:pong')
+}
+
+if (undiciDebugLog.enabled || fetchDebuglog.enabled) {
+  const debuglog = fetchDebuglog.enabled ? fetchDebuglog : undiciDebugLog
+
+  // Track all Client events
+  diagnosticsChannel.channel('undici:client:beforeConnect').subscribe(evt => {
+    const {
+      connectParams: { version, protocol, port, host }
+    } = evt
+    debuglog(
+      'connecting to %s using %s%s',
+      `${host}${port ? `:${port}` : ''}`,
+      protocol,
+      version
+    )
+  })
+
+  diagnosticsChannel.channel('undici:client:connected').subscribe(evt => {
+    const {
+      connectParams: { version, protocol, port, host }
+    } = evt
+    debuglog(
+      'connected to %s using %s%s',
+      `${host}${port ? `:${port}` : ''}`,
+      protocol,
+      version
+    )
+  })
+
+  diagnosticsChannel.channel('undici:client:connectError').subscribe(evt => {
+    const {
+      connectParams: { version, protocol, port, host },
+      error
+    } = evt
+    debuglog(
+      'connection to %s using %s%s errored - %s',
+      `${host}${port ? `:${port}` : ''}`,
+      protocol,
+      version,
+      error.message
+    )
+  })
+
+  diagnosticsChannel.channel('undici:client:sendHeaders').subscribe(evt => {
+    const {
+      request: { method, path, origin }
+    } = evt
+    debuglog('sending request to %s %s/%s', method, origin, path)
+  })
+
+  // Track Request events
+  diagnosticsChannel.channel('undici:request:headers').subscribe(evt => {
+    const {
+      request: { method, path, origin },
+      response: { statusCode }
+    } = evt
+    debuglog(
+      'received response to %s %s/%s - HTTP %d',
+      method,
+      origin,
+      path,
+      statusCode
+    )
+  })
+
+  diagnosticsChannel.channel('undici:request:trailers').subscribe(evt => {
+    const {
+      request: { method, path, origin }
+    } = evt
+    debuglog('trailers received from %s %s/%s', method, origin, path)
+  })
+
+  diagnosticsChannel.channel('undici:request:error').subscribe(evt => {
+    const {
+      request: { method, path, origin },
+      error
+    } = evt
+    debuglog(
+      'request to %s %s/%s errored - %s',
+      method,
+      origin,
+      path,
+      error.message
+    )
+  })
+
+  isClientSet = true
+}
+
+if (websocketDebuglog.enabled) {
+  if (!isClientSet) {
+    const debuglog = undiciDebugLog.enabled ? undiciDebugLog : websocketDebuglog
+    diagnosticsChannel.channel('undici:client:beforeConnect').subscribe(evt => {
+      const {
+        connectParams: { version, protocol, port, host }
+      } = evt
+      debuglog(
+        'connecting to %s%s using %s%s',
+        host,
+        port ? `:${port}` : '',
+        protocol,
+        version
+      )
+    })
+
+    diagnosticsChannel.channel('undici:client:connected').subscribe(evt => {
+      const {
+        connectParams: { version, protocol, port, host }
+      } = evt
+      debuglog(
+        'connected to %s%s using %s%s',
+        host,
+        port ? `:${port}` : '',
+        protocol,
+        version
+      )
+    })
+
+    diagnosticsChannel.channel('undici:client:connectError').subscribe(evt => {
+      const {
+        connectParams: { version, protocol, port, host },
+        error
+      } = evt
+      debuglog(
+        'connection to %s%s using %s%s errored - %s',
+        host,
+        port ? `:${port}` : '',
+        protocol,
+        version,
+        error.message
+      )
+    })
+
+    diagnosticsChannel.channel('undici:client:sendHeaders').subscribe(evt => {
+      const {
+        request: { method, path, origin }
+      } = evt
+      debuglog('sending request to %s %s/%s', method, origin, path)
+    })
+  }
+
+  // Track all WebSocket events
+  diagnosticsChannel.channel('undici:websocket:open').subscribe(evt => {
+    const {
+      address: { address, port }
+    } = evt
+    websocketDebuglog('connection opened %s%s', address, port ? `:${port}` : '')
+  })
+
+  diagnosticsChannel.channel('undici:websocket:close').subscribe(evt => {
+    const { websocket, code, reason } = evt
+    websocketDebuglog(
+      'closed connection to %s - %s %s',
+      websocket.url,
+      code,
+      reason
+    )
+  })
+
+  diagnosticsChannel.channel('undici:websocket:socket_error').subscribe(err => {
+    websocketDebuglog('connection errored - %s', err.message)
+  })
+
+  diagnosticsChannel.channel('undici:websocket:ping').subscribe(evt => {
+    websocketDebuglog('ping received')
+  })
+
+  diagnosticsChannel.channel('undici:websocket:pong').subscribe(evt => {
+    websocketDebuglog('pong received')
+  })
+}
+
+module.exports = {
+  channels
+}
+
+
+/***/ }),
+
 /***/ 8045:
 /***/ ((module) => {
 
@@ -32348,6 +32567,7 @@ const {
 const assert = __nccwpck_require__(9491)
 const { kHTTP2BuildRequest, kHTTP2CopyHeaders, kHTTP1BuildRequest } = __nccwpck_require__(2785)
 const util = __nccwpck_require__(3983)
+const { channels } = __nccwpck_require__(8438)
 const { headerNameLowerCasedRecord } = __nccwpck_require__(4462)
 
 // headerCharRegex have been lifted from
@@ -32366,24 +32586,7 @@ const invalidPathRegex = /[^\u0021-\u00ff]/
 
 const kHandler = Symbol('handler')
 
-const channels = {}
-
 let extractBody
-
-try {
-  const diagnosticsChannel = __nccwpck_require__(7643)
-  channels.create = diagnosticsChannel.channel('undici:request:create')
-  channels.bodySent = diagnosticsChannel.channel('undici:request:bodySent')
-  channels.headers = diagnosticsChannel.channel('undici:request:headers')
-  channels.trailers = diagnosticsChannel.channel('undici:request:trailers')
-  channels.error = diagnosticsChannel.channel('undici:request:error')
-} catch {
-  channels.create = { hasSubscribers: false }
-  channels.bodySent = { hasSubscribers: false }
-  channels.headers = { hasSubscribers: false }
-  channels.trailers = { hasSubscribers: false }
-  channels.error = { hasSubscribers: false }
-}
 
 class Request {
   constructor (origin, {
@@ -33837,7 +34040,7 @@ const { FormData } = __nccwpck_require__(2015)
 const { kState } = __nccwpck_require__(5861)
 const { webidl } = __nccwpck_require__(1744)
 const { Blob, File: NativeFile } = __nccwpck_require__(4300)
-const { kBodyUsed } = __nccwpck_require__(2785)
+const { kBodyUsed, kHeadersList } = __nccwpck_require__(2785)
 const assert = __nccwpck_require__(9491)
 const { isErrored } = __nccwpck_require__(3983)
 const { isUint8Array, isArrayBuffer } = __nccwpck_require__(9830)
@@ -34192,10 +34395,12 @@ function bodyMixinMethods (instance) {
 
       throwIfAborted(this[kState])
 
-      const contentType = this.headers.get('Content-Type')
+      const contentType = this.headers[kHeadersList].get('content-type', true)
+
+      const mimeType = contentType !== null ? parseMIMEType(contentType) : 'failure'
 
       // If mimeType’s essence is "multipart/form-data", then:
-      if (/multipart\/form-data/.test(contentType)) {
+      if (mimeType !== 'failure' && mimeType.essence === 'multipart/form-data') {
         const headers = {}
         for (const [key, value] of this.headers) headers[key] = value
 
@@ -34253,7 +34458,7 @@ function bodyMixinMethods (instance) {
         await busboyResolve
 
         return responseFormData
-      } else if (/application\/x-www-form-urlencoded/.test(contentType)) {
+      } else if (mimeType !== 'failure' && mimeType.essence === 'application/x-www-form-urlencoded') {
         // Otherwise, if mimeType’s essence is "application/x-www-form-urlencoded", then:
 
         // 1. Let entries be the result of parsing bytes.
@@ -34741,9 +34946,26 @@ function stringPercentDecode (input) {
   return percentDecode(bytes)
 }
 
+/**
+ * @param {number} byte
+ */
 function isHexCharByte (byte) {
   // 0-9 A-F a-f
   return (byte >= 0x30 && byte <= 0x39) || (byte >= 0x41 && byte <= 0x46) || (byte >= 0x61 && byte <= 0x66)
+}
+
+/**
+ * @param {number} byte
+ */
+function hexByteToNumber (byte) {
+  return (
+    // 0-9
+    byte >= 0x30 && byte <= 0x39
+      ? (byte - 48)
+    // Convert to uppercase
+    // ((byte & 0xDF) - 65) + 10
+      : ((byte & 0xDF) - 55)
+  )
 }
 
 // https://url.spec.whatwg.org/#percent-decode
@@ -34777,11 +34999,8 @@ function percentDecode (input) {
     } else {
       // 1. Let bytePoint be the two bytes after byte in input,
       // decoded, and then interpreted as hexadecimal number.
-      const nextTwoBytes = String.fromCharCode(input[i + 1], input[i + 2])
-      const bytePoint = Number.parseInt(nextTwoBytes, 16)
-
       // 2. Append a byte whose value is bytePoint to output.
-      output[j++] = bytePoint
+      output[j++] = (hexByteToNumber(input[i + 1]) << 4) | hexByteToNumber(input[i + 2])
 
       // 3. Skip the next two bytes in input.
       i += 2
@@ -35143,14 +35362,18 @@ function isHTTPWhiteSpace (char) {
  * @param {boolean} [trailing=true]
  */
 function removeHTTPWhitespace (str, leading = true, trailing = true) {
-  let i = 0; let j = str.length
+  let lead = 0
+  let trail = str.length - 1
+
   if (leading) {
-    while (j > i && isHTTPWhiteSpace(str.charCodeAt(i))) --i
+    while (lead < str.length && isHTTPWhiteSpace(str.charCodeAt(lead))) lead++
   }
+
   if (trailing) {
-    while (j > i && isHTTPWhiteSpace(str.charCodeAt(j - 1))) --j
+    while (trail > 0 && isHTTPWhiteSpace(str.charCodeAt(trail))) trail--
   }
-  return i === 0 && j === str.length ? str : str.substring(i, j)
+
+  return lead === 0 && trail === str.length - 1 ? str : str.slice(lead, trail + 1)
 }
 
 /**
@@ -35169,14 +35392,18 @@ function isASCIIWhitespace (char) {
  * @param {boolean} [trailing=true]
  */
 function removeASCIIWhitespace (str, leading = true, trailing = true) {
-  let i = 0; let j = str.length
+  let lead = 0
+  let trail = str.length - 1
+
   if (leading) {
-    while (j > i && isASCIIWhitespace(str.charCodeAt(i))) --i
+    while (lead < str.length && isASCIIWhitespace(str.charCodeAt(lead))) lead++
   }
+
   if (trailing) {
-    while (j > i && isASCIIWhitespace(str.charCodeAt(j - 1))) --j
+    while (trail > 0 && isASCIIWhitespace(str.charCodeAt(trail))) trail--
   }
-  return i === 0 && j === str.length ? str : str.substring(i, j)
+
+  return lead === 0 && trail === str.length - 1 ? str : str.slice(lead, trail + 1)
 }
 
 module.exports = {
@@ -35410,10 +35637,7 @@ webidl.converters.BlobPart = function (V, opts) {
       return webidl.converters.Blob(V, { strict: false })
     }
 
-    if (
-      ArrayBuffer.isView(V) ||
-      types.isAnyArrayBuffer(V)
-    ) {
+    if (ArrayBuffer.isView(V) || types.isAnyArrayBuffer(V)) {
       return webidl.converters.BufferSource(V, opts)
     }
   }
@@ -35481,10 +35705,7 @@ function processBlobParts (parts, options) {
 
       // 3. Append the result of UTF-8 encoding s to bytes.
       bytes.push(encoder.encode(s))
-    } else if (
-      types.isAnyArrayBuffer(element) ||
-      types.isTypedArray(element)
-    ) {
+    } else if (ArrayBuffer.isView(element) || types.isArrayBuffer(element)) {
       // 2. If element is a BufferSource, get a copy of the
       //    bytes held by the buffer source, and append those
       //    bytes to bytes.
@@ -37693,7 +37914,7 @@ async function httpFetch (fetchParams) {
     // encouraged to, transmit an RST_STREAM frame.
     // See, https://github.com/whatwg/fetch/issues/1288
     if (request.redirect !== 'manual') {
-      fetchParams.controller.connection.destroy()
+      fetchParams.controller.connection.destroy(undefined, false)
     }
 
     // 2. Switch on request’s redirect mode:
@@ -38205,10 +38426,12 @@ async function httpNetworkFetch (
   fetchParams.controller.connection = {
     abort: null,
     destroyed: false,
-    destroy (err) {
+    destroy (err, abort = true) {
       if (!this.destroyed) {
         this.destroyed = true
-        this.abort?.(err ?? new DOMException('The operation was aborted.', 'AbortError'))
+        if (abort) {
+          this.abort?.(err ?? new DOMException('The operation was aborted.', 'AbortError'))
+        }
       }
     }
   }
@@ -38639,7 +38862,8 @@ async function httpNetworkFetch (
           } else {
             const keys = Object.keys(rawHeaders)
             for (let i = 0; i < keys.length; ++i) {
-              headersList.append(keys[i], rawHeaders[keys[i]])
+              // The header names are already in lowercase.
+              headersList.append(keys[i], rawHeaders[keys[i]], true)
             }
             // For H2, The header names are already in lowercase,
             // so we can avoid the `HeadersList#get` call here.
@@ -38819,6 +39043,8 @@ const kAbortController = Symbol('abortController')
 const requestFinalizer = new FinalizationRegistry(({ signal, abort }) => {
   signal.removeEventListener('abort', abort)
 })
+
+let patchMethodWarning = false
 
 // https://fetch.spec.whatwg.org/#request-class
 class Request {
@@ -39095,21 +39321,36 @@ class Request {
       // 1. Let method be init["method"].
       let method = init.method
 
-      // 2. If method is not a method or method is a forbidden method, then
-      // throw a TypeError.
-      if (!isValidHTTPToken(method)) {
-        throw new TypeError(`'${method}' is not a valid HTTP method.`)
+      const mayBeNormalized = normalizeMethodRecord[method]
+
+      if (mayBeNormalized !== undefined) {
+        // Note: Bypass validation DELETE, GET, HEAD, OPTIONS, POST, PUT, PATCH and these lowercase ones
+        request.method = mayBeNormalized
+      } else {
+        // 2. If method is not a method or method is a forbidden method, then
+        // throw a TypeError.
+        if (!isValidHTTPToken(method)) {
+          throw new TypeError(`'${method}' is not a valid HTTP method.`)
+        }
+
+        if (forbiddenMethodsSet.has(method.toUpperCase())) {
+          throw new TypeError(`'${method}' HTTP method is unsupported.`)
+        }
+
+        // 3. Normalize method.
+        method = normalizeMethod(method)
+
+        // 4. Set request’s method to method.
+        request.method = method
       }
 
-      if (forbiddenMethodsSet.has(method.toUpperCase())) {
-        throw new TypeError(`'${method}' HTTP method is unsupported.`)
+      if (!patchMethodWarning && request.method === 'patch') {
+        process.emitWarning('Using `patch` is highly likely to result in a `405 Method Not Allowed`. `PATCH` is much more likely to succeed.', {
+          code: 'UNDICI-FETCH-patch'
+        })
+
+        patchMethodWarning = true
       }
-
-      // 3. Normalize method.
-      method = normalizeMethodRecord[method] ?? normalizeMethod(method)
-
-      // 4. Set request’s method to method.
-      request.method = method
     }
 
     // 26. If init["signal"] exists, then set signal to it.
@@ -39153,6 +39394,18 @@ class Request {
         const abort = function () {
           const ac = acRef.deref()
           if (ac !== undefined) {
+            // Currently, there is a problem with FinalizationRegistry.
+            // https://github.com/nodejs/node/issues/49344
+            // https://github.com/nodejs/node/issues/47748
+            // In the case of abort, the first step is to unregister from it.
+            // If the controller can refer to it, it is still registered.
+            // It will be removed in the future.
+            requestFinalizer.unregister(abort)
+
+            // Unsubscribe a listener.
+            // FinalizationRegistry will no longer be called, so this must be done.
+            this.removeEventListener('abort', abort)
+
             ac.abort(this.reason)
           }
         }
@@ -39170,7 +39423,11 @@ class Request {
         } catch {}
 
         util.addAbortListener(signal, abort)
-        requestFinalizer.register(ac, { signal, abort })
+        // The third argument must be a registry key to be unregistered.
+        // Without it, you cannot unregister.
+        // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry
+        // abort is used as the unregister key. (because it is unique)
+        requestFinalizer.register(ac, { signal, abort }, abort)
       }
     }
 
@@ -39253,7 +39510,7 @@ class Request {
       // 3, If Content-Type is non-null and this’s headers’s header list does
       // not contain `Content-Type`, then append `Content-Type`/Content-Type to
       // this’s headers.
-      if (contentType && !this[kHeaders][kHeadersList].contains('content-type')) {
+      if (contentType && !this[kHeaders][kHeadersList].contains('content-type', true)) {
         this[kHeaders].append('content-type', contentType)
       }
     }
@@ -40254,7 +40511,7 @@ webidl.converters.XMLHttpRequestBodyInit = function (V) {
     return webidl.converters.Blob(V, { strict: false })
   }
 
-  if (types.isArrayBuffer(V) || types.isTypedArray(V) || types.isDataView(V)) {
+  if (ArrayBuffer.isView(V) || types.isArrayBuffer(V)) {
     return webidl.converters.BufferSource(V)
   }
 
@@ -40921,7 +41178,7 @@ function bytesMatch (bytes, metadataList) {
 // https://w3c.github.io/webappsec-subresource-integrity/#grammardef-hash-with-options
 // https://www.w3.org/TR/CSP2/#source-list-syntax
 // https://www.rfc-editor.org/rfc/rfc5234#appendix-B.1
-const parseHashWithOptions = /((?<algo>sha256|sha384|sha512)-(?<hash>[A-z0-9+/]{1}.*={0,2}))( +[\x21-\x7e]?)?/i
+const parseHashWithOptions = /(?<algo>sha256|sha384|sha512)-(?<hash>[A-Za-z0-9+/]+={0,2}(?=\s|$))( +[!-~]*)?/i
 
 /**
  * @see https://w3c.github.io/webappsec-subresource-integrity/#parse-metadata
@@ -41018,7 +41275,7 @@ function isCancelled (fetchParams) {
     fetchParams.controller.state === 'terminated'
 }
 
-const normalizeMethodRecord = {
+const normalizeMethodRecordBase = {
   delete: 'DELETE',
   DELETE: 'DELETE',
   get: 'GET',
@@ -41033,7 +41290,14 @@ const normalizeMethodRecord = {
   PUT: 'PUT'
 }
 
+const normalizeMethodRecord = {
+  ...normalizeMethodRecordBase,
+  patch: 'patch',
+  PATCH: 'PATCH'
+}
+
 // Note: object prototypes should not be able to be referenced. e.g. `Object#hasOwnProperty`.
+Object.setPrototypeOf(normalizeMethodRecordBase, null)
 Object.setPrototypeOf(normalizeMethodRecord, null)
 
 /**
@@ -41041,7 +41305,7 @@ Object.setPrototypeOf(normalizeMethodRecord, null)
  * @param {string} method
  */
 function normalizeMethod (method) {
-  return normalizeMethodRecord[method.toLowerCase()] ?? method
+  return normalizeMethodRecordBase[method.toLowerCase()] ?? method
 }
 
 // https://infra.spec.whatwg.org/#serialize-a-javascript-value-to-a-json-string
@@ -41550,7 +41814,8 @@ module.exports = {
   readAllBytes,
   normalizeMethodRecord,
   simpleRangeHeaderValue,
-  buildContentRange
+  buildContentRange,
+  parseMetadata
 }
 
 
@@ -42176,15 +42441,15 @@ webidl.converters.DataView = function (V, opts = {}) {
 // https://webidl.spec.whatwg.org/#BufferSource
 webidl.converters.BufferSource = function (V, opts = {}) {
   if (types.isAnyArrayBuffer(V)) {
-    return webidl.converters.ArrayBuffer(V, opts)
+    return webidl.converters.ArrayBuffer(V, { ...opts, allowShared: false })
   }
 
   if (types.isTypedArray(V)) {
-    return webidl.converters.TypedArray(V, V.constructor)
+    return webidl.converters.TypedArray(V, V.constructor, { ...opts, allowShared: false })
   }
 
   if (types.isDataView(V)) {
-    return webidl.converters.DataView(V, opts)
+    return webidl.converters.DataView(V, opts, { ...opts, allowShared: false })
   }
 
   throw new TypeError(`Could not convert ${V} to a BufferSource.`)
@@ -45937,7 +46202,7 @@ class ProxyAgent extends DispatcherBase {
     this[kProxyHeaders] = opts.headers || {}
 
     const resolvedUrl = new URL(opts.uri)
-    const { origin, port, host, username, password } = resolvedUrl
+    const { origin, port, username, password } = resolvedUrl
 
     if (opts.auth && opts.token) {
       throw new InvalidArgumentError('opts.auth cannot be used in combination with opts.token')
@@ -45968,7 +46233,7 @@ class ProxyAgent extends DispatcherBase {
             signal: opts.signal,
             headers: {
               ...this[kProxyHeaders],
-              host
+              host: requestedHost
             }
           })
           if (statusCode !== 200) {
@@ -46173,7 +46438,6 @@ module.exports = {
 "use strict";
 
 
-const diagnosticsChannel = __nccwpck_require__(7643)
 const { uid, states } = __nccwpck_require__(9188)
 const {
   kReadyState,
@@ -46182,17 +46446,13 @@ const {
   kReceivedClose
 } = __nccwpck_require__(7578)
 const { fireEvent, failWebsocketConnection } = __nccwpck_require__(5515)
+const { channels } = __nccwpck_require__(8438)
 const { CloseEvent } = __nccwpck_require__(2611)
 const { makeRequest } = __nccwpck_require__(8359)
 const { fetching } = __nccwpck_require__(4881)
 const { Headers } = __nccwpck_require__(554)
 const { getGlobalDispatcher } = __nccwpck_require__(1892)
 const { kHeadersList } = __nccwpck_require__(2785)
-
-const channels = {}
-channels.open = diagnosticsChannel.channel('undici:websocket:open')
-channels.close = diagnosticsChannel.channel('undici:websocket:close')
-channels.socketError = diagnosticsChannel.channel('undici:websocket:socket_error')
 
 /** @type {import('crypto')} */
 let crypto
@@ -46925,9 +47185,9 @@ module.exports = {
 
 
 const { Writable } = __nccwpck_require__(2781)
-const diagnosticsChannel = __nccwpck_require__(7643)
 const { parserStates, opcodes, states, emptyBuffer } = __nccwpck_require__(9188)
 const { kReadyState, kSentClose, kResponse, kReceivedClose } = __nccwpck_require__(7578)
+const { channels } = __nccwpck_require__(8438)
 const { isValidStatusCode, failWebsocketConnection, websocketMessageReceived } = __nccwpck_require__(5515)
 const { WebsocketFrameSend } = __nccwpck_require__(5444)
 
@@ -46935,10 +47195,6 @@ const { WebsocketFrameSend } = __nccwpck_require__(5444)
 // Copyright (c) 2011 Einar Otto Stangvik <einaros@gmail.com>
 // Copyright (c) 2013 Arnout Kazemier and contributors
 // Copyright (c) 2016 Luigi Pinca and contributors
-
-const channels = {}
-channels.ping = diagnosticsChannel.channel('undici:websocket:ping')
-channels.pong = diagnosticsChannel.channel('undici:websocket:pong')
 
 class ByteParser extends Writable {
   #buffers = []
@@ -48132,7 +48388,7 @@ webidl.converters.WebSocketSendData = function (V) {
       return webidl.converters.Blob(V, { strict: false })
     }
 
-    if (ArrayBuffer.isView(V) || types.isAnyArrayBuffer(V)) {
+    if (ArrayBuffer.isView(V) || types.isArrayBuffer(V)) {
       return webidl.converters.BufferSource(V)
     }
   }
