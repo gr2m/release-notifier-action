@@ -24257,6 +24257,10 @@ module.exports.RetryHandler = RetryHandler
 module.exports.DecoratorHandler = DecoratorHandler
 module.exports.RedirectHandler = RedirectHandler
 module.exports.createRedirectInterceptor = createRedirectInterceptor
+module.exports.interceptors = {
+  redirect: __nccwpck_require__(7773),
+  retry: __nccwpck_require__(5558)
+}
 
 module.exports.buildConnector = buildConnector
 module.exports.errors = errors
@@ -24911,7 +24915,8 @@ class RequestHandler extends AsyncResource {
 
     const parsedHeaders = responseHeaders === 'raw' ? util.parseHeaders(rawHeaders) : headers
     const contentType = parsedHeaders['content-type']
-    const body = new Readable({ resume, abort, contentType, highWaterMark })
+    const contentLength = parsedHeaders['content-length']
+    const body = new Readable({ resume, abort, contentType, contentLength, highWaterMark })
 
     this.callback = null
     this.res = body
@@ -25375,8 +25380,9 @@ const { ReadableStreamFrom } = __nccwpck_require__(3983)
 const kConsume = Symbol('kConsume')
 const kReading = Symbol('kReading')
 const kBody = Symbol('kBody')
-const kAbort = Symbol('abort')
+const kAbort = Symbol('kAbort')
 const kContentType = Symbol('kContentType')
+const kContentLength = Symbol('kContentLength')
 
 const noop = () => {}
 
@@ -25385,6 +25391,7 @@ class BodyReadable extends Readable {
     resume,
     abort,
     contentType = '',
+    contentLength,
     highWaterMark = 64 * 1024 // Same as nodejs fs streams.
   }) {
     super({
@@ -25399,6 +25406,7 @@ class BodyReadable extends Readable {
     this[kConsume] = null
     this[kBody] = null
     this[kContentType] = contentType
+    this[kContentLength] = contentLength
 
     // Is stream being consumed through Readable API?
     // This is an optimization so that we avoid checking
@@ -25510,7 +25518,7 @@ class BodyReadable extends Readable {
   }
 
   async dump (opts) {
-    let limit = Number.isFinite(opts?.limit) ? opts.limit : 262144
+    let limit = Number.isFinite(opts?.limit) ? opts.limit : 128 * 1024
     const signal = opts?.signal
 
     if (signal != null && (typeof signal !== 'object' || !('aborted' in signal))) {
@@ -25524,6 +25532,10 @@ class BodyReadable extends Readable {
     }
 
     return await new Promise((resolve, reject) => {
+      if (this[kContentLength] > limit) {
+        this.destroy(new AbortError())
+      }
+
       const onAbort = () => {
         this.destroy(signal.reason ?? new AbortError())
       }
@@ -25744,31 +25756,69 @@ async function getResolveErrorBodyCallback ({ callback, body, contentType, statu
     }
   }
 
+  const message = `Response status code ${statusCode}${statusMessage ? `: ${statusMessage}` : ''}`
+
   if (statusCode === 204 || !contentType || !chunks) {
-    process.nextTick(callback, new ResponseStatusCodeError(`Response status code ${statusCode}${statusMessage ? `: ${statusMessage}` : ''}`, statusCode, headers))
+    queueMicrotask(() => callback(new ResponseStatusCodeError(message, statusCode, headers)))
     return
   }
 
+  const stackTraceLimit = Error.stackTraceLimit
+  Error.stackTraceLimit = 0
+  let payload
+
   try {
-    if (contentType.startsWith('application/json')) {
-      const payload = JSON.parse(chunksDecode(chunks, length))
-      process.nextTick(callback, new ResponseStatusCodeError(`Response status code ${statusCode}${statusMessage ? `: ${statusMessage}` : ''}`, statusCode, headers, payload))
-      return
+    if (isContentTypeApplicationJson(contentType)) {
+      payload = JSON.parse(chunksDecode(chunks, length))
+    } else if (isContentTypeText(contentType)) {
+      payload = chunksDecode(chunks, length)
     }
-
-    if (contentType.startsWith('text/')) {
-      const payload = chunksDecode(chunks, length)
-      process.nextTick(callback, new ResponseStatusCodeError(`Response status code ${statusCode}${statusMessage ? `: ${statusMessage}` : ''}`, statusCode, headers, payload))
-      return
-    }
-  } catch (err) {
-    // Process in a fallback if error
+  } catch {
+    // process in a callback to avoid throwing in the microtask queue
+  } finally {
+    Error.stackTraceLimit = stackTraceLimit
   }
-
-  process.nextTick(callback, new ResponseStatusCodeError(`Response status code ${statusCode}${statusMessage ? `: ${statusMessage}` : ''}`, statusCode, headers))
+  queueMicrotask(() => callback(new ResponseStatusCodeError(message, statusCode, headers, payload)))
 }
 
-module.exports = { getResolveErrorBodyCallback }
+const isContentTypeApplicationJson = (contentType) => {
+  return (
+    contentType.length > 15 &&
+    contentType[11] === '/' &&
+    contentType[0] === 'a' &&
+    contentType[1] === 'p' &&
+    contentType[2] === 'p' &&
+    contentType[3] === 'l' &&
+    contentType[4] === 'i' &&
+    contentType[5] === 'c' &&
+    contentType[6] === 'a' &&
+    contentType[7] === 't' &&
+    contentType[8] === 'i' &&
+    contentType[9] === 'o' &&
+    contentType[10] === 'n' &&
+    contentType[12] === 'j' &&
+    contentType[13] === 's' &&
+    contentType[14] === 'o' &&
+    contentType[15] === 'n'
+  )
+}
+
+const isContentTypeText = (contentType) => {
+  return (
+    contentType.length > 4 &&
+    contentType[4] === '/' &&
+    contentType[0] === 't' &&
+    contentType[1] === 'e' &&
+    contentType[2] === 'x' &&
+    contentType[3] === 't'
+  )
+}
+
+module.exports = {
+  getResolveErrorBodyCallback,
+  isContentTypeApplicationJson,
+  isContentTypeText
+}
 
 
 /***/ }),
@@ -26511,6 +26561,16 @@ class RequestRetryError extends UndiciError {
   }
 }
 
+class SecureProxyConnectionError extends UndiciError {
+  constructor (cause, message, options) {
+    super(message, { cause, ...(options ?? {}) })
+    this.name = 'SecureProxyConnectionError'
+    this.message = message || 'Secure Proxy Connection failed'
+    this.code = 'UND_ERR_PRX_TLS'
+    this.cause = cause
+  }
+}
+
 module.exports = {
   AbortError,
   HTTPParserError,
@@ -26532,7 +26592,8 @@ module.exports = {
   ResponseContentLengthMismatchError,
   BalancedPoolMissingUpstreamError,
   ResponseExceededMaxSizeError,
-  RequestRetryError
+  RequestRetryError,
+  SecureProxyConnectionError
 }
 
 
@@ -26584,7 +26645,8 @@ class Request {
     bodyTimeout,
     reset,
     throwOnError,
-    expectContinue
+    expectContinue,
+    servername
   }, handler) {
     if (typeof path !== 'string') {
       throw new InvalidArgumentError('path must be a string')
@@ -26725,7 +26787,7 @@ class Request {
 
     validateHandler(handler, method, upgrade)
 
-    this.servername = getServerName(this.host)
+    this.servername = servername || getServerName(this.host)
 
     this[kHandler] = handler
 
@@ -27618,13 +27680,22 @@ function addAbortListener (signal, listener) {
   return () => signal.removeListener('abort', listener)
 }
 
-const hasToWellFormed = !!String.prototype.toWellFormed
+const hasToWellFormed = typeof String.prototype.toWellFormed === 'function'
+const hasIsWellFormed = typeof String.prototype.isWellFormed === 'function'
 
 /**
  * @param {string} val
  */
 function toUSVString (val) {
   return hasToWellFormed ? `${val}`.toWellFormed() : nodeUtil.toUSVString(val)
+}
+
+/**
+ * @param {string} val
+ */
+// TODO: move this to webidl
+function isUSVString (val) {
+  return hasIsWellFormed ? `${val}`.isWellFormed() : toUSVString(val) === `${val}`
 }
 
 /**
@@ -27716,6 +27787,7 @@ module.exports = {
   isErrored,
   isReadable,
   toUSVString,
+  isUSVString,
   isReadableAborted,
   isBlobLike,
   parseOrigin,
@@ -30160,6 +30232,7 @@ const {
 } = __nccwpck_require__(2785)
 const connectH1 = __nccwpck_require__(3264)
 const connectH2 = __nccwpck_require__(296)
+let deprecatedInterceptorWarned = false
 
 const kClosedResolve = Symbol('kClosedResolve')
 
@@ -30308,9 +30381,18 @@ class Client extends DispatcherBase {
       })
     }
 
-    this[kInterceptors] = interceptors?.Client && Array.isArray(interceptors.Client)
-      ? interceptors.Client
-      : [createRedirectInterceptor({ maxRedirections })]
+    if (interceptors?.Client && Array.isArray(interceptors.Client)) {
+      this[kInterceptors] = interceptors.Client
+      if (!deprecatedInterceptorWarned) {
+        deprecatedInterceptorWarned = true
+        process.emitWarning('Client.Options#interceptor is deprecated. Use Dispatcher#compose instead.', {
+          code: 'UNDICI-CLIENT-INTERCEPTOR-DEPRECATED'
+        })
+      }
+    } else {
+      this[kInterceptors] = [createRedirectInterceptor({ maxRedirections })]
+    }
+
     this[kUrl] = util.parseOrigin(url)
     this[kConnector] = connect
     this[kPipelining] = pipelining != null ? pipelining : 1
@@ -30919,7 +31001,6 @@ module.exports = DispatcherBase
 
 "use strict";
 
-
 const EventEmitter = __nccwpck_require__(5673)
 
 class Dispatcher extends EventEmitter {
@@ -30933,6 +31014,53 @@ class Dispatcher extends EventEmitter {
 
   destroy () {
     throw new Error('not implemented')
+  }
+
+  compose (...args) {
+    // So we handle [interceptor1, interceptor2] or interceptor1, interceptor2, ...
+    const interceptors = Array.isArray(args[0]) ? args[0] : args
+    let dispatch = this.dispatch.bind(this)
+
+    for (const interceptor of interceptors) {
+      if (interceptor == null) {
+        continue
+      }
+
+      if (typeof interceptor !== 'function') {
+        throw new TypeError(`invalid interceptor, expected function received ${typeof interceptor}`)
+      }
+
+      dispatch = interceptor(dispatch)
+
+      if (dispatch == null || typeof dispatch !== 'function' || dispatch.length !== 2) {
+        throw new TypeError('invalid interceptor')
+      }
+    }
+
+    return new ComposedDispatcher(this, dispatch)
+  }
+}
+
+class ComposedDispatcher extends Dispatcher {
+  #dispatcher = null
+  #dispatch = null
+
+  constructor (dispatcher, dispatch) {
+    super()
+    this.#dispatcher = dispatcher
+    this.#dispatch = dispatch
+  }
+
+  dispatch (...args) {
+    this.#dispatch(...args)
+  }
+
+  close (...args) {
+    return this.#dispatcher.close(...args)
+  }
+
+  destroy (...args) {
+    return this.#dispatcher.destroy(...args)
   }
 }
 
@@ -31421,7 +31549,7 @@ const { URL } = __nccwpck_require__(1041)
 const Agent = __nccwpck_require__(1208)
 const Pool = __nccwpck_require__(177)
 const DispatcherBase = __nccwpck_require__(1544)
-const { InvalidArgumentError, RequestAbortedError } = __nccwpck_require__(8045)
+const { InvalidArgumentError, RequestAbortedError, SecureProxyConnectionError } = __nccwpck_require__(8045)
 const buildConnector = __nccwpck_require__(2067)
 
 const kAgent = Symbol('proxy agent')
@@ -31453,10 +31581,9 @@ class ProxyAgent extends DispatcherBase {
     }
 
     const url = this.#getUrl(opts)
-    const { href, origin, port, protocol, username, password } = url
+    const { href, origin, port, protocol, username, password, hostname: proxyHostname } = url
 
     this[kProxy] = { uri: href, protocol }
-    this[kAgent] = new Agent(opts)
     this[kInterceptors] = opts.interceptors?.ProxyAgent && Array.isArray(opts.interceptors.ProxyAgent)
       ? opts.interceptors.ProxyAgent
       : []
@@ -31494,7 +31621,8 @@ class ProxyAgent extends DispatcherBase {
             headers: {
               ...this[kProxyHeaders],
               host: requestedHost
-            }
+            },
+            servername: this[kProxyTls]?.servername || proxyHostname
           })
           if (statusCode !== 200) {
             socket.on('error', () => {}).destroy()
@@ -31512,7 +31640,12 @@ class ProxyAgent extends DispatcherBase {
           }
           this[kConnectEndpoint]({ ...opts, servername, httpSocket: socket }, callback)
         } catch (err) {
-          callback(err)
+          if (err.code === 'ERR_TLS_CERT_ALTNAME_INVALID') {
+            // Throw a custom error to avoid loop in client.js#connect
+            callback(new SecureProxyConnectionError(err))
+          } else {
+            callback(err)
+          }
         }
       }
     })
@@ -32344,6 +32477,65 @@ function createRedirectInterceptor ({ maxRedirections: defaultMaxRedirections })
 }
 
 module.exports = createRedirectInterceptor
+
+
+/***/ }),
+
+/***/ 7773:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+const RedirectHandler = __nccwpck_require__(649)
+
+module.exports = opts => {
+  const globalMaxRedirections = opts?.maxRedirections
+  return dispatch => {
+    return function redirectInterceptor (opts, handler) {
+      const { maxRedirections = globalMaxRedirections, ...baseOpts } = opts
+
+      if (!maxRedirections) {
+        return dispatch(opts, handler)
+      }
+
+      const redirectHandler = new RedirectHandler(
+        dispatch,
+        maxRedirections,
+        opts,
+        handler
+      )
+
+      return dispatch(baseOpts, redirectHandler)
+    }
+  }
+}
+
+
+/***/ }),
+
+/***/ 5558:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+const RetryHandler = __nccwpck_require__(6242)
+
+module.exports = globalOpts => {
+  return dispatch => {
+    return function retryInterceptor (opts, handler) {
+      return dispatch(
+        opts,
+        new RetryHandler(
+          { ...opts, retryOptions: { ...globalOpts, ...opts.retryOptions } },
+          {
+            handler,
+            dispatch
+          }
+        )
+      )
+    }
+  }
+}
 
 
 /***/ }),
@@ -38437,13 +38629,13 @@ module.exports = { File, FileLike, isFileLike }
 "use strict";
 
 
-const { webidl } = __nccwpck_require__(4890)
+const { toUSVString, isUSVString, bufferToLowerCasedHeaderName } = __nccwpck_require__(3983)
 const { utf8DecodeBytes } = __nccwpck_require__(1310)
 const { HTTP_TOKEN_CODEPOINTS, isomorphicDecode } = __nccwpck_require__(7704)
 const { isFileLike, File: UndiciFile } = __nccwpck_require__(1879)
 const { makeEntry } = __nccwpck_require__(3162)
 const assert = __nccwpck_require__(8061)
-const { isAscii, File: NodeFile } = __nccwpck_require__(2254)
+const { File: NodeFile } = __nccwpck_require__(2254)
 
 const File = globalThis.File ?? NodeFile ?? UndiciFile
 
@@ -38451,6 +38643,18 @@ const formDataNameBuffer = Buffer.from('form-data; name="')
 const filenameBuffer = Buffer.from('; filename')
 const dd = Buffer.from('--')
 const ddcrlf = Buffer.from('--\r\n')
+
+/**
+ * @param {string} chars
+ */
+function isAsciiString (chars) {
+  for (let i = 0; i < chars.length; ++i) {
+    if ((chars.charCodeAt(i) & ~0x7F) !== 0) {
+      return false
+    }
+  }
+  return true
+}
 
 /**
  * @see https://andreubotella.github.io/multipart-form-data/#multipart-form-data-boundary
@@ -38467,7 +38671,7 @@ function validateBoundary (boundary) {
   // - it is composed by bytes in the ranges 0x30 to 0x39, 0x41 to 0x5A, or
   //   0x61 to 0x7A, inclusive (ASCII alphanumeric), or which are 0x27 ('),
   //   0x2D (-) or 0x5F (_).
-  for (let i = 0; i < boundary.length; i++) {
+  for (let i = 0; i < length; ++i) {
     const cp = boundary.charCodeAt(i)
 
     if (!(
@@ -38495,12 +38699,12 @@ function escapeFormDataName (name, encoding = 'utf-8', isFilename = false) {
   // 1. If isFilename is true:
   if (isFilename) {
     // 1.1. Set name to the result of converting name into a scalar value string.
-    name = webidl.converters.USVString(name)
+    name = toUSVString(name)
   } else {
     // 2. Otherwise:
 
     // 2.1. Assert: name is a scalar value string.
-    assert(name === webidl.converters.USVString(name))
+    assert(isUSVString(name))
 
     // 2.2. Replace every occurrence of U+000D (CR) not followed by U+000A (LF),
     //      and every occurrence of U+000A (LF) not preceded by U+000D (CR), in
@@ -38531,14 +38735,16 @@ function multipartFormDataParser (input, mimeType) {
   // 1. Assert: mimeType’s essence is "multipart/form-data".
   assert(mimeType !== 'failure' && mimeType.essence === 'multipart/form-data')
 
+  const boundaryString = mimeType.parameters.get('boundary')
+
   // 2. If mimeType’s parameters["boundary"] does not exist, return failure.
   //    Otherwise, let boundary be the result of UTF-8 decoding mimeType’s
   //    parameters["boundary"].
-  if (!mimeType.parameters.has('boundary')) {
+  if (boundaryString === undefined) {
     return 'failure'
   }
 
-  const boundary = Buffer.from(`--${mimeType.parameters.get('boundary')}`, 'utf8')
+  const boundary = Buffer.from(`--${boundaryString}`, 'utf8')
 
   // 3. Let entry list be an empty entry list.
   const entryList = []
@@ -38637,7 +38843,10 @@ function multipartFormDataParser (input, mimeType) {
       contentType ??= 'text/plain'
 
       // 5.10.2. If contentType is not an ASCII string, set contentType to the empty string.
-      if (!isAscii(Buffer.from(contentType))) {
+
+      // Note: `buffer.isAscii` can be used at zero-cost, but converting a string to a buffer is a high overhead.
+      // Content-Type is a relatively small string, so it is faster to use `String#charCodeAt`.
+      if (!isAsciiString(contentType)) {
         contentType = ''
       }
 
@@ -38651,8 +38860,8 @@ function multipartFormDataParser (input, mimeType) {
     }
 
     // 5.12. Assert: name is a scalar value string and value is either a scalar value string or a File object.
-    assert(name === webidl.converters.USVString(name))
-    assert((typeof value === 'string' && value === webidl.converters.USVString(value)) || isFileLike(value))
+    assert(isUSVString(name))
+    assert((typeof value === 'string' && isUSVString(value)) || isFileLike(value))
 
     // 5.13. Create an entry with name and value, and append it to entry list.
     entryList.push(makeEntry(name, value, filename))
@@ -38717,7 +38926,7 @@ function parseMultipartFormDataHeaders (input, position) {
     )
 
     // 2.8. Byte-lowercase header name and switch on the result:
-    switch (new TextDecoder().decode(headerName).toLowerCase()) {
+    switch (bufferToLowerCasedHeaderName(headerName)) {
       case 'content-disposition': {
         // 1. Set name and filename to null.
         name = filename = null
@@ -38864,16 +39073,13 @@ function parseMultipartFormDataName (input, position) {
  * @param {{ position: number }} position
  */
 function collectASequenceOfBytes (condition, input, position) {
-  const result = []
-  let index = 0
+  let start = position.position
 
-  while (position.position < input.length && condition(input[position.position])) {
-    result[index++] = input[position.position]
-
-    position.position++
+  while (start < input.length && condition(input[start])) {
+    ++start
   }
 
-  return Buffer.from(result, result.length)
+  return input.subarray(position.position, (position.position = start))
 }
 
 /**
@@ -38939,6 +39145,7 @@ const { kEnumerableProperty } = __nccwpck_require__(3983)
 const { File: UndiciFile, FileLike, isFileLike } = __nccwpck_require__(1879)
 const { webidl } = __nccwpck_require__(4890)
 const { File: NativeFile } = __nccwpck_require__(2254)
+const nodeUtil = __nccwpck_require__(7261)
 
 /** @type {globalThis['File']} */
 const File = NativeFile ?? UndiciFile
@@ -39087,6 +39294,15 @@ class FormData {
       this[kState].push(entry)
     }
   }
+
+  [nodeUtil.inspect.custom] (depth, options) {
+    let output = 'FormData:\n'
+    this[kState].forEach(entry => {
+      output += `${entry.name}: ${entry.value}\n`
+    })
+
+    return output
+  }
 }
 
 iteratorMixin('FormData', FormData, kState, 'name', 'value')
@@ -39220,6 +39436,7 @@ const {
 } = __nccwpck_require__(1310)
 const { webidl } = __nccwpck_require__(4890)
 const assert = __nccwpck_require__(8061)
+const util = __nccwpck_require__(3837)
 
 const kHeadersMap = Symbol('headers map')
 const kHeadersSortedMap = Symbol('headers map sorted')
@@ -39784,7 +40001,17 @@ class Headers {
 
     return this[kHeadersList]
   }
+
+  [util.inspect.custom] (depth, options) {
+    const inspected = util.inspect(this[kHeadersList].entries)
+
+    return `Headers ${inspected}`
+  }
 }
+
+Object.defineProperty(Headers.prototype, util.inspect.custom, {
+  enumerable: false
+})
 
 iteratorMixin('Headers', Headers, kHeadersSortedMap, 0, 1)
 
@@ -42142,6 +42369,7 @@ const { extractBody, mixinBody, cloneBody } = __nccwpck_require__(6682)
 const { Headers, fill: fillHeaders, HeadersList } = __nccwpck_require__(2991)
 const { FinalizationRegistry } = __nccwpck_require__(1922)()
 const util = __nccwpck_require__(3983)
+const nodeUtil = __nccwpck_require__(7261)
 const {
   isValidHTTPToken,
   sameOrigin,
@@ -42907,6 +43135,32 @@ class Request {
     // 4. Return clonedRequestObject.
     return fromInnerRequest(clonedRequest, ac.signal, this[kHeaders][kGuard], this[kRealm])
   }
+
+  [nodeUtil.inspect.custom] (depth, options) {
+    if (options.depth === null) {
+      options.depth = 2
+    }
+
+    const properties = {
+      method: this.method,
+      url: this.url,
+      headers: this.headers,
+      destination: this.destination,
+      referrer: this.referrer,
+      referrerPolicy: this.referrerPolicy,
+      mode: this.mode,
+      credentials: this.credentials,
+      cache: this.cache,
+      redirect: this.redirect,
+      integrity: this.integrity,
+      keepalive: this.keepalive,
+      isReloadNavigation: this.isReloadNavigation,
+      isHistoryNavigation: this.isHistoryNavigation,
+      signal: this.signal
+    }
+
+    return nodeUtil.formatWithOptions(options, { ...properties })
+  }
 }
 
 mixinBody(Request)
@@ -43140,6 +43394,7 @@ module.exports = { Request, makeRequest, fromInnerRequest, cloneRequest }
 const { Headers, HeadersList, fill } = __nccwpck_require__(2991)
 const { extractBody, cloneBody, mixinBody } = __nccwpck_require__(6682)
 const util = __nccwpck_require__(3983)
+const nodeUtil = __nccwpck_require__(7261)
 const { kEnumerableProperty } = util
 const {
   isValidReasonPhrase,
@@ -43388,6 +43643,26 @@ class Response {
     // 3. Return the result of creating a Response object, given
     // clonedResponse, this’s headers’s guard, and this’s relevant Realm.
     return fromInnerResponse(clonedResponse, this[kHeaders][kGuard], this[kRealm])
+  }
+
+  [nodeUtil.inspect.custom] (depth, options) {
+    if (options.depth === null) {
+      options.depth = 2
+    }
+
+    const properties = {
+      status: this.status,
+      statusText: this.statusText,
+      headers: this.headers,
+      body: this.body,
+      bodyUsed: this.bodyUsed,
+      ok: this.ok,
+      redirected: this.redirected,
+      type: this.type,
+      url: this.url
+    }
+
+    return nodeUtil.formatWithOptions(options, `Response ${nodeUtil.inspect(properties)}`)
   }
 }
 
