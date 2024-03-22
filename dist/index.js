@@ -32103,6 +32103,8 @@ module.exports = RedirectHandler
 /***/ 6242:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
+"use strict";
+
 const assert = __nccwpck_require__(8061)
 
 const { kRetryHandlerDefaultRetry } = __nccwpck_require__(2785)
@@ -32142,7 +32144,7 @@ class RetryHandler {
       retry: retryFn ?? RetryHandler[kRetryHandlerDefaultRetry],
       retryAfter: retryAfter ?? true,
       maxTimeout: maxTimeout ?? 30 * 1000, // 30s,
-      timeout: minTimeout ?? 500, // .5s
+      minTimeout: minTimeout ?? 500, // .5s
       timeoutFactor: timeoutFactor ?? 2,
       maxRetries: maxRetries ?? 5,
       // What errors we should retry
@@ -32164,6 +32166,7 @@ class RetryHandler {
     }
 
     this.retryCount = 0
+    this.retryCountCheckpoint = 0
     this.start = 0
     this.end = null
     this.etag = null
@@ -32209,17 +32212,14 @@ class RetryHandler {
     const { method, retryOptions } = opts
     const {
       maxRetries,
-      timeout,
+      minTimeout,
       maxTimeout,
       timeoutFactor,
       statusCodes,
       errorCodes,
       methods
     } = retryOptions
-    let { counter, currentTimeout } = state
-
-    currentTimeout =
-      currentTimeout != null && currentTimeout > 0 ? currentTimeout : timeout
+    const { counter } = state
 
     // Any code that is not a Undici's originated and allowed to retry
     if (
@@ -32264,9 +32264,7 @@ class RetryHandler {
     const retryTimeout =
       retryAfterHeader > 0
         ? Math.min(retryAfterHeader, maxTimeout)
-        : Math.min(currentTimeout * timeoutFactor ** counter, maxTimeout)
-
-    state.currentTimeout = retryTimeout
+        : Math.min(minTimeout * timeoutFactor ** (counter - 1), maxTimeout)
 
     setTimeout(() => cb(null), retryTimeout)
   }
@@ -32414,10 +32412,19 @@ class RetryHandler {
       return this.handler.onError(err)
     }
 
+    // We reconcile in case of a mix between network errors
+    // and server error response
+    if (this.retryCount - this.retryCountCheckpoint > 0) {
+      // We count the difference between the last checkpoint and the current retry count
+      this.retryCount = this.retryCountCheckpoint + (this.retryCount - this.retryCountCheckpoint)
+    } else {
+      this.retryCount += 1
+    }
+
     this.retryOpts.retry(
       err,
       {
-        state: { counter: this.retryCount++, currentTimeout: this.retryAfter },
+        state: { counter: this.retryCount },
         opts: { retryOptions: this.retryOpts, ...this.opts }
       },
       onRetry.bind(this)
@@ -32439,6 +32446,7 @@ class RetryHandler {
       }
 
       try {
+        this.retryCountCheckpoint = this.retryCount
         this.dispatch(this.opts, this)
       } catch (err) {
         this.handler.onError(err)
@@ -39296,12 +39304,27 @@ class FormData {
   }
 
   [nodeUtil.inspect.custom] (depth, options) {
-    let output = 'FormData:\n'
-    this[kState].forEach(entry => {
-      output += `${entry.name}: ${entry.value}\n`
-    })
+    const state = this[kState].reduce((a, b) => {
+      if (a[b.name]) {
+        if (Array.isArray(a[b.name])) {
+          a[b.name].push(b.value)
+        } else {
+          a[b.name] = [a[b.name], b.value]
+        }
+      } else {
+        a[b.name] = b.value
+      }
 
-    return output
+      return a
+    }, { __proto__: null })
+
+    options.depth ??= depth
+    options.colors ??= true
+
+    const output = nodeUtil.formatWithOptions(options, state)
+
+    // remove [Object null prototype]
+    return `FormData ${output.slice(output.indexOf(']') + 2)}`
   }
 }
 
@@ -39996,16 +40019,10 @@ class Headers {
     return (this[kHeadersList][kHeadersSortedMap] = headers)
   }
 
-  [Symbol.for('nodejs.util.inspect.custom')] () {
-    webidl.brandCheck(this, Headers)
-
-    return this[kHeadersList]
-  }
-
   [util.inspect.custom] (depth, options) {
-    const inspected = util.inspect(this[kHeadersList].entries)
+    options.depth ??= depth
 
-    return `Headers ${inspected}`
+    return `Headers ${util.formatWithOptions(options, this[kHeadersList].entries)}`
   }
 }
 
@@ -43141,6 +43158,8 @@ class Request {
       options.depth = 2
     }
 
+    options.colors ??= true
+
     const properties = {
       method: this.method,
       url: this.url,
@@ -43159,7 +43178,7 @@ class Request {
       signal: this.signal
     }
 
-    return nodeUtil.formatWithOptions(options, { ...properties })
+    return `Request ${nodeUtil.formatWithOptions(options, properties)}`
   }
 }
 
@@ -43650,6 +43669,8 @@ class Response {
       options.depth = 2
     }
 
+    options.colors ??= true
+
     const properties = {
       status: this.status,
       statusText: this.statusText,
@@ -43662,7 +43683,7 @@ class Response {
       url: this.url
     }
 
-    return nodeUtil.formatWithOptions(options, `Response ${nodeUtil.inspect(properties)}`)
+    return `Response ${nodeUtil.formatWithOptions(options, properties)}`
   }
 }
 
