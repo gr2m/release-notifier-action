@@ -22218,35 +22218,43 @@ const coerce = (version, options) => {
 
   let match = null
   if (!options.rtl) {
-    match = version.match(re[t.COERCE])
+    match = version.match(options.includePrerelease ? re[t.COERCEFULL] : re[t.COERCE])
   } else {
     // Find the right-most coercible string that does not share
     // a terminus with a more left-ward coercible string.
     // Eg, '1.2.3.4' wants to coerce '2.3.4', not '3.4' or '4'
+    // With includePrerelease option set, '1.2.3.4-rc' wants to coerce '2.3.4-rc', not '2.3.4'
     //
     // Walk through the string checking with a /g regexp
     // Manually set the index so as to pick up overlapping matches.
     // Stop when we get a match that ends at the string end, since no
     // coercible string can be more right-ward without the same terminus.
+    const coerceRtlRegex = options.includePrerelease ? re[t.COERCERTLFULL] : re[t.COERCERTL]
     let next
-    while ((next = re[t.COERCERTL].exec(version)) &&
+    while ((next = coerceRtlRegex.exec(version)) &&
         (!match || match.index + match[0].length !== version.length)
     ) {
       if (!match ||
             next.index + next[0].length !== match.index + match[0].length) {
         match = next
       }
-      re[t.COERCERTL].lastIndex = next.index + next[1].length + next[2].length
+      coerceRtlRegex.lastIndex = next.index + next[1].length + next[2].length
     }
     // leave it in a clean state
-    re[t.COERCERTL].lastIndex = -1
+    coerceRtlRegex.lastIndex = -1
   }
 
   if (match === null) {
     return null
   }
 
-  return parse(`${match[2]}.${match[3] || '0'}.${match[4] || '0'}`, options)
+  const major = match[2]
+  const minor = match[3] || '0'
+  const patch = match[4] || '0'
+  const prerelease = options.includePrerelease && match[5] ? `-${match[5]}` : ''
+  const build = options.includePrerelease && match[6] ? `+${match[6]}` : ''
+
+  return parse(`${major}.${minor}.${patch}${prerelease}${build}`, options)
 }
 module.exports = coerce
 
@@ -22938,12 +22946,17 @@ createToken('XRANGELOOSE', `^${src[t.GTLT]}\\s*${src[t.XRANGEPLAINLOOSE]}$`)
 
 // Coercion.
 // Extract anything that could conceivably be a part of a valid semver
-createToken('COERCE', `${'(^|[^\\d])' +
+createToken('COERCEPLAIN', `${'(^|[^\\d])' +
               '(\\d{1,'}${MAX_SAFE_COMPONENT_LENGTH}})` +
               `(?:\\.(\\d{1,${MAX_SAFE_COMPONENT_LENGTH}}))?` +
-              `(?:\\.(\\d{1,${MAX_SAFE_COMPONENT_LENGTH}}))?` +
+              `(?:\\.(\\d{1,${MAX_SAFE_COMPONENT_LENGTH}}))?`)
+createToken('COERCE', `${src[t.COERCEPLAIN]}(?:$|[^\\d])`)
+createToken('COERCEFULL', src[t.COERCEPLAIN] +
+              `(?:${src[t.PRERELEASE]})?` +
+              `(?:${src[t.BUILD]})?` +
               `(?:$|[^\\d])`)
 createToken('COERCERTL', src[t.COERCE], true)
+createToken('COERCERTLFULL', src[t.COERCEFULL], true)
 
 // Tilde ranges.
 // Meaning is "reasonably at or greater than"
@@ -26014,7 +26027,7 @@ function setupTimeout (onConnectTimeout, timeout) {
 function onConnectTimeout (socket) {
   let message = 'Connect Timeout Error'
   if (Array.isArray(socket.autoSelectFamilyAttemptedAddresses)) {
-    message = +` (attempted addresses: ${socket.autoSelectFamilyAttemptedAddresses.join(', ')})`
+    message += ` (attempted addresses: ${socket.autoSelectFamilyAttemptedAddresses.join(', ')})`
   }
   util.destroy(socket, new ConnectTimeoutError(message))
 }
@@ -29920,6 +29933,12 @@ function writeH2 (client, request) {
     if (request.onHeaders(Number(statusCode), realHeaders, stream.resume.bind(stream), '') === false) {
       stream.pause()
     }
+
+    stream.on('data', (chunk) => {
+      if (request.onData(chunk) === false) {
+        stream.pause()
+      }
+    })
   })
 
   stream.once('end', () => {
@@ -29942,12 +29961,6 @@ function writeH2 (client, request) {
     const err = new InformationalError('HTTP/2: stream half-closed (remote)')
     errorRequest(client, request, err)
     util.destroy(stream, err)
-  })
-
-  stream.on('data', (chunk) => {
-    if (request.onData(chunk) === false) {
-      stream.pause()
-    }
   })
 
   stream.once('close', () => {
@@ -32348,14 +32361,12 @@ class RetryHandler {
         }
 
         const { start, size, end = size } = range
-
         assert(
-          start != null && Number.isFinite(start) && this.start !== start,
+          start != null && Number.isFinite(start),
           'content-range mismatch'
         )
-        assert(Number.isFinite(start))
         assert(
-          end != null && Number.isFinite(end) && this.end !== end,
+          end != null && Number.isFinite(end),
           'invalid content-length'
         )
 
@@ -35208,7 +35219,7 @@ function setCookie (headers, cookie) {
   const str = stringify(cookie)
 
   if (str) {
-    headers.append('Set-Cookie', stringify(cookie))
+    headers.append('Set-Cookie', str)
   }
 }
 
@@ -36354,6 +36365,7 @@ const { parseMIMEType } = __nccwpck_require__(7704)
 const { MessageEvent } = __nccwpck_require__(5033)
 const { isNetworkError } = __nccwpck_require__(2583)
 const { delay } = __nccwpck_require__(8865)
+const { kEnumerableProperty } = __nccwpck_require__(3983)
 
 let experimentalWarned = false
 
@@ -36802,6 +36814,16 @@ const constantsPropertyDescriptors = {
 
 Object.defineProperties(EventSource, constantsPropertyDescriptors)
 Object.defineProperties(EventSource.prototype, constantsPropertyDescriptors)
+
+Object.defineProperties(EventSource.prototype, {
+  close: kEnumerableProperty,
+  onerror: kEnumerableProperty,
+  onmessage: kEnumerableProperty,
+  onopen: kEnumerableProperty,
+  readyState: kEnumerableProperty,
+  url: kEnumerableProperty,
+  withCredentials: kEnumerableProperty
+})
 
 webidl.converters.EventSourceInitDict = webidl.dictionaryConverter([
   { key: 'withCredentials', converter: webidl.converters.boolean, defaultValue: false }
@@ -44088,6 +44110,12 @@ function responseLocationURL (response, requestFragment) {
   // 3. If location is a header value, then set location to the result of
   //    parsing location with response’s URL.
   if (location !== null && isValidHeaderValue(location)) {
+    if (!isValidEncodedURL(location)) {
+      // Some websites respond location header in UTF-8 form without encoding them as ASCII
+      // and major browsers redirect them to correctly UTF-8 encoded addresses.
+      // Here, we handle that behavior in the same way.
+      location = normalizeBinaryStringToUtf8(location)
+    }
     location = new URL(location, responseURL(response))
   }
 
@@ -44099,6 +44127,36 @@ function responseLocationURL (response, requestFragment) {
 
   // 5. Return location.
   return location
+}
+
+/**
+ * @see https://www.rfc-editor.org/rfc/rfc1738#section-2.2
+ * @param {string} url
+ * @returns {boolean}
+ */
+function isValidEncodedURL (url) {
+  for (const c of url) {
+    const code = c.charCodeAt(0)
+    // Not used in US-ASCII
+    if (code >= 0x80) {
+      return false
+    }
+    // Control characters
+    if ((code >= 0x00 && code <= 0x1F) || code === 0x7F) {
+      return false
+    }
+  }
+  return true
+}
+
+/**
+ * If string contains non-ASCII characters, assumes it's UTF-8 encoded and decodes it.
+ * Since UTF-8 is a superset of ASCII, this will work for ASCII strings as well.
+ * @param {string} value
+ * @returns {string}
+ */
+function normalizeBinaryStringToUtf8 (value) {
+  return Buffer.from(value, 'binary').toString('utf8')
 }
 
 /** @returns {URL} */
@@ -48179,8 +48237,6 @@ const { WebsocketFrameSend } = __nccwpck_require__(2391)
 // Copyright (c) 2013 Arnout Kazemier and contributors
 // Copyright (c) 2016 Luigi Pinca and contributors
 
-const textDecoder = new TextDecoder('utf-8', { fatal: true })
-
 class ByteParser extends Writable {
   #buffers = []
   #byteOffset = 0
@@ -48483,7 +48539,8 @@ class ByteParser extends Writable {
     }
 
     try {
-      reason = textDecoder.decode(reason)
+      // TODO: optimize this
+      reason = new TextDecoder('utf-8', { fatal: true }).decode(reason)
     } catch {
       return null
     }
@@ -48597,8 +48654,6 @@ function fireEvent (e, target, eventConstructor = Event, eventInitDict = {}) {
   target.dispatchEvent(event)
 }
 
-const textDecoder = new TextDecoder('utf-8', { fatal: true })
-
 /**
  * @see https://websockets.spec.whatwg.org/#feedback-from-the-protocol
  * @param {import('./websocket').WebSocket} ws
@@ -48618,7 +48673,7 @@ function websocketMessageReceived (ws, type, data) {
     // -> type indicates that the data is Text
     //      a new DOMString containing data
     try {
-      dataForEvent = textDecoder.decode(data)
+      dataForEvent = new TextDecoder('utf-8', { fatal: true }).decode(data)
     } catch {
       failWebsocketConnection(ws, 'Received invalid UTF-8 in text frame.')
       return
