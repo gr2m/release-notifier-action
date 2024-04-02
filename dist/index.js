@@ -26709,6 +26709,8 @@ class Request {
 
     this.abort = null
 
+    this.publicInterface = null
+
     if (body == null) {
       this.body = null
     } else if (isStream(body)) {
@@ -26805,8 +26807,30 @@ class Request {
     this[kHandler] = handler
 
     if (channels.create.hasSubscribers) {
-      channels.create.publish({ request: this })
+      channels.create.publish({ request: this.getPublicInterface() })
     }
+  }
+
+  getPublicInterface () {
+    const self = this
+    this.publicInterface ??= {
+      get origin () {
+        return self.origin
+      },
+      get method () {
+        return self.method
+      },
+      get path () {
+        return self.path
+      },
+      get headers () {
+        return self.headers
+      },
+      get completed () {
+        return self.completed
+      }
+    }
+    return this.publicInterface
   }
 
   onBodySent (chunk) {
@@ -26821,7 +26845,7 @@ class Request {
 
   onRequestSent () {
     if (channels.bodySent.hasSubscribers) {
-      channels.bodySent.publish({ request: this })
+      channels.bodySent.publish({ request: this.getPublicInterface() })
     }
 
     if (this[kHandler].onRequestSent) {
@@ -26854,7 +26878,7 @@ class Request {
     assert(!this.completed)
 
     if (channels.headers.hasSubscribers) {
-      channels.headers.publish({ request: this, response: { statusCode, headers, statusText } })
+      channels.headers.publish({ request: this.getPublicInterface(), response: { statusCode, headers, statusText } })
     }
 
     try {
@@ -26890,7 +26914,7 @@ class Request {
 
     this.completed = true
     if (channels.trailers.hasSubscribers) {
-      channels.trailers.publish({ request: this, trailers })
+      channels.trailers.publish({ request: this.getPublicInterface(), trailers })
     }
 
     try {
@@ -26905,7 +26929,7 @@ class Request {
     this.onFinally()
 
     if (channels.error.hasSubscribers) {
-      channels.error.publish({ request: this, error })
+      channels.error.publish({ request: this.getPublicInterface(), error })
     }
 
     if (this.aborted) {
@@ -26926,11 +26950,6 @@ class Request {
       this.body.off('end', this.endHandler)
       this.endHandler = null
     }
-  }
-
-  addHeader (key, value) {
-    processHeader(this, key, value)
-    return this
   }
 }
 
@@ -27499,9 +27518,6 @@ function bufferToLowerCasedHeaderName (value) {
  * @returns {Record<string, string | string[]>}
  */
 function parseHeaders (headers, obj) {
-  // For H2 support
-  if (!Array.isArray(headers)) return headers
-
   if (obj === undefined) obj = {}
   for (let i = 0; i < headers.length; i += 2) {
     const key = headerNameToString(headers[i])
@@ -29172,7 +29188,7 @@ function writeH1 (client, request) {
   }
 
   if (channels.sendHeaders.hasSubscribers) {
-    channels.sendHeaders.publish({ request, headers: header, socket })
+    channels.sendHeaders.publish({ request: request.getPublicInterface(), headers: header, socket })
   }
 
   /* istanbul ignore else: assertion */
@@ -29593,6 +29609,20 @@ const {
   }
 } = http2
 
+function parseH2Headers (headers) {
+  // set-cookie is always an array. Duplicates are added to the array.
+  // For duplicate cookie headers, the values are joined together with '; '.
+  headers = Object.entries(headers).flat(2)
+
+  const result = []
+
+  for (const header of headers) {
+    result.push(Buffer.from(header))
+  }
+
+  return result
+}
+
 async function connectH2 (client, socket) {
   client[kSocket] = socket
 
@@ -29930,7 +29960,19 @@ function writeH2 (client, request) {
     const { [HTTP2_HEADER_STATUS]: statusCode, ...realHeaders } = headers
     request.onResponseStarted()
 
-    if (request.onHeaders(Number(statusCode), realHeaders, stream.resume.bind(stream), '') === false) {
+    // Due to the stream nature, it is possible we face a race condition
+    // where the stream has been assigned, but the request has been aborted
+    // the request remains in-flight and headers hasn't been received yet
+    // for those scenarios, best effort is to destroy the stream immediately
+    // as there's no value to keep it open.
+    if (request.aborted || request.completed) {
+      const err = new RequestAbortedError()
+      errorRequest(client, request, err)
+      util.destroy(stream, err)
+      return
+    }
+
+    if (request.onHeaders(Number(statusCode), parseH2Headers(realHeaders), stream.resume.bind(stream), '') === false) {
       stream.pause()
     }
 
@@ -33838,6 +33880,9 @@ module.exports = {
 const { Transform } = __nccwpck_require__(4492)
 const { Console } = __nccwpck_require__(27)
 
+const PERSISTENT = process.versions.icu ? '✅' : 'Y '
+const NOT_PERSISTENT = process.versions.icu ? '❌' : 'N '
+
 /**
  * Gets the output of `console.table(…)` as a string.
  */
@@ -33864,7 +33909,7 @@ module.exports = class PendingInterceptorsFormatter {
         Origin: origin,
         Path: path,
         'Status code': statusCode,
-        Persistent: persist ? '✅' : '❌',
+        Persistent: persist ? PERSISTENT : NOT_PERSISTENT,
         Invocations: timesInvoked,
         Remaining: persist ? Infinity : times - timesInvoked
       }))
@@ -37518,12 +37563,12 @@ const encoder = new TextEncoder()
  * @see https://mimesniff.spec.whatwg.org/#http-token-code-point
  */
 const HTTP_TOKEN_CODEPOINTS = /^[!#$%&'*+-.^_|~A-Za-z0-9]+$/
-const HTTP_WHITESPACE_REGEX = /[\u000A|\u000D|\u0009|\u0020]/ // eslint-disable-line
+const HTTP_WHITESPACE_REGEX = /[\u000A\u000D\u0009\u0020]/ // eslint-disable-line
 const ASCII_WHITESPACE_REPLACE_REGEX = /[\u0009\u000A\u000C\u000D\u0020]/g // eslint-disable-line
 /**
  * @see https://mimesniff.spec.whatwg.org/#http-quoted-string-token-code-point
  */
-const HTTP_QUOTED_STRING_TOKENS = /[\u0009|\u0020-\u007E|\u0080-\u00FF]/ // eslint-disable-line
+const HTTP_QUOTED_STRING_TOKENS = /[\u0009\u0020-\u007E\u0080-\u00FF]/ // eslint-disable-line
 
 // https://fetch.spec.whatwg.org/#data-url-processor
 /** @param {URL} dataURL */
@@ -39481,7 +39526,7 @@ const {
 } = __nccwpck_require__(1310)
 const { webidl } = __nccwpck_require__(4890)
 const assert = __nccwpck_require__(8061)
-const util = __nccwpck_require__(3837)
+const util = __nccwpck_require__(7261)
 
 const kHeadersMap = Symbol('headers map')
 const kHeadersSortedMap = Symbol('headers map sorted')
@@ -42243,29 +42288,6 @@ async function httpNetworkFetch (
               codings = contentEncoding.toLowerCase().split(',').map((x) => x.trim())
             }
             location = headersList.get('location', true)
-          } else {
-            const keys = Object.keys(rawHeaders)
-            for (let i = 0; i < keys.length; ++i) {
-              // The header names are already in lowercase.
-              const key = keys[i]
-              const value = rawHeaders[key]
-              if (key === 'set-cookie') {
-                for (let j = 0; j < value.length; ++j) {
-                  headersList.append(key, value[j], true)
-                }
-              } else {
-                headersList.append(key, value, true)
-              }
-            }
-            // For H2, The header names are already in lowercase,
-            // so we can avoid the `HeadersList#get` call here.
-            const contentEncoding = rawHeaders['content-encoding']
-            if (contentEncoding) {
-              // https://www.rfc-editor.org/rfc/rfc7231#section-3.1.2.1
-              // "All content-coding values are case-insensitive..."
-              codings = contentEncoding.toLowerCase().split(',').map((x) => x.trim()).reverse()
-            }
-            location = rawHeaders.location
           }
 
           this.body = new Readable({ read: resume })
