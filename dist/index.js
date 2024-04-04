@@ -16885,7 +16885,7 @@ var import_plugin_retry = __nccwpck_require__(8519);
 var import_plugin_throttling = __nccwpck_require__(2506);
 
 // pkg/dist-src/version.js
-var VERSION = "3.1.2";
+var VERSION = "3.2.0";
 
 // pkg/dist-src/octokit.js
 var import_request_error = __nccwpck_require__(4991);
