@@ -24414,11 +24414,14 @@ function abort (self) {
   if (self.abort) {
     self.abort(self[kSignal]?.reason)
   } else {
-    self.onError(self[kSignal]?.reason ?? new RequestAbortedError())
+    self.reason = self[kSignal]?.reason ?? new RequestAbortedError()
   }
+  removeSignal(self)
 }
 
 function addSignal (self, signal) {
+  self.reason = null
+
   self[kSignal] = null
   self[kListener] = null
 
@@ -24468,8 +24471,9 @@ module.exports = {
 "use strict";
 
 
+const assert = __nccwpck_require__(8061)
 const { AsyncResource } = __nccwpck_require__(2761)
-const { InvalidArgumentError, RequestAbortedError, SocketError } = __nccwpck_require__(8045)
+const { InvalidArgumentError, SocketError } = __nccwpck_require__(8045)
 const util = __nccwpck_require__(3983)
 const { addSignal, removeSignal } = __nccwpck_require__(7032)
 
@@ -24500,9 +24504,12 @@ class ConnectHandler extends AsyncResource {
   }
 
   onConnect (abort, context) {
-    if (!this.callback) {
-      throw new RequestAbortedError()
+    if (this.reason) {
+      abort(this.reason)
+      return
     }
+
+    assert(this.callback)
 
     this.abort = abort
     this.context = context
@@ -24727,11 +24734,13 @@ class PipelineHandler extends AsyncResource {
   onConnect (abort, context) {
     const { ret, res } = this
 
-    assert(!res, 'pipeline cannot be retried')
-
-    if (ret.destroyed) {
-      throw new RequestAbortedError()
+    if (this.reason) {
+      abort(this.reason)
+      return
     }
+
+    assert(!res, 'pipeline cannot be retried')
+    assert(!ret.destroyed)
 
     this.abort = abort
     this.context = context
@@ -24837,11 +24846,9 @@ module.exports = pipeline
 "use strict";
 
 
+const assert = __nccwpck_require__(8061)
 const { Readable } = __nccwpck_require__(3858)
-const {
-  InvalidArgumentError,
-  RequestAbortedError
-} = __nccwpck_require__(8045)
+const { InvalidArgumentError } = __nccwpck_require__(8045)
 const util = __nccwpck_require__(3983)
 const { getResolveErrorBodyCallback } = __nccwpck_require__(7474)
 const { AsyncResource } = __nccwpck_require__(2761)
@@ -24906,9 +24913,12 @@ class RequestHandler extends AsyncResource {
   }
 
   onConnect (abort, context) {
-    if (!this.callback) {
-      throw new RequestAbortedError()
+    if (this.reason) {
+      abort(this.reason)
+      return
     }
+
+    assert(this.callback)
 
     this.abort = abort
     this.context = context
@@ -25026,12 +25036,9 @@ module.exports.RequestHandler = RequestHandler
 "use strict";
 
 
+const assert = __nccwpck_require__(8061)
 const { finished, PassThrough } = __nccwpck_require__(4492)
-const {
-  InvalidArgumentError,
-  InvalidReturnValueError,
-  RequestAbortedError
-} = __nccwpck_require__(8045)
+const { InvalidArgumentError, InvalidReturnValueError } = __nccwpck_require__(8045)
 const util = __nccwpck_require__(3983)
 const { getResolveErrorBodyCallback } = __nccwpck_require__(7474)
 const { AsyncResource } = __nccwpck_require__(2761)
@@ -25096,9 +25103,12 @@ class StreamHandler extends AsyncResource {
   }
 
   onConnect (abort, context) {
-    if (!this.callback) {
-      throw new RequestAbortedError()
+    if (this.reason) {
+      abort(this.reason)
+      return
     }
+
+    assert(this.callback)
 
     this.abort = abort
     this.context = context
@@ -25254,7 +25264,7 @@ module.exports = stream
 "use strict";
 
 
-const { InvalidArgumentError, RequestAbortedError, SocketError } = __nccwpck_require__(8045)
+const { InvalidArgumentError, SocketError } = __nccwpck_require__(8045)
 const { AsyncResource } = __nccwpck_require__(2761)
 const util = __nccwpck_require__(3983)
 const { addSignal, removeSignal } = __nccwpck_require__(7032)
@@ -25288,9 +25298,12 @@ class UpgradeHandler extends AsyncResource {
   }
 
   onConnect (abort, context) {
-    if (!this.callback) {
-      throw new RequestAbortedError()
+    if (this.reason) {
+      abort(this.reason)
+      return
     }
+
+    assert(this.callback)
 
     this.abort = abort
     this.context = null
@@ -27254,7 +27267,7 @@ module.exports = {
 
 
 const assert = __nccwpck_require__(8061)
-const { kDestroyed, kBodyUsed } = __nccwpck_require__(2785)
+const { kDestroyed, kBodyUsed, kListeners } = __nccwpck_require__(2785)
 const { IncomingMessage } = __nccwpck_require__(8849)
 const stream = __nccwpck_require__(4492)
 const net = __nccwpck_require__(7503)
@@ -27275,13 +27288,20 @@ function isStream (obj) {
 
 // based on https://github.com/node-fetch/fetch-blob/blob/8ab587d34080de94140b54f07168451e7d0b655e/index.js#L229-L241 (MIT License)
 function isBlobLike (object) {
-  return (Blob && object instanceof Blob) || (
-    object &&
-    typeof object === 'object' &&
-    (typeof object.stream === 'function' ||
-      typeof object.arrayBuffer === 'function') &&
-    /^(Blob|File)$/.test(object[Symbol.toStringTag])
-  )
+  if (object === null) {
+    return false
+  } else if (object instanceof Blob) {
+    return true
+  } else if (typeof object !== 'object') {
+    return false
+  } else {
+    const sTag = object[Symbol.toStringTag]
+
+    return (sTag === 'Blob' || sTag === 'File') && (
+      ('stream' in object && typeof object.stream === 'function') ||
+      ('arrayBuffer' in object && typeof object.arrayBuffer === 'function')
+    )
+  }
 }
 
 function buildURL (url, queryParams) {
@@ -27787,6 +27807,29 @@ function parseRangeHeader (range) {
     : null
 }
 
+function addListener (obj, name, listener) {
+  const listeners = (obj[kListeners] ??= [])
+  listeners.push([name, listener])
+  obj.on(name, listener)
+  return obj
+}
+
+function removeAllListeners (obj) {
+  for (const [name, listener] of obj[kListeners] ?? []) {
+    obj.removeListener(name, listener)
+  }
+  obj[kListeners] = null
+}
+
+function errorRequest (client, request, err) {
+  try {
+    request.onError(err)
+    assert(request.aborted)
+  } catch (err) {
+    client.emit('error', err)
+  }
+}
+
 const kEnumerableProperty = Object.create(null)
 kEnumerableProperty.enumerable = true
 
@@ -27809,6 +27852,9 @@ module.exports = {
   isDestroyed,
   headerNameToString,
   bufferToLowerCasedHeaderName,
+  addListener,
+  removeAllListeners,
+  errorRequest,
   parseRawHeaders,
   parseHeaders,
   parseKeepAliveTimeout,
@@ -28223,7 +28269,6 @@ const {
   kMaxRequests,
   kCounter,
   kMaxResponseSize,
-  kListeners,
   kOnError,
   kResume,
   kHTTPContext
@@ -28232,22 +28277,10 @@ const {
 const constants = __nccwpck_require__(953)
 const EMPTY_BUF = Buffer.alloc(0)
 const FastBuffer = Buffer[Symbol.species]
+const addListener = util.addListener
+const removeAllListeners = util.removeAllListeners
 
 let extractBody
-
-function addListener (obj, name, listener) {
-  const listeners = (obj[kListeners] ??= [])
-  listeners.push([name, listener])
-  obj.on(name, listener)
-  return obj
-}
-
-function removeAllListeners (obj) {
-  for (const [name, listener] of obj[kListeners] ?? []) {
-    obj.removeListener(name, listener)
-  }
-  obj[kListeners] = null
-}
 
 async function lazyllhttp () {
   const llhttpWasmData = process.env.JEST_WORKER_ID ? __nccwpck_require__(1145) : undefined
@@ -28895,14 +28928,14 @@ async function connectH1 (client, socket) {
       const requests = client[kQueue].splice(client[kRunningIdx])
       for (let i = 0; i < requests.length; i++) {
         const request = requests[i]
-        errorRequest(client, request, err)
+        util.errorRequest(client, request, err)
       }
     } else if (client[kRunning] > 0 && err.code !== 'UND_ERR_INFO') {
       // Fail head of pipeline.
       const request = client[kQueue][client[kRunningIdx]]
       client[kQueue][client[kRunningIdx]++] = null
 
-      errorRequest(client, request, err)
+      util.errorRequest(client, request, err)
     }
 
     client[kPendingIdx] = client[kRunningIdx]
@@ -29007,15 +29040,6 @@ function resumeH1 (client) {
   }
 }
 
-function errorRequest (client, request, err) {
-  try {
-    request.onError(err)
-    assert(request.aborted)
-  } catch (err) {
-    client.emit('error', err)
-  }
-}
-
 // https://www.rfc-editor.org/rfc/rfc7230#section-3.3.2
 function shouldSendContentLength (method) {
   return method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS' && method !== 'TRACE' && method !== 'CONNECT'
@@ -29082,7 +29106,7 @@ function writeH1 (client, request) {
   // A user agent may send a Content-Length header with 0 value, this should be allowed.
   if (shouldSendContentLength(method) && contentLength > 0 && request.contentLength !== null && request.contentLength !== contentLength) {
     if (client[kStrictContentLength]) {
-      errorRequest(client, request, new RequestContentLengthMismatchError())
+      util.errorRequest(client, request, new RequestContentLengthMismatchError())
       return false
     }
 
@@ -29091,22 +29115,24 @@ function writeH1 (client, request) {
 
   const socket = client[kSocket]
 
+  const abort = (err) => {
+    if (request.aborted || request.completed) {
+      return
+    }
+
+    util.errorRequest(client, request, err || new RequestAbortedError())
+
+    util.destroy(body)
+    util.destroy(socket, new InformationalError('aborted'))
+  }
+
   try {
-    request.onConnect((err) => {
-      if (request.aborted || request.completed) {
-        return
-      }
-
-      errorRequest(client, request, err || new RequestAbortedError())
-
-      util.destroy(socket, new InformationalError('aborted'))
-    })
+    request.onConnect(abort)
   } catch (err) {
-    errorRequest(client, request, err)
+    util.errorRequest(client, request, err)
   }
 
   if (request.aborted) {
-    util.destroy(body)
     return false
   }
 
@@ -29174,35 +29200,19 @@ function writeH1 (client, request) {
 
   /* istanbul ignore else: assertion */
   if (!body || bodyLength === 0) {
-    if (contentLength === 0) {
-      socket.write(`${header}content-length: 0\r\n\r\n`, 'latin1')
-    } else {
-      assert(contentLength === null, 'no body must not have content length')
-      socket.write(`${header}\r\n`, 'latin1')
-    }
-    request.onRequestSent()
+    writeBuffer({ abort, body: null, client, request, socket, contentLength, header, expectsPayload })
   } else if (util.isBuffer(body)) {
-    assert(contentLength === body.byteLength, 'buffer body must have content length')
-
-    socket.cork()
-    socket.write(`${header}content-length: ${contentLength}\r\n\r\n`, 'latin1')
-    socket.write(body)
-    socket.uncork()
-    request.onBodySent(body)
-    request.onRequestSent()
-    if (!expectsPayload) {
-      socket[kReset] = true
-    }
+    writeBuffer({ abort, body, client, request, socket, contentLength, header, expectsPayload })
   } else if (util.isBlobLike(body)) {
     if (typeof body.stream === 'function') {
-      writeIterable({ body: body.stream(), client, request, socket, contentLength, header, expectsPayload })
+      writeIterable({ abort, body: body.stream(), client, request, socket, contentLength, header, expectsPayload })
     } else {
-      writeBlob({ body, client, request, socket, contentLength, header, expectsPayload })
+      writeBlob({ abort, body, client, request, socket, contentLength, header, expectsPayload })
     }
   } else if (util.isStream(body)) {
-    writeStream({ body, client, request, socket, contentLength, header, expectsPayload })
+    writeStream({ abort, body, client, request, socket, contentLength, header, expectsPayload })
   } else if (util.isIterable(body)) {
-    writeIterable({ body, client, request, socket, contentLength, header, expectsPayload })
+    writeIterable({ abort, body, client, request, socket, contentLength, header, expectsPayload })
   } else {
     assert(false)
   }
@@ -29210,12 +29220,12 @@ function writeH1 (client, request) {
   return true
 }
 
-function writeStream ({ h2stream, body, client, request, socket, contentLength, header, expectsPayload }) {
+function writeStream ({ abort, body, client, request, socket, contentLength, header, expectsPayload }) {
   assert(contentLength !== 0 || client[kRunning] === 0, 'stream body cannot be pipelined')
 
   let finished = false
 
-  const writer = new AsyncWriter({ socket, request, contentLength, client, expectsPayload, header })
+  const writer = new AsyncWriter({ abort, socket, request, contentLength, client, expectsPayload, header })
 
   const onData = function (chunk) {
     if (finished) {
@@ -29313,7 +29323,37 @@ function writeStream ({ h2stream, body, client, request, socket, contentLength, 
   }
 }
 
-async function writeBlob ({ h2stream, body, client, request, socket, contentLength, header, expectsPayload }) {
+async function writeBuffer ({ abort, body, client, request, socket, contentLength, header, expectsPayload }) {
+  try {
+    if (!body) {
+      if (contentLength === 0) {
+        socket.write(`${header}content-length: 0\r\n\r\n`, 'latin1')
+      } else {
+        assert(contentLength === null, 'no body must not have content length')
+        socket.write(`${header}\r\n`, 'latin1')
+      }
+    } else if (util.isBuffer(body)) {
+      assert(contentLength === body.byteLength, 'buffer body must have content length')
+
+      socket.cork()
+      socket.write(`${header}content-length: ${contentLength}\r\n\r\n`, 'latin1')
+      socket.write(body)
+      socket.uncork()
+      request.onBodySent(body)
+
+      if (!expectsPayload) {
+        socket[kReset] = true
+      }
+    }
+    request.onRequestSent()
+
+    client[kResume]()
+  } catch (err) {
+    abort(err)
+  }
+}
+
+async function writeBlob ({ abort, body, client, request, socket, contentLength, header, expectsPayload }) {
   assert(contentLength === body.size, 'blob body must have content length')
 
   try {
@@ -29337,11 +29377,11 @@ async function writeBlob ({ h2stream, body, client, request, socket, contentLeng
 
     client[kResume]()
   } catch (err) {
-    util.destroy(socket, err)
+    abort(err)
   }
 }
 
-async function writeIterable ({ h2stream, body, client, request, socket, contentLength, header, expectsPayload }) {
+async function writeIterable ({ abort, body, client, request, socket, contentLength, header, expectsPayload }) {
   assert(contentLength !== 0 || client[kRunning] === 0, 'iterator body cannot be pipelined')
 
   let callback = null
@@ -29367,7 +29407,7 @@ async function writeIterable ({ h2stream, body, client, request, socket, content
     .on('close', onDrain)
     .on('drain', onDrain)
 
-  const writer = new AsyncWriter({ socket, request, contentLength, client, expectsPayload, header })
+  const writer = new AsyncWriter({ abort, socket, request, contentLength, client, expectsPayload, header })
   try {
     // It's up to the user to somehow abort the async iterable.
     for await (const chunk of body) {
@@ -29391,7 +29431,7 @@ async function writeIterable ({ h2stream, body, client, request, socket, content
 }
 
 class AsyncWriter {
-  constructor ({ socket, request, contentLength, client, expectsPayload, header }) {
+  constructor ({ abort, socket, request, contentLength, client, expectsPayload, header }) {
     this.socket = socket
     this.request = request
     this.contentLength = contentLength
@@ -29399,6 +29439,7 @@ class AsyncWriter {
     this.bytesWritten = 0
     this.expectsPayload = expectsPayload
     this.header = header
+    this.abort = abort
 
     socket[kWriting] = true
   }
@@ -29514,13 +29555,13 @@ class AsyncWriter {
   }
 
   destroy (err) {
-    const { socket, client } = this
+    const { socket, client, abort } = this
 
     socket[kWriting] = false
 
     if (err) {
       assert(client[kRunning] <= 1, 'pipeline should only contain this request')
-      util.destroy(socket, err)
+      abort(err)
     }
   }
 }
@@ -29558,7 +29599,6 @@ const {
   kSocket,
   kStrictContentLength,
   kOnError,
-  // HTTP2
   kMaxConcurrentStreams,
   kHTTP2Session,
   kResume
@@ -29591,14 +29631,20 @@ const {
 } = http2
 
 function parseH2Headers (headers) {
-  // set-cookie is always an array. Duplicates are added to the array.
-  // For duplicate cookie headers, the values are joined together with '; '.
-  headers = Object.entries(headers).flat(2)
-
   const result = []
 
-  for (const header of headers) {
-    result.push(Buffer.from(header))
+  for (const [name, value] of Object.entries(headers)) {
+    // h2 may concat the header value by array
+    // e.g. Set-Cookie
+    if (Array.isArray(value)) {
+      for (const subvalue of value) {
+        // we need to provide each header value of header name
+        // because the headers handler expect name-value pair
+        result.push(Buffer.from(name), Buffer.from(subvalue))
+      }
+    } else {
+      result.push(Buffer.from(name), Buffer.from(value))
+    }
   }
 
   return result
@@ -29622,16 +29668,18 @@ async function connectH2 (client, socket) {
   session[kOpenStreams] = 0
   session[kClient] = client
   session[kSocket] = socket
-  session.on('error', onHttp2SessionError)
-  session.on('frameError', onHttp2FrameError)
-  session.on('end', onHttp2SessionEnd)
-  session.on('goaway', onHTTP2GoAway)
-  session.on('close', function () {
+
+  util.addListener(session, 'error', onHttp2SessionError)
+  util.addListener(session, 'frameError', onHttp2FrameError)
+  util.addListener(session, 'end', onHttp2SessionEnd)
+  util.addListener(session, 'goaway', onHTTP2GoAway)
+  util.addListener(session, 'close', function () {
     const { [kClient]: client } = this
 
-    const err = this[kError] || new SocketError('closed', util.getSocketInfo(this))
+    const err = this[kSocket][kError] || new SocketError('closed', util.getSocketInfo(this))
 
     client[kSocket] = null
+    client[kHTTP2Session] = null
 
     assert(client[kPending] === 0)
 
@@ -29639,7 +29687,7 @@ async function connectH2 (client, socket) {
     const requests = client[kQueue].splice(client[kRunningIdx])
     for (let i = 0; i < requests.length; i++) {
       const request = requests[i]
-      errorRequest(client, request, err)
+      util.errorRequest(client, request, err)
     }
 
     client[kPendingIdx] = client[kRunningIdx]
@@ -29650,19 +29698,21 @@ async function connectH2 (client, socket) {
 
     client[kResume]()
   })
+
   session.unref()
 
   client[kHTTP2Session] = session
   socket[kHTTP2Session] = session
 
-  socket.on('error', function (err) {
+  util.addListener(socket, 'error', function (err) {
     assert(err.code !== 'ERR_TLS_CERT_ALTNAME_INVALID')
 
     this[kError] = err
 
     this[kClient][kOnError](err)
   })
-  socket.on('end', function () {
+
+  util.addListener(socket, 'end', function () {
     util.destroy(this, new SocketError('other side closed', util.getSocketInfo(this)))
   })
 
@@ -29702,67 +29752,42 @@ function onHttp2SessionError (err) {
   assert(err.code !== 'ERR_TLS_CERT_ALTNAME_INVALID')
 
   this[kSocket][kError] = err
-
   this[kClient][kOnError](err)
 }
 
 function onHttp2FrameError (type, code, id) {
-  const err = new InformationalError(`HTTP/2: "frameError" received - type ${type}, code ${code}`)
-
   if (id === 0) {
+    const err = new InformationalError(`HTTP/2: "frameError" received - type ${type}, code ${code}`)
     this[kSocket][kError] = err
     this[kClient][kOnError](err)
   }
 }
 
 function onHttp2SessionEnd () {
-  this.destroy(new SocketError('other side closed'))
-  util.destroy(this[kSocket], new SocketError('other side closed'))
+  const err = new SocketError('other side closed', util.getSocketInfo(this[kSocket]))
+  this.destroy(err)
+  util.destroy(this[kSocket], err)
 }
 
+/**
+ * This is the root cause of #3011
+ * We need to handle GOAWAY frames properly, and trigger the session close
+ * along with the socket right away
+ * Find a way to trigger the close cycle from here on.
+ */
 function onHTTP2GoAway (code) {
-  const client = this[kClient]
   const err = new InformationalError(`HTTP/2: "GOAWAY" frame received with code ${code}`)
-  client[kSocket] = null
-  client[kHTTP2Session] = null
 
-  if (client.destroyed) {
-    assert(this[kPending] === 0)
+  // We need to trigger the close cycle right away
+  // We need to destroy the session and the socket
+  // Requests should be failed with the error after the current one is handled
+  this[kSocket][kError] = err
+  this[kClient][kOnError](err)
 
-    // Fail entire queue.
-    const requests = client[kQueue].splice(client[kRunningIdx])
-    for (let i = 0; i < requests.length; i++) {
-      const request = requests[i]
-      errorRequest(this, request, err)
-    }
-  } else if (client[kRunning] > 0) {
-    // Fail head of pipeline.
-    const request = client[kQueue][client[kRunningIdx]]
-    client[kQueue][client[kRunningIdx]++] = null
-
-    errorRequest(client, request, err)
-  }
-
-  client[kPendingIdx] = client[kRunningIdx]
-
-  assert(client[kRunning] === 0)
-
-  client.emit('disconnect',
-    client[kUrl],
-    [client],
-    err
-  )
-
-  client[kResume]()
-}
-
-function errorRequest (client, request, err) {
-  try {
-    request.onError(err)
-    assert(request.aborted)
-  } catch (err) {
-    client.emit('error', err)
-  }
+  this.unref()
+  // We send the GOAWAY frame response as no error
+  this.destroy()
+  util.destroy(this[kSocket], err)
 }
 
 // https://www.rfc-editor.org/rfc/rfc7230#section-3.3.2
@@ -29775,7 +29800,7 @@ function writeH2 (client, request) {
   const { body, method, path, host, upgrade, expectContinue, signal, headers: reqHeaders } = request
 
   if (upgrade) {
-    errorRequest(client, request, new Error('Upgrade not supported for H2'))
+    util.errorRequest(client, request, new Error('Upgrade not supported for H2'))
     return false
   }
 
@@ -29828,10 +29853,10 @@ function writeH2 (client, request) {
         }
       }
 
-      errorRequest(client, request, err)
+      util.errorRequest(client, request, err)
     })
   } catch (err) {
-    errorRequest(client, request, err)
+    util.errorRequest(client, request, err)
   }
 
   if (method === 'CONNECT') {
@@ -29906,7 +29931,7 @@ function writeH2 (client, request) {
   // A user agent may send a Content-Length header with 0 value, this should be allowed.
   if (shouldSendContentLength(method) && contentLength > 0 && request.contentLength != null && request.contentLength !== contentLength) {
     if (client[kStrictContentLength]) {
-      errorRequest(client, request, new RequestContentLengthMismatchError())
+      util.errorRequest(client, request, new RequestContentLengthMismatchError())
       return false
     }
 
@@ -29948,7 +29973,7 @@ function writeH2 (client, request) {
     // as there's no value to keep it open.
     if (request.aborted || request.completed) {
       const err = new RequestAbortedError()
-      errorRequest(client, request, err)
+      util.errorRequest(client, request, err)
       util.destroy(stream, err)
       return
     }
@@ -29982,13 +30007,12 @@ function writeH2 (client, request) {
     }
 
     const err = new InformationalError('HTTP/2: stream half-closed (remote)')
-    errorRequest(client, request, err)
+    util.errorRequest(client, request, err)
     util.destroy(stream, err)
   })
 
   stream.once('close', () => {
     session[kOpenStreams] -= 1
-    // TODO(HTTP/2): unref only if current streams count is 0
     if (session[kOpenStreams] === 0) {
       session.unref()
     }
@@ -29997,13 +30021,14 @@ function writeH2 (client, request) {
   stream.once('error', function (err) {
     if (client[kHTTP2Session] && !client[kHTTP2Session].destroyed && !this.closed && !this.destroyed) {
       session[kOpenStreams] -= 1
+      util.errorRequest(client, request, err)
       util.destroy(stream, err)
     }
   })
 
   stream.once('frameError', (type, code) => {
     const err = new InformationalError(`HTTP/2: "frameError" received - type ${type}, code ${code}`)
-    errorRequest(client, request, err)
+    util.errorRequest(client, request, err)
 
     if (client[kHTTP2Session] && !client[kHTTP2Session].destroyed && !this.closed && !this.destroyed) {
       session[kOpenStreams] -= 1
@@ -30547,7 +30572,7 @@ class Client extends DispatcherBase {
       const requests = this[kQueue].splice(this[kPendingIdx])
       for (let i = 0; i < requests.length; i++) {
         const request = requests[i]
-        errorRequest(this, request, err)
+        util.errorRequest(this, request, err)
       }
 
       const callback = () => {
@@ -30587,7 +30612,7 @@ function onError (client, err) {
     const requests = client[kQueue].splice(client[kRunningIdx])
     for (let i = 0; i < requests.length; i++) {
       const request = requests[i]
-      errorRequest(client, request, err)
+      util.errorRequest(client, request, err)
     }
     assert(client[kSize] === 0)
   }
@@ -30711,7 +30736,7 @@ async function connect (client) {
       assert(client[kRunning] === 0)
       while (client[kPending] > 0 && client[kQueue][client[kPendingIdx]].servername === client[kServerName]) {
         const request = client[kQueue][client[kPendingIdx]++]
-        errorRequest(client, request, err)
+        util.errorRequest(client, request, err)
       }
     } else {
       onError(client, err)
@@ -30790,7 +30815,10 @@ function _resume (client, sync) {
       }
 
       client[kServerName] = request.servername
-      client[kHTTPContext]?.destroy(new InformationalError('servername changed'))
+      client[kHTTPContext]?.destroy(new InformationalError('servername changed'), () => {
+        client[kHTTPContext] = null
+        resume(client)
+      })
     }
 
     if (client[kConnecting]) {
@@ -30815,15 +30843,6 @@ function _resume (client, sync) {
     } else {
       client[kQueue].splice(client[kPendingIdx], 1)
     }
-  }
-}
-
-function errorRequest (client, request, err) {
-  try {
-    request.onError(err)
-    assert(request.aborted)
-  } catch (err) {
-    client.emit('error', err)
   }
 }
 
@@ -31644,19 +31663,19 @@ class ProxyAgent extends DispatcherBase {
     this[kAgent] = new Agent({
       ...opts,
       connect: async (opts, callback) => {
-        let requestedHost = opts.host
+        let requestedPath = opts.host
         if (!opts.port) {
-          requestedHost += `:${defaultProtocolPort(opts.protocol)}`
+          requestedPath += `:${defaultProtocolPort(opts.protocol)}`
         }
         try {
           const { socket, statusCode } = await this[kClient].connect({
             origin,
             port,
-            path: requestedHost,
+            path: requestedPath,
             signal: opts.signal,
             headers: {
               ...this[kProxyHeaders],
-              host: requestedHost
+              host: opts.host
             },
             servername: this[kProxyTls]?.servername || proxyHostname
           })
@@ -31688,16 +31707,18 @@ class ProxyAgent extends DispatcherBase {
   }
 
   dispatch (opts, handler) {
-    const { host } = new URL(opts.origin)
     const headers = buildHeaders(opts.headers)
     throwIfProxyAuthIsSent(headers)
+
+    if (headers && !('host' in headers) && !('Host' in headers)) {
+      const { host } = new URL(opts.origin)
+      headers.host = host
+    }
+
     return this[kAgent].dispatch(
       {
         ...opts,
-        headers: {
-          ...headers,
-          host
-        }
+        headers
       },
       handler
     )
@@ -33265,7 +33286,7 @@ class MockInterceptor {
     this[kContentLength] = false
   }
 
-  createMockScopeDispatchData (statusCode, data, responseOptions = {}) {
+  createMockScopeDispatchData ({ statusCode, data, responseOptions }) {
     const responseData = getResponseData(data)
     const contentLength = this[kContentLength] ? { 'content-length': responseData.length } : {}
     const headers = { ...this[kDefaultHeaders], ...contentLength, ...responseOptions.headers }
@@ -33274,14 +33295,11 @@ class MockInterceptor {
     return { statusCode, data, headers, trailers }
   }
 
-  validateReplyParameters (statusCode, data, responseOptions) {
-    if (typeof statusCode === 'undefined') {
+  validateReplyParameters (replyParameters) {
+    if (typeof replyParameters.statusCode === 'undefined') {
       throw new InvalidArgumentError('statusCode must be defined')
     }
-    if (typeof data === 'undefined') {
-      throw new InvalidArgumentError('data must be defined')
-    }
-    if (typeof responseOptions !== 'object' || responseOptions === null) {
+    if (typeof replyParameters.responseOptions !== 'object' || replyParameters.responseOptions === null) {
       throw new InvalidArgumentError('responseOptions must be an object')
     }
   }
@@ -33289,28 +33307,28 @@ class MockInterceptor {
   /**
    * Mock an undici request with a defined reply.
    */
-  reply (replyData) {
+  reply (replyOptionsCallbackOrStatusCode) {
     // Values of reply aren't available right now as they
     // can only be available when the reply callback is invoked.
-    if (typeof replyData === 'function') {
+    if (typeof replyOptionsCallbackOrStatusCode === 'function') {
       // We'll first wrap the provided callback in another function,
       // this function will properly resolve the data from the callback
       // when invoked.
       const wrappedDefaultsCallback = (opts) => {
         // Our reply options callback contains the parameter for statusCode, data and options.
-        const resolvedData = replyData(opts)
+        const resolvedData = replyOptionsCallbackOrStatusCode(opts)
 
         // Check if it is in the right format
-        if (typeof resolvedData !== 'object') {
+        if (typeof resolvedData !== 'object' || resolvedData === null) {
           throw new InvalidArgumentError('reply options callback must return an object')
         }
 
-        const { statusCode, data = '', responseOptions = {} } = resolvedData
-        this.validateReplyParameters(statusCode, data, responseOptions)
+        const replyParameters = { data: '', responseOptions: {}, ...resolvedData }
+        this.validateReplyParameters(replyParameters)
         // Since the values can be obtained immediately we return them
         // from this higher order function that will be resolved later.
         return {
-          ...this.createMockScopeDispatchData(statusCode, data, responseOptions)
+          ...this.createMockScopeDispatchData(replyParameters)
         }
       }
 
@@ -33323,11 +33341,15 @@ class MockInterceptor {
     // we should have 1-3 parameters. So we spread the arguments of
     // this function to obtain the parameters, since replyData will always
     // just be the statusCode.
-    const [statusCode, data = '', responseOptions = {}] = [...arguments]
-    this.validateReplyParameters(statusCode, data, responseOptions)
+    const replyParameters = {
+      statusCode: replyOptionsCallbackOrStatusCode,
+      data: arguments[1] === undefined ? '' : arguments[1],
+      responseOptions: arguments[2] === undefined ? {} : arguments[2]
+    }
+    this.validateReplyParameters(replyParameters)
 
     // Send in-already provided data like usual
-    const dispatchData = this.createMockScopeDispatchData(statusCode, data, responseOptions)
+    const dispatchData = this.createMockScopeDispatchData(replyParameters)
     const newMockDispatch = addMockDispatch(this[kDispatches], this[kDispatchKey], dispatchData)
     return new MockScope(newMockDispatch)
   }
@@ -33495,7 +33517,7 @@ const {
   kOrigin,
   kGetNetConnect
 } = __nccwpck_require__(4347)
-const { buildURL, nop } = __nccwpck_require__(3983)
+const { buildURL } = __nccwpck_require__(3983)
 const { STATUS_CODES } = __nccwpck_require__(8849)
 const {
   types: {
@@ -33772,10 +33794,10 @@ function mockDispatch (opts, handler) {
     const responseHeaders = generateKeyValues(headers)
     const responseTrailers = generateKeyValues(trailers)
 
-    handler.abort = nop
-    handler.onHeaders(statusCode, responseHeaders, resume, getStatusText(statusCode))
-    handler.onData(Buffer.from(responseData))
-    handler.onComplete(responseTrailers)
+    handler.onConnect?.(err => handler.onError(err), null)
+    handler.onHeaders?.(statusCode, responseHeaders, resume, getStatusText(statusCode))
+    handler.onData?.(Buffer.from(responseData))
+    handler.onComplete?.(responseTrailers)
     deleteMockDispatch(mockDispatches, key)
   }
 
@@ -37427,8 +37449,8 @@ const badPorts = [
   '87', '95', '101', '102', '103', '104', '109', '110', '111', '113', '115', '117', '119', '123', '135', '137',
   '139', '143', '161', '179', '389', '427', '465', '512', '513', '514', '515', '526', '530', '531', '532',
   '540', '548', '554', '556', '563', '587', '601', '636', '989', '990', '993', '995', '1719', '1720', '1723',
-  '2049', '3659', '4045', '5060', '5061', '6000', '6566', '6665', '6666', '6667', '6668', '6669', '6697',
-  '10080'
+  '2049', '3659', '4045', '4190', '5060', '5061', '6000', '6566', '6665', '6666', '6667', '6668', '6669', '6679',
+  '6697', '10080'
 ]
 
 const badPortsSet = new Set(badPorts)
@@ -48304,7 +48326,7 @@ const { Writable } = __nccwpck_require__(4492)
 const { parserStates, opcodes, states, emptyBuffer, sentCloseFrameState } = __nccwpck_require__(3587)
 const { kReadyState, kSentClose, kResponse, kReceivedClose } = __nccwpck_require__(9769)
 const { channels } = __nccwpck_require__(8438)
-const { isValidStatusCode, failWebsocketConnection, websocketMessageReceived } = __nccwpck_require__(9902)
+const { isValidStatusCode, failWebsocketConnection, websocketMessageReceived, utf8Decode } = __nccwpck_require__(9902)
 const { WebsocketFrameSend } = __nccwpck_require__(2391)
 
 // This code was influenced by ws released under the MIT license.
@@ -48614,8 +48636,7 @@ class ByteParser extends Writable {
     }
 
     try {
-      // TODO: optimize this
-      reason = new TextDecoder('utf-8', { fatal: true }).decode(reason)
+      reason = utf8Decode(reason)
     } catch {
       return null
     }
@@ -48664,6 +48685,7 @@ module.exports = {
 const { kReadyState, kController, kResponse, kBinaryType, kWebSocketURL } = __nccwpck_require__(9769)
 const { states, opcodes } = __nccwpck_require__(3587)
 const { MessageEvent, ErrorEvent } = __nccwpck_require__(5033)
+const { isUtf8 } = __nccwpck_require__(2254)
 
 /* globals Blob */
 
@@ -48748,7 +48770,7 @@ function websocketMessageReceived (ws, type, data) {
     // -> type indicates that the data is Text
     //      a new DOMString containing data
     try {
-      dataForEvent = new TextDecoder('utf-8', { fatal: true }).decode(data)
+      dataForEvent = utf8Decode(data)
     } catch {
       failWebsocketConnection(ws, 'Received invalid UTF-8 in text frame.')
       return
@@ -48861,6 +48883,33 @@ function failWebsocketConnection (ws, reason) {
   }
 }
 
+// https://nodejs.org/api/intl.html#detecting-internationalization-support
+const hasIntl = typeof process.versions.icu === 'string'
+const fatalDecoder = hasIntl ? new TextDecoder('utf-8', { fatal: true }) : undefined
+
+/**
+ * Converts a Buffer to utf-8, even on platforms without icu.
+ * @param {Buffer} buffer
+ */
+function utf8Decode (buffer) {
+  if (hasIntl) {
+    return fatalDecoder.decode(buffer)
+  } else {
+    if (!isUtf8?.(buffer)) {
+      // TODO: remove once node 18 or < node v18.14.0 is dropped
+      if (!isUtf8) {
+        process.emitWarning('ICU is not supported and no fallback exists. Please upgrade to at least Node v18.14.0.', {
+          code: 'UNDICI-WS-NO-ICU'
+        })
+      }
+
+      throw new TypeError('Invalid utf-8 received.')
+    }
+
+    return buffer.toString('utf-8')
+  }
+}
+
 module.exports = {
   isConnecting,
   isEstablished,
@@ -48870,7 +48919,8 @@ module.exports = {
   isValidSubprotocol,
   isValidStatusCode,
   failWebsocketConnection,
-  websocketMessageReceived
+  websocketMessageReceived,
+  utf8Decode
 }
 
 
