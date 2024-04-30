@@ -32423,9 +32423,7 @@ const { isDisturbed, parseHeaders, parseRangeHeader } = __nccwpck_require__(3983
 
 function calculateRetryAfterHeader (retryAfter) {
   const current = Date.now()
-  const diff = new Date(retryAfter).getTime() - current
-
-  return diff
+  return new Date(retryAfter).getTime() - current
 }
 
 class RetryHandler {
@@ -32532,11 +32530,7 @@ class RetryHandler {
     const { counter } = state
 
     // Any code that is not a Undici's originated and allowed to retry
-    if (
-      code &&
-      code !== 'UND_ERR_REQ_RETRY' &&
-      !errorCodes.includes(code)
-    ) {
+    if (code && code !== 'UND_ERR_REQ_RETRY' && !errorCodes.includes(code)) {
       cb(err)
       return
     }
@@ -32662,10 +32656,7 @@ class RetryHandler {
           start != null && Number.isFinite(start),
           'content-range mismatch'
         )
-        assert(
-          end != null && Number.isFinite(end),
-          'invalid content-length'
-        )
+        assert(end != null && Number.isFinite(end), 'invalid content-length')
 
         this.start = start
         this.end = end
@@ -32685,6 +32676,13 @@ class RetryHandler {
 
       this.resume = resume
       this.etag = headers.etag != null ? headers.etag : null
+
+      // Weak etags are not useful for comparison nor cache
+      // for instance not safe to assume if the response is byte-per-byte
+      // equal
+      if (this.etag != null && this.etag.startsWith('W/')) {
+        this.etag = null
+      }
 
       return this.handler.onHeaders(
         statusCode,
@@ -32724,7 +32722,9 @@ class RetryHandler {
     // and server error response
     if (this.retryCount - this.retryCountCheckpoint > 0) {
       // We count the difference between the last checkpoint and the current retry count
-      this.retryCount = this.retryCountCheckpoint + (this.retryCount - this.retryCountCheckpoint)
+      this.retryCount =
+        this.retryCountCheckpoint +
+        (this.retryCount - this.retryCountCheckpoint)
     } else {
       this.retryCount += 1
     }
@@ -32744,11 +32744,18 @@ class RetryHandler {
       }
 
       if (this.start !== 0) {
+        const headers = { range: `bytes=${this.start}-${this.end ?? ''}` }
+
+        // Weak etag check - weak etags will make comparison algorithms never match
+        if (this.etag != null) {
+          headers['if-match'] = this.etag
+        }
+
         this.opts = {
           ...this.opts,
           headers: {
             ...this.opts.headers,
-            range: `bytes=${this.start}-${this.end ?? ''}`
+            ...headers
           }
         }
       }
@@ -34376,10 +34383,12 @@ class Cache {
 
   async match (request, options = {}) {
     webidl.brandCheck(this, Cache)
-    webidl.argumentLengthCheck(arguments, 1, { header: 'Cache.match' })
 
-    request = webidl.converters.RequestInfo(request)
-    options = webidl.converters.CacheQueryOptions(options)
+    const prefix = 'Cache.match'
+    webidl.argumentLengthCheck(arguments, 1, prefix)
+
+    request = webidl.converters.RequestInfo(request, prefix, 'request')
+    options = webidl.converters.CacheQueryOptions(options, prefix, 'options')
 
     const p = this.#internalMatchAll(request, options, 1)
 
@@ -34393,17 +34402,20 @@ class Cache {
   async matchAll (request = undefined, options = {}) {
     webidl.brandCheck(this, Cache)
 
-    if (request !== undefined) request = webidl.converters.RequestInfo(request)
-    options = webidl.converters.CacheQueryOptions(options)
+    const prefix = 'Cache.matchAll'
+    if (request !== undefined) request = webidl.converters.RequestInfo(request, prefix, 'request')
+    options = webidl.converters.CacheQueryOptions(options, prefix, 'options')
 
     return this.#internalMatchAll(request, options)
   }
 
   async add (request) {
     webidl.brandCheck(this, Cache)
-    webidl.argumentLengthCheck(arguments, 1, { header: 'Cache.add' })
 
-    request = webidl.converters.RequestInfo(request)
+    const prefix = 'Cache.add'
+    webidl.argumentLengthCheck(arguments, 1, prefix)
+
+    request = webidl.converters.RequestInfo(request, prefix, 'request')
 
     // 1.
     const requests = [request]
@@ -34417,7 +34429,9 @@ class Cache {
 
   async addAll (requests) {
     webidl.brandCheck(this, Cache)
-    webidl.argumentLengthCheck(arguments, 1, { header: 'Cache.addAll' })
+
+    const prefix = 'Cache.addAll'
+    webidl.argumentLengthCheck(arguments, 1, prefix)
 
     // 1.
     const responsePromises = []
@@ -34429,7 +34443,7 @@ class Cache {
     for (let request of requests) {
       if (request === undefined) {
         throw webidl.errors.conversionFailed({
-          prefix: 'Cache.addAll',
+          prefix,
           argument: 'Argument 1',
           types: ['undefined is not allowed']
         })
@@ -34447,7 +34461,7 @@ class Cache {
       // 3.2
       if (!urlIsHttpHttpsScheme(r.url) || r.method !== 'GET') {
         throw webidl.errors.exception({
-          header: 'Cache.addAll',
+          header: prefix,
           message: 'Expected http/s scheme when method is not GET.'
         })
       }
@@ -34465,7 +34479,7 @@ class Cache {
       // 5.2
       if (!urlIsHttpHttpsScheme(r.url)) {
         throw webidl.errors.exception({
-          header: 'Cache.addAll',
+          header: prefix,
           message: 'Expected http/s scheme.'
         })
       }
@@ -34585,10 +34599,12 @@ class Cache {
 
   async put (request, response) {
     webidl.brandCheck(this, Cache)
-    webidl.argumentLengthCheck(arguments, 2, { header: 'Cache.put' })
 
-    request = webidl.converters.RequestInfo(request)
-    response = webidl.converters.Response(response)
+    const prefix = 'Cache.put'
+    webidl.argumentLengthCheck(arguments, 2, prefix)
+
+    request = webidl.converters.RequestInfo(request, prefix, 'request')
+    response = webidl.converters.Response(response, prefix, 'response')
 
     // 1.
     let innerRequest = null
@@ -34603,7 +34619,7 @@ class Cache {
     // 4.
     if (!urlIsHttpHttpsScheme(innerRequest.url) || innerRequest.method !== 'GET') {
       throw webidl.errors.exception({
-        header: 'Cache.put',
+        header: prefix,
         message: 'Expected an http/s scheme when method is not GET'
       })
     }
@@ -34614,7 +34630,7 @@ class Cache {
     // 6.
     if (innerResponse.status === 206) {
       throw webidl.errors.exception({
-        header: 'Cache.put',
+        header: prefix,
         message: 'Got 206 status'
       })
     }
@@ -34629,7 +34645,7 @@ class Cache {
         // 7.2.1
         if (fieldValue === '*') {
           throw webidl.errors.exception({
-            header: 'Cache.put',
+            header: prefix,
             message: 'Got * vary field value'
           })
         }
@@ -34639,7 +34655,7 @@ class Cache {
     // 8.
     if (innerResponse.body && (isDisturbed(innerResponse.body.stream) || innerResponse.body.stream.locked)) {
       throw webidl.errors.exception({
-        header: 'Cache.put',
+        header: prefix,
         message: 'Response body is locked or disturbed'
       })
     }
@@ -34714,10 +34730,12 @@ class Cache {
 
   async delete (request, options = {}) {
     webidl.brandCheck(this, Cache)
-    webidl.argumentLengthCheck(arguments, 1, { header: 'Cache.delete' })
 
-    request = webidl.converters.RequestInfo(request)
-    options = webidl.converters.CacheQueryOptions(options)
+    const prefix = 'Cache.delete'
+    webidl.argumentLengthCheck(arguments, 1, prefix)
+
+    request = webidl.converters.RequestInfo(request, prefix, 'request')
+    options = webidl.converters.CacheQueryOptions(options, prefix, 'options')
 
     /**
      * @type {Request}
@@ -34779,8 +34797,10 @@ class Cache {
   async keys (request = undefined, options = {}) {
     webidl.brandCheck(this, Cache)
 
-    if (request !== undefined) request = webidl.converters.RequestInfo(request)
-    options = webidl.converters.CacheQueryOptions(options)
+    const prefix = 'Cache.keys'
+
+    if (request !== undefined) request = webidl.converters.RequestInfo(request, prefix, 'request')
+    options = webidl.converters.CacheQueryOptions(options, prefix, 'options')
 
     // 1.
     let r = null
@@ -35144,17 +35164,17 @@ const cacheQueryOptionConverters = [
   {
     key: 'ignoreSearch',
     converter: webidl.converters.boolean,
-    defaultValue: false
+    defaultValue: () => false
   },
   {
     key: 'ignoreMethod',
     converter: webidl.converters.boolean,
-    defaultValue: false
+    defaultValue: () => false
   },
   {
     key: 'ignoreVary',
     converter: webidl.converters.boolean,
-    defaultValue: false
+    defaultValue: () => false
   }
 ]
 
@@ -35207,7 +35227,7 @@ class CacheStorage {
 
   async match (request, options = {}) {
     webidl.brandCheck(this, CacheStorage)
-    webidl.argumentLengthCheck(arguments, 1, { header: 'CacheStorage.match' })
+    webidl.argumentLengthCheck(arguments, 1, 'CacheStorage.match')
 
     request = webidl.converters.RequestInfo(request)
     options = webidl.converters.MultiCacheQueryOptions(options)
@@ -35244,9 +35264,11 @@ class CacheStorage {
    */
   async has (cacheName) {
     webidl.brandCheck(this, CacheStorage)
-    webidl.argumentLengthCheck(arguments, 1, { header: 'CacheStorage.has' })
 
-    cacheName = webidl.converters.DOMString(cacheName)
+    const prefix = 'CacheStorage.has'
+    webidl.argumentLengthCheck(arguments, 1, prefix)
+
+    cacheName = webidl.converters.DOMString(cacheName, prefix, 'cacheName')
 
     // 2.1.1
     // 2.2
@@ -35260,9 +35282,11 @@ class CacheStorage {
    */
   async open (cacheName) {
     webidl.brandCheck(this, CacheStorage)
-    webidl.argumentLengthCheck(arguments, 1, { header: 'CacheStorage.open' })
 
-    cacheName = webidl.converters.DOMString(cacheName)
+    const prefix = 'CacheStorage.open'
+    webidl.argumentLengthCheck(arguments, 1, prefix)
+
+    cacheName = webidl.converters.DOMString(cacheName, prefix, 'cacheName')
 
     // 2.1
     if (this.#caches.has(cacheName)) {
@@ -35292,9 +35316,11 @@ class CacheStorage {
    */
   async delete (cacheName) {
     webidl.brandCheck(this, CacheStorage)
-    webidl.argumentLengthCheck(arguments, 1, { header: 'CacheStorage.delete' })
 
-    cacheName = webidl.converters.DOMString(cacheName)
+    const prefix = 'CacheStorage.delete'
+    webidl.argumentLengthCheck(arguments, 1, prefix)
+
+    cacheName = webidl.converters.DOMString(cacheName, prefix, 'cacheName')
 
     return this.#caches.delete(cacheName)
   }
@@ -35449,7 +35475,7 @@ const { Headers } = __nccwpck_require__(2991)
  * @returns {Record<string, string>}
  */
 function getCookies (headers) {
-  webidl.argumentLengthCheck(arguments, 1, { header: 'getCookies' })
+  webidl.argumentLengthCheck(arguments, 1, 'getCookies')
 
   webidl.brandCheck(headers, Headers, { strict: false })
 
@@ -35476,11 +35502,12 @@ function getCookies (headers) {
  * @returns {void}
  */
 function deleteCookie (headers, name, attributes) {
-  webidl.argumentLengthCheck(arguments, 2, { header: 'deleteCookie' })
-
   webidl.brandCheck(headers, Headers, { strict: false })
 
-  name = webidl.converters.DOMString(name)
+  const prefix = 'deleteCookie'
+  webidl.argumentLengthCheck(arguments, 2, prefix)
+
+  name = webidl.converters.DOMString(name, prefix, 'name')
   attributes = webidl.converters.DeleteCookieAttributes(attributes)
 
   // Matches behavior of
@@ -35498,7 +35525,7 @@ function deleteCookie (headers, name, attributes) {
  * @returns {Cookie[]}
  */
 function getSetCookies (headers) {
-  webidl.argumentLengthCheck(arguments, 1, { header: 'getSetCookies' })
+  webidl.argumentLengthCheck(arguments, 1, 'getSetCookies')
 
   webidl.brandCheck(headers, Headers, { strict: false })
 
@@ -35518,7 +35545,7 @@ function getSetCookies (headers) {
  * @returns {void}
  */
 function setCookie (headers, cookie) {
-  webidl.argumentLengthCheck(arguments, 2, { header: 'setCookie' })
+  webidl.argumentLengthCheck(arguments, 2, 'setCookie')
 
   webidl.brandCheck(headers, Headers, { strict: false })
 
@@ -35535,12 +35562,12 @@ webidl.converters.DeleteCookieAttributes = webidl.dictionaryConverter([
   {
     converter: webidl.nullableConverter(webidl.converters.DOMString),
     key: 'path',
-    defaultValue: null
+    defaultValue: () => null
   },
   {
     converter: webidl.nullableConverter(webidl.converters.DOMString),
     key: 'domain',
-    defaultValue: null
+    defaultValue: () => null
   }
 ])
 
@@ -35562,32 +35589,32 @@ webidl.converters.Cookie = webidl.dictionaryConverter([
       return new Date(value)
     }),
     key: 'expires',
-    defaultValue: null
+    defaultValue: () => null
   },
   {
     converter: webidl.nullableConverter(webidl.converters['long long']),
     key: 'maxAge',
-    defaultValue: null
+    defaultValue: () => null
   },
   {
     converter: webidl.nullableConverter(webidl.converters.DOMString),
     key: 'domain',
-    defaultValue: null
+    defaultValue: () => null
   },
   {
     converter: webidl.nullableConverter(webidl.converters.DOMString),
     key: 'path',
-    defaultValue: null
+    defaultValue: () => null
   },
   {
     converter: webidl.nullableConverter(webidl.converters.boolean),
     key: 'secure',
-    defaultValue: null
+    defaultValue: () => null
   },
   {
     converter: webidl.nullableConverter(webidl.converters.boolean),
     key: 'httpOnly',
-    defaultValue: null
+    defaultValue: () => null
   },
   {
     converter: webidl.converters.USVString,
@@ -35597,7 +35624,7 @@ webidl.converters.Cookie = webidl.dictionaryConverter([
   {
     converter: webidl.sequenceConverter(webidl.converters.DOMString),
     key: 'unparsed',
-    defaultValue: []
+    defaultValue: () => new Array(0)
   }
 ])
 
@@ -36669,7 +36696,7 @@ const { makeRequest } = __nccwpck_require__(610)
 const { webidl } = __nccwpck_require__(4890)
 const { EventSourceStream } = __nccwpck_require__(4185)
 const { parseMIMEType } = __nccwpck_require__(7704)
-const { MessageEvent } = __nccwpck_require__(5033)
+const { createFastMessageEvent } = __nccwpck_require__(5033)
 const { isNetworkError } = __nccwpck_require__(2583)
 const { delay } = __nccwpck_require__(8865)
 const { kEnumerableProperty } = __nccwpck_require__(3983)
@@ -36768,7 +36795,8 @@ class EventSource extends EventTarget {
     // 1. Let ev be a new EventSource object.
     super()
 
-    webidl.argumentLengthCheck(arguments, 1, { header: 'EventSource constructor' })
+    const prefix = 'EventSource constructor'
+    webidl.argumentLengthCheck(arguments, 1, prefix)
 
     if (!experimentalWarned) {
       experimentalWarned = true
@@ -36777,8 +36805,8 @@ class EventSource extends EventTarget {
       })
     }
 
-    url = webidl.converters.USVString(url)
-    eventSourceInitDict = webidl.converters.EventSourceInitDict(eventSourceInitDict)
+    url = webidl.converters.USVString(url, prefix, 'url')
+    eventSourceInitDict = webidl.converters.EventSourceInitDict(eventSourceInitDict, prefix, 'eventSourceInitDict')
 
     this.#dispatcher = eventSourceInitDict.dispatcher
     this.#state = {
@@ -36953,7 +36981,7 @@ class EventSource extends EventTarget {
       const eventSourceStream = new EventSourceStream({
         eventSourceSettings: this.#state,
         push: (event) => {
-          this.dispatchEvent(new MessageEvent(
+          this.dispatchEvent(createFastMessageEvent(
             event.type,
             event.options
           ))
@@ -37126,7 +37154,7 @@ webidl.converters.EventSourceInitDict = webidl.dictionaryConverter([
   {
     key: 'withCredentials',
     converter: webidl.converters.boolean,
-    defaultValue: false
+    defaultValue: () => false
   },
   {
     key: 'dispatcher', // undici only
@@ -38601,9 +38629,10 @@ class CompatFinalizer {
 }
 
 module.exports = function () {
-  // FIXME: remove workaround when the Node bug is fixed
+  // FIXME: remove workaround when the Node bug is backported to v18
   // https://github.com/nodejs/node/issues/49344#issuecomment-1741776308
-  if (process.env.NODE_V8_COVERAGE) {
+  if (process.env.NODE_V8_COVERAGE && process.version.startsWith('v18')) {
+    process._rawDebug('Using compatibility WeakRef and FinalizationRegistry')
     return {
       WeakRef: CompatWeakRef,
       FinalizationRegistry: CompatFinalizer
@@ -39255,7 +39284,8 @@ class FormData {
   append (name, value, filename = undefined) {
     webidl.brandCheck(this, FormData)
 
-    webidl.argumentLengthCheck(arguments, 2, { header: 'FormData.append' })
+    const prefix = 'FormData.append'
+    webidl.argumentLengthCheck(arguments, 2, prefix)
 
     if (arguments.length === 3 && !isBlobLike(value)) {
       throw new TypeError(
@@ -39265,12 +39295,12 @@ class FormData {
 
     // 1. Let value be value if given; otherwise blobValue.
 
-    name = webidl.converters.USVString(name)
+    name = webidl.converters.USVString(name, prefix, 'name')
     value = isBlobLike(value)
-      ? webidl.converters.Blob(value, { strict: false })
-      : webidl.converters.USVString(value)
+      ? webidl.converters.Blob(value, prefix, 'value', { strict: false })
+      : webidl.converters.USVString(value, prefix, 'value')
     filename = arguments.length === 3
-      ? webidl.converters.USVString(filename)
+      ? webidl.converters.USVString(filename, prefix, 'filename')
       : undefined
 
     // 2. Let entry be the result of creating an entry with
@@ -39284,9 +39314,10 @@ class FormData {
   delete (name) {
     webidl.brandCheck(this, FormData)
 
-    webidl.argumentLengthCheck(arguments, 1, { header: 'FormData.delete' })
+    const prefix = 'FormData.delete'
+    webidl.argumentLengthCheck(arguments, 1, prefix)
 
-    name = webidl.converters.USVString(name)
+    name = webidl.converters.USVString(name, prefix, 'name')
 
     // The delete(name) method steps are to remove all entries whose name
     // is name from this’s entry list.
@@ -39296,9 +39327,10 @@ class FormData {
   get (name) {
     webidl.brandCheck(this, FormData)
 
-    webidl.argumentLengthCheck(arguments, 1, { header: 'FormData.get' })
+    const prefix = 'FormData.get'
+    webidl.argumentLengthCheck(arguments, 1, prefix)
 
-    name = webidl.converters.USVString(name)
+    name = webidl.converters.USVString(name, prefix, 'name')
 
     // 1. If there is no entry whose name is name in this’s entry list,
     // then return null.
@@ -39315,9 +39347,10 @@ class FormData {
   getAll (name) {
     webidl.brandCheck(this, FormData)
 
-    webidl.argumentLengthCheck(arguments, 1, { header: 'FormData.getAll' })
+    const prefix = 'FormData.getAll'
+    webidl.argumentLengthCheck(arguments, 1, prefix)
 
-    name = webidl.converters.USVString(name)
+    name = webidl.converters.USVString(name, prefix, 'name')
 
     // 1. If there is no entry whose name is name in this’s entry list,
     // then return the empty list.
@@ -39331,9 +39364,10 @@ class FormData {
   has (name) {
     webidl.brandCheck(this, FormData)
 
-    webidl.argumentLengthCheck(arguments, 1, { header: 'FormData.has' })
+    const prefix = 'FormData.has'
+    webidl.argumentLengthCheck(arguments, 1, prefix)
 
-    name = webidl.converters.USVString(name)
+    name = webidl.converters.USVString(name, prefix, 'name')
 
     // The has(name) method steps are to return true if there is an entry
     // whose name is name in this’s entry list; otherwise false.
@@ -39343,7 +39377,8 @@ class FormData {
   set (name, value, filename = undefined) {
     webidl.brandCheck(this, FormData)
 
-    webidl.argumentLengthCheck(arguments, 2, { header: 'FormData.set' })
+    const prefix = 'FormData.set'
+    webidl.argumentLengthCheck(arguments, 2, prefix)
 
     if (arguments.length === 3 && !isBlobLike(value)) {
       throw new TypeError(
@@ -39356,12 +39391,12 @@ class FormData {
 
     // 1. Let value be value if given; otherwise blobValue.
 
-    name = webidl.converters.USVString(name)
+    name = webidl.converters.USVString(name, prefix, 'name')
     value = isBlobLike(value)
-      ? webidl.converters.Blob(value, { strict: false })
-      : webidl.converters.USVString(value)
+      ? webidl.converters.Blob(value, prefix, 'name', { strict: false })
+      : webidl.converters.USVString(value, prefix, 'name')
     filename = arguments.length === 3
-      ? webidl.converters.USVString(filename)
+      ? webidl.converters.USVString(filename, prefix, 'name')
       : undefined
 
     // 2. Let entry be the result of creating an entry with name, value, and
@@ -39786,6 +39821,24 @@ class HeadersList {
     return headers
   }
 
+  get entriesList () {
+    const headers = []
+
+    if (this[kHeadersMap].size !== 0) {
+      for (const { 0: lowerName, 1: { name, value } } of this[kHeadersMap]) {
+        if (lowerName === 'set-cookie') {
+          for (const cookie of this.cookies) {
+            headers.push([name, cookie])
+          }
+        } else {
+          headers.push([name, value])
+        }
+      }
+    }
+
+    return headers
+  }
+
   // https://fetch.spec.whatwg.org/#convert-header-names-to-a-sorted-lowercase-set
   toSortedArray () {
     const size = this[kHeadersMap].size
@@ -39875,7 +39928,7 @@ class Headers {
 
     // 2. If init is given, then fill this with init.
     if (init !== undefined) {
-      init = webidl.converters.HeadersInit(init)
+      init = webidl.converters.HeadersInit(init, 'Headers contructor', 'init')
       fill(this, init)
     }
   }
@@ -39884,10 +39937,11 @@ class Headers {
   append (name, value) {
     webidl.brandCheck(this, Headers)
 
-    webidl.argumentLengthCheck(arguments, 2, { header: 'Headers.append' })
+    webidl.argumentLengthCheck(arguments, 2, 'Headers.append')
 
-    name = webidl.converters.ByteString(name)
-    value = webidl.converters.ByteString(value)
+    const prefix = 'Headers.append'
+    name = webidl.converters.ByteString(name, prefix, 'name')
+    value = webidl.converters.ByteString(value, prefix, 'value')
 
     return appendHeader(this, name, value)
   }
@@ -39896,9 +39950,10 @@ class Headers {
   delete (name) {
     webidl.brandCheck(this, Headers)
 
-    webidl.argumentLengthCheck(arguments, 1, { header: 'Headers.delete' })
+    webidl.argumentLengthCheck(arguments, 1, 'Headers.delete')
 
-    name = webidl.converters.ByteString(name)
+    const prefix = 'Headers.delete'
+    name = webidl.converters.ByteString(name, prefix, 'name')
 
     // 1. If name is not a header name, then throw a TypeError.
     if (!isValidHeaderName(name)) {
@@ -39941,14 +39996,15 @@ class Headers {
   get (name) {
     webidl.brandCheck(this, Headers)
 
-    webidl.argumentLengthCheck(arguments, 1, { header: 'Headers.get' })
+    webidl.argumentLengthCheck(arguments, 1, 'Headers.get')
 
-    name = webidl.converters.ByteString(name)
+    const prefix = 'Headers.get'
+    name = webidl.converters.ByteString(name, prefix, 'name')
 
     // 1. If name is not a header name, then throw a TypeError.
     if (!isValidHeaderName(name)) {
       throw webidl.errors.invalidArgument({
-        prefix: 'Headers.get',
+        prefix,
         value: name,
         type: 'header name'
       })
@@ -39963,14 +40019,15 @@ class Headers {
   has (name) {
     webidl.brandCheck(this, Headers)
 
-    webidl.argumentLengthCheck(arguments, 1, { header: 'Headers.has' })
+    webidl.argumentLengthCheck(arguments, 1, 'Headers.has')
 
-    name = webidl.converters.ByteString(name)
+    const prefix = 'Headers.has'
+    name = webidl.converters.ByteString(name, prefix, 'name')
 
     // 1. If name is not a header name, then throw a TypeError.
     if (!isValidHeaderName(name)) {
       throw webidl.errors.invalidArgument({
-        prefix: 'Headers.has',
+        prefix,
         value: name,
         type: 'header name'
       })
@@ -39985,10 +40042,11 @@ class Headers {
   set (name, value) {
     webidl.brandCheck(this, Headers)
 
-    webidl.argumentLengthCheck(arguments, 2, { header: 'Headers.set' })
+    webidl.argumentLengthCheck(arguments, 2, 'Headers.set')
 
-    name = webidl.converters.ByteString(name)
-    value = webidl.converters.ByteString(value)
+    const prefix = 'Headers.set'
+    name = webidl.converters.ByteString(name, prefix, 'name')
+    value = webidl.converters.ByteString(value, prefix, 'value')
 
     // 1. Normalize value.
     value = headerValueNormalize(value)
@@ -39997,13 +40055,13 @@ class Headers {
     //    header value, then throw a TypeError.
     if (!isValidHeaderName(name)) {
       throw webidl.errors.invalidArgument({
-        prefix: 'Headers.set',
+        prefix,
         value: name,
         type: 'header name'
       })
     } else if (!isValidHeaderValue(value)) {
       throw webidl.errors.invalidArgument({
-        prefix: 'Headers.set',
+        prefix,
         value,
         type: 'header value'
       })
@@ -40125,15 +40183,21 @@ Object.defineProperties(Headers.prototype, {
   }
 })
 
-webidl.converters.HeadersInit = function (V) {
+webidl.converters.HeadersInit = function (V, prefix, argument) {
   if (webidl.util.Type(V) === 'Object') {
     const iterator = Reflect.get(V, Symbol.iterator)
 
-    if (typeof iterator === 'function') {
-      return webidl.converters['sequence<sequence<ByteString>>'](V, iterator.bind(V))
+    // A work-around to ensure we send the properly-cased Headers when V is a Headers object.
+    // Read https://github.com/nodejs/undici/pull/3159#issuecomment-2075537226 before touching, please.
+    if (!util.types.isProxy(V) && kHeadersList in V && iterator === Headers.prototype.entries) { // Headers object
+      return V[kHeadersList].entriesList
     }
 
-    return webidl.converters['record<ByteString, ByteString>'](V)
+    if (typeof iterator === 'function') {
+      return webidl.converters['sequence<sequence<ByteString>>'](V, prefix, argument, iterator.bind(V))
+    }
+
+    return webidl.converters['record<ByteString, ByteString>'](V, prefix, argument)
   }
 
   throw webidl.errors.conversionFailed({
@@ -40282,7 +40346,7 @@ class Fetch extends EE {
 
 // https://fetch.spec.whatwg.org/#fetch-method
 function fetch (input, init = undefined) {
-  webidl.argumentLengthCheck(arguments, 1, { header: 'globalThis.fetch' })
+  webidl.argumentLengthCheck(arguments, 1, 'globalThis.fetch')
 
   // 1. Let p be a new promise.
   const p = createDeferredPromise()
@@ -41697,7 +41761,7 @@ async function httpNetworkOrCacheFetch (
 
   //    24. If httpRequest’s cache mode is neither "no-store" nor "reload",
   //    then:
-  if (httpRequest.mode !== 'no-store' && httpRequest.mode !== 'reload') {
+  if (httpRequest.cache !== 'no-store' && httpRequest.cache !== 'reload') {
     // TODO: cache
   }
 
@@ -41708,7 +41772,7 @@ async function httpNetworkOrCacheFetch (
   if (response == null) {
     // 1. If httpRequest’s cache mode is "only-if-cached", then return a
     // network error.
-    if (httpRequest.mode === 'only-if-cached') {
+    if (httpRequest.cache === 'only-if-cached') {
       return makeNetworkError('only if cached')
     }
 
@@ -42449,6 +42513,46 @@ const requestFinalizer = new FinalizationRegistry(({ signal, abort }) => {
   signal.removeEventListener('abort', abort)
 })
 
+const dependentControllerMap = new WeakMap()
+
+function buildAbort (acRef) {
+  return abort
+
+  function abort () {
+    const ac = acRef.deref()
+    if (ac !== undefined) {
+      // Currently, there is a problem with FinalizationRegistry.
+      // https://github.com/nodejs/node/issues/49344
+      // https://github.com/nodejs/node/issues/47748
+      // In the case of abort, the first step is to unregister from it.
+      // If the controller can refer to it, it is still registered.
+      // It will be removed in the future.
+      requestFinalizer.unregister(abort)
+
+      // Unsubscribe a listener.
+      // FinalizationRegistry will no longer be called, so this must be done.
+      this.removeEventListener('abort', abort)
+
+      ac.abort(this.reason)
+
+      const controllerList = dependentControllerMap.get(ac.signal)
+
+      if (controllerList !== undefined) {
+        if (controllerList.size !== 0) {
+          for (const ref of controllerList) {
+            const ctrl = ref.deref()
+            if (ctrl !== undefined) {
+              ctrl.abort(this.reason)
+            }
+          }
+          controllerList.clear()
+        }
+        dependentControllerMap.delete(ac.signal)
+      }
+    }
+  }
+}
+
 let patchMethodWarning = false
 
 // https://fetch.spec.whatwg.org/#request-class
@@ -42459,10 +42563,11 @@ class Request {
       return
     }
 
-    webidl.argumentLengthCheck(arguments, 1, { header: 'Request constructor' })
+    const prefix = 'Request constructor'
+    webidl.argumentLengthCheck(arguments, 1, prefix)
 
-    input = webidl.converters.RequestInfo(input)
-    init = webidl.converters.RequestInit(init)
+    input = webidl.converters.RequestInfo(input, prefix, 'input')
+    init = webidl.converters.RequestInit(init, prefix, 'init')
 
     // 1. Let request be null.
     let request = null
@@ -42788,24 +42893,7 @@ class Request {
         this[kAbortController] = ac
 
         const acRef = new WeakRef(ac)
-        const abort = function () {
-          const ac = acRef.deref()
-          if (ac !== undefined) {
-            // Currently, there is a problem with FinalizationRegistry.
-            // https://github.com/nodejs/node/issues/49344
-            // https://github.com/nodejs/node/issues/47748
-            // In the case of abort, the first step is to unregister from it.
-            // If the controller can refer to it, it is still registered.
-            // It will be removed in the future.
-            requestFinalizer.unregister(abort)
-
-            // Unsubscribe a listener.
-            // FinalizationRegistry will no longer be called, so this must be done.
-            this.removeEventListener('abort', abort)
-
-            ac.abort(this.reason)
-          }
-        }
+        const abort = buildAbort(acRef)
 
         // Third-party AbortControllers may not work with these.
         // See, https://github.com/nodejs/undici/pull/1910#issuecomment-1464495619.
@@ -42813,9 +42901,9 @@ class Request {
           // If the max amount of listeners is equal to the default, increase it
           // This is only available in node >= v19.9.0
           if (typeof getMaxListeners === 'function' && getMaxListeners(signal) === defaultMaxListeners) {
-            setMaxListeners(100, signal)
+            setMaxListeners(1500, signal)
           } else if (getEventListeners(signal, 'abort').length >= defaultMaxListeners) {
-            setMaxListeners(100, signal)
+            setMaxListeners(1500, signal)
           }
         } catch {}
 
@@ -42864,8 +42952,9 @@ class Request {
       // 4. If headers is a Headers object, then for each header in its header
       // list, append header’s name/header’s value to this’s headers.
       if (headers instanceof HeadersList) {
-        for (const [key, val] of headers) {
-          headersList.append(key, val)
+        for (const { 0: key, 1: val } of headers) {
+          // Note: The header names are already in lowercase.
+          headersList.append(key, val, true)
         }
         // Note: Copy the `set-cookie` meta-data.
         headersList.cookies = headers.cookies
@@ -43158,11 +43247,16 @@ class Request {
     if (this.signal.aborted) {
       ac.abort(this.signal.reason)
     } else {
+      let list = dependentControllerMap.get(this.signal)
+      if (list === undefined) {
+        list = new Set()
+        dependentControllerMap.set(this.signal, list)
+      }
+      const acRef = new WeakRef(ac)
+      list.add(acRef)
       util.addAbortListener(
-        this.signal,
-        () => {
-          ac.abort(this.signal.reason)
-        }
+        ac.signal,
+        buildAbort(acRef)
       )
     }
 
@@ -43314,16 +43408,16 @@ webidl.converters.Request = webidl.interfaceConverter(
 )
 
 // https://fetch.spec.whatwg.org/#requestinfo
-webidl.converters.RequestInfo = function (V) {
+webidl.converters.RequestInfo = function (V, prefix, argument) {
   if (typeof V === 'string') {
-    return webidl.converters.USVString(V)
+    return webidl.converters.USVString(V, prefix, argument)
   }
 
   if (V instanceof Request) {
-    return webidl.converters.Request(V)
+    return webidl.converters.Request(V, prefix, argument)
   }
 
-  return webidl.converters.USVString(V)
+  return webidl.converters.USVString(V, prefix, argument)
 }
 
 webidl.converters.AbortSignal = webidl.interfaceConverter(
@@ -43393,6 +43487,8 @@ webidl.converters.RequestInit = webidl.dictionaryConverter([
     converter: webidl.nullableConverter(
       (signal) => webidl.converters.AbortSignal(
         signal,
+        'RequestInit',
+        'signal',
         { strict: false }
       )
     )
@@ -43466,7 +43562,7 @@ class Response {
 
   // https://fetch.spec.whatwg.org/#dom-response-json
   static json (data, init = {}) {
-    webidl.argumentLengthCheck(arguments, 1, { header: 'Response.json' })
+    webidl.argumentLengthCheck(arguments, 1, 'Response.json')
 
     if (init !== null) {
       init = webidl.converters.ResponseInit(init)
@@ -43493,7 +43589,7 @@ class Response {
 
   // Creates a redirect Response that redirects to url with status status.
   static redirect (url, status = 302) {
-    webidl.argumentLengthCheck(arguments, 1, { header: 'Response.redirect' })
+    webidl.argumentLengthCheck(arguments, 1, 'Response.redirect')
 
     url = webidl.converters.USVString(url)
     status = webidl.converters['unsigned short'](status)
@@ -43949,34 +44045,34 @@ webidl.converters.URLSearchParams = webidl.interfaceConverter(
 )
 
 // https://fetch.spec.whatwg.org/#typedefdef-xmlhttprequestbodyinit
-webidl.converters.XMLHttpRequestBodyInit = function (V) {
+webidl.converters.XMLHttpRequestBodyInit = function (V, prefix, name) {
   if (typeof V === 'string') {
-    return webidl.converters.USVString(V)
+    return webidl.converters.USVString(V, prefix, name)
   }
 
   if (isBlobLike(V)) {
-    return webidl.converters.Blob(V, { strict: false })
+    return webidl.converters.Blob(V, prefix, name, { strict: false })
   }
 
   if (ArrayBuffer.isView(V) || types.isArrayBuffer(V)) {
-    return webidl.converters.BufferSource(V)
+    return webidl.converters.BufferSource(V, prefix, name)
   }
 
   if (util.isFormDataLike(V)) {
-    return webidl.converters.FormData(V, { strict: false })
+    return webidl.converters.FormData(V, prefix, name, { strict: false })
   }
 
   if (V instanceof URLSearchParams) {
-    return webidl.converters.URLSearchParams(V)
+    return webidl.converters.URLSearchParams(V, prefix, name)
   }
 
-  return webidl.converters.DOMString(V)
+  return webidl.converters.DOMString(V, prefix, name)
 }
 
 // https://fetch.spec.whatwg.org/#bodyinit
-webidl.converters.BodyInit = function (V) {
+webidl.converters.BodyInit = function (V, prefix, argument) {
   if (V instanceof ReadableStream) {
-    return webidl.converters.ReadableStream(V)
+    return webidl.converters.ReadableStream(V, prefix, argument)
   }
 
   // Note: the spec doesn't include async iterables,
@@ -43985,19 +44081,19 @@ webidl.converters.BodyInit = function (V) {
     return V
   }
 
-  return webidl.converters.XMLHttpRequestBodyInit(V)
+  return webidl.converters.XMLHttpRequestBodyInit(V, prefix, argument)
 }
 
 webidl.converters.ResponseInit = webidl.dictionaryConverter([
   {
     key: 'status',
     converter: webidl.converters['unsigned short'],
-    defaultValue: 200
+    defaultValue: () => 200
   },
   {
     key: 'statusText',
     converter: webidl.converters.ByteString,
-    defaultValue: ''
+    defaultValue: () => ''
   },
   {
     key: 'headers',
@@ -45059,7 +45155,7 @@ function iteratorMixin (name, object, kInternalIterator, keyIndex = 0, valueInde
       configurable: true,
       value: function forEach (callbackfn, thisArg = globalThis) {
         webidl.brandCheck(this, object)
-        webidl.argumentLengthCheck(arguments, 1, { header: `${name}.forEach` })
+        webidl.argumentLengthCheck(arguments, 1, `${name}.forEach`)
         if (typeof callbackfn !== 'function') {
           throw new TypeError(
             `Failed to execute 'forEach' on '${name}': parameter 1 is not of type 'Function'.`
@@ -45727,14 +45823,18 @@ webidl.errors.invalidArgument = function (context) {
 }
 
 // https://webidl.spec.whatwg.org/#implements
-webidl.brandCheck = function (V, I, opts = undefined) {
+webidl.brandCheck = function (V, I, opts) {
   if (opts?.strict !== false) {
     if (!(V instanceof I)) {
-      throw new TypeError('Illegal invocation')
+      const err = new TypeError('Illegal invocation')
+      err.code = 'ERR_INVALID_THIS' // node compat.
+      throw err
     }
   } else {
     if (V?.[Symbol.toStringTag] !== I.prototype[Symbol.toStringTag]) {
-      throw new TypeError('Illegal invocation')
+      const err = new TypeError('Illegal invocation')
+      err.code = 'ERR_INVALID_THIS' // node compat.
+      throw err
     }
   }
 }
@@ -45744,7 +45844,7 @@ webidl.argumentLengthCheck = function ({ length }, min, ctx) {
     throw webidl.errors.exception({
       message: `${min} argument${min !== 1 ? 's' : ''} required, ` +
                `but${length ? ' only' : ''} ${length} found.`,
-      ...ctx
+      header: ctx
     })
   }
 }
@@ -45777,7 +45877,7 @@ webidl.util.Type = function (V) {
 }
 
 // https://webidl.spec.whatwg.org/#abstract-opdef-converttoint
-webidl.util.ConvertToInt = function (V, bitLength, signedness, opts = {}) {
+webidl.util.ConvertToInt = function (V, bitLength, signedness, opts) {
   let upperBound
   let lowerBound
 
@@ -45821,7 +45921,7 @@ webidl.util.ConvertToInt = function (V, bitLength, signedness, opts = {}) {
 
   // 6. If the conversion is to an IDL type associated
   //    with the [EnforceRange] extended attribute, then:
-  if (opts.enforceRange === true) {
+  if (opts?.enforceRange === true) {
     // 1. If x is NaN, +∞, or −∞, then throw a TypeError.
     if (
       Number.isNaN(x) ||
@@ -45853,7 +45953,7 @@ webidl.util.ConvertToInt = function (V, bitLength, signedness, opts = {}) {
   // 7. If x is not NaN and the conversion is to an IDL
   //    type associated with the [Clamp] extended
   //    attribute, then:
-  if (!Number.isNaN(x) && opts.clamp === true) {
+  if (!Number.isNaN(x) && opts?.clamp === true) {
     // 1. Set x to min(max(x, lowerBound), upperBound).
     x = Math.min(Math.max(x, lowerBound), upperBound)
 
@@ -45927,12 +46027,12 @@ webidl.util.Stringify = function (V) {
 
 // https://webidl.spec.whatwg.org/#es-sequence
 webidl.sequenceConverter = function (converter) {
-  return (V, Iterable) => {
+  return (V, prefix, argument, Iterable) => {
     // 1. If Type(V) is not Object, throw a TypeError.
     if (webidl.util.Type(V) !== 'Object') {
       throw webidl.errors.exception({
-        header: 'Sequence',
-        message: `Value of type ${webidl.util.Type(V)} is not an Object.`
+        header: prefix,
+        message: `${argument} (${webidl.util.Stringify(V)}) is not iterable.`
       })
     }
 
@@ -45947,8 +46047,8 @@ webidl.sequenceConverter = function (converter) {
       typeof method.next !== 'function'
     ) {
       throw webidl.errors.exception({
-        header: 'Sequence',
-        message: 'Object is not an iterator.'
+        header: prefix,
+        message: `${argument} is not iterable.`
       })
     }
 
@@ -45960,7 +46060,7 @@ webidl.sequenceConverter = function (converter) {
         break
       }
 
-      seq.push(converter(value))
+      seq.push(converter(value, prefix, argument))
     }
 
     return seq
@@ -45969,12 +46069,12 @@ webidl.sequenceConverter = function (converter) {
 
 // https://webidl.spec.whatwg.org/#es-to-record
 webidl.recordConverter = function (keyConverter, valueConverter) {
-  return (O) => {
+  return (O, prefix, argument) => {
     // 1. If Type(O) is not Object, throw a TypeError.
     if (webidl.util.Type(O) !== 'Object') {
       throw webidl.errors.exception({
-        header: 'Record',
-        message: `Value of type ${webidl.util.Type(O)} is not an Object.`
+        header: prefix,
+        message: `${argument} ("${webidl.util.Type(O)}") is not an Object.`
       })
     }
 
@@ -45987,11 +46087,11 @@ webidl.recordConverter = function (keyConverter, valueConverter) {
 
       for (const key of keys) {
         // 1. Let typedKey be key converted to an IDL value of type K.
-        const typedKey = keyConverter(key)
+        const typedKey = keyConverter(key, prefix, argument)
 
         // 2. Let value be ? Get(O, key).
         // 3. Let typedValue be value converted to an IDL value of type V.
-        const typedValue = valueConverter(O[key])
+        const typedValue = valueConverter(O[key], prefix, argument)
 
         // 4. Set result[typedKey] to typedValue.
         result[typedKey] = typedValue
@@ -46012,11 +46112,11 @@ webidl.recordConverter = function (keyConverter, valueConverter) {
       // 2. If desc is not undefined and desc.[[Enumerable]] is true:
       if (desc?.enumerable) {
         // 1. Let typedKey be key converted to an IDL value of type K.
-        const typedKey = keyConverter(key)
+        const typedKey = keyConverter(key, prefix, argument)
 
         // 2. Let value be ? Get(O, key).
         // 3. Let typedValue be value converted to an IDL value of type V.
-        const typedValue = valueConverter(O[key])
+        const typedValue = valueConverter(O[key], prefix, argument)
 
         // 4. Set result[typedKey] to typedValue.
         result[typedKey] = typedValue
@@ -46029,11 +46129,11 @@ webidl.recordConverter = function (keyConverter, valueConverter) {
 }
 
 webidl.interfaceConverter = function (i) {
-  return (V, opts = {}) => {
-    if (opts.strict !== false && !(V instanceof i)) {
+  return (V, prefix, argument, opts) => {
+    if (opts?.strict !== false && !(V instanceof i)) {
       throw webidl.errors.exception({
-        header: i.name,
-        message: `Expected ${webidl.util.Stringify(V)} to be an instance of ${i.name}.`
+        header: prefix,
+        message: `Expected ${argument} ("${webidl.util.Stringify(V)}") to be an instance of ${i.name}.`
       })
     }
 
@@ -46042,7 +46142,7 @@ webidl.interfaceConverter = function (i) {
 }
 
 webidl.dictionaryConverter = function (converters) {
-  return (dictionary) => {
+  return (dictionary, prefix, argument) => {
     const type = webidl.util.Type(dictionary)
     const dict = {}
 
@@ -46050,7 +46150,7 @@ webidl.dictionaryConverter = function (converters) {
       return dict
     } else if (type !== 'Object') {
       throw webidl.errors.exception({
-        header: 'Dictionary',
+        header: prefix,
         message: `Expected ${dictionary} to be one of: Null, Undefined, Object.`
       })
     }
@@ -46061,7 +46161,7 @@ webidl.dictionaryConverter = function (converters) {
       if (required === true) {
         if (!Object.hasOwn(dictionary, key)) {
           throw webidl.errors.exception({
-            header: 'Dictionary',
+            header: prefix,
             message: `Missing required key "${key}".`
           })
         }
@@ -46073,21 +46173,21 @@ webidl.dictionaryConverter = function (converters) {
       // Only use defaultValue if value is undefined and
       // a defaultValue options was provided.
       if (hasDefault && value !== null) {
-        value = value ?? defaultValue
+        value ??= defaultValue()
       }
 
       // A key can be optional and have no default value.
       // When this happens, do not perform a conversion,
       // and do not assign the key a value.
       if (required || hasDefault || value !== undefined) {
-        value = converter(value)
+        value = converter(value, prefix, `${argument}.${key}`)
 
         if (
           options.allowedValues &&
           !options.allowedValues.includes(value)
         ) {
           throw webidl.errors.exception({
-            header: 'Dictionary',
+            header: prefix,
             message: `${value} is not an accepted type. Expected one of ${options.allowedValues.join(', ')}.`
           })
         }
@@ -46101,28 +46201,31 @@ webidl.dictionaryConverter = function (converters) {
 }
 
 webidl.nullableConverter = function (converter) {
-  return (V) => {
+  return (V, prefix, argument) => {
     if (V === null) {
       return V
     }
 
-    return converter(V)
+    return converter(V, prefix, argument)
   }
 }
 
 // https://webidl.spec.whatwg.org/#es-DOMString
-webidl.converters.DOMString = function (V, opts = {}) {
+webidl.converters.DOMString = function (V, prefix, argument, opts) {
   // 1. If V is null and the conversion is to an IDL type
   //    associated with the [LegacyNullToEmptyString]
   //    extended attribute, then return the DOMString value
   //    that represents the empty string.
-  if (V === null && opts.legacyNullToEmptyString) {
+  if (V === null && opts?.legacyNullToEmptyString) {
     return ''
   }
 
   // 2. Let x be ? ToString(V).
   if (typeof V === 'symbol') {
-    throw new TypeError('Could not convert argument of type symbol to string.')
+    throw webidl.errors.exception({
+      header: prefix,
+      message: `${argument} is a symbol, which cannot be converted to a DOMString.`
+    })
   }
 
   // 3. Return the IDL DOMString value that represents the
@@ -46132,10 +46235,10 @@ webidl.converters.DOMString = function (V, opts = {}) {
 }
 
 // https://webidl.spec.whatwg.org/#es-ByteString
-webidl.converters.ByteString = function (V) {
+webidl.converters.ByteString = function (V, prefix, argument) {
   // 1. Let x be ? ToString(V).
   // Note: DOMString converter perform ? ToString(V)
-  const x = webidl.converters.DOMString(V)
+  const x = webidl.converters.DOMString(V, prefix, argument)
 
   // 2. If the value of any element of x is greater than
   //    255, then throw a TypeError.
@@ -46155,6 +46258,7 @@ webidl.converters.ByteString = function (V) {
 }
 
 // https://webidl.spec.whatwg.org/#es-USVString
+// TODO: rewrite this so we can control the errors thrown
 webidl.converters.USVString = toUSVString
 
 // https://webidl.spec.whatwg.org/#es-boolean
@@ -46173,9 +46277,9 @@ webidl.converters.any = function (V) {
 }
 
 // https://webidl.spec.whatwg.org/#es-long-long
-webidl.converters['long long'] = function (V) {
+webidl.converters['long long'] = function (V, prefix, argument) {
   // 1. Let x be ? ConvertToInt(V, 64, "signed").
-  const x = webidl.util.ConvertToInt(V, 64, 'signed')
+  const x = webidl.util.ConvertToInt(V, 64, 'signed', undefined, prefix, argument)
 
   // 2. Return the IDL long long value that represents
   //    the same numeric value as x.
@@ -46183,9 +46287,9 @@ webidl.converters['long long'] = function (V) {
 }
 
 // https://webidl.spec.whatwg.org/#es-unsigned-long-long
-webidl.converters['unsigned long long'] = function (V) {
+webidl.converters['unsigned long long'] = function (V, prefix, argument) {
   // 1. Let x be ? ConvertToInt(V, 64, "unsigned").
-  const x = webidl.util.ConvertToInt(V, 64, 'unsigned')
+  const x = webidl.util.ConvertToInt(V, 64, 'unsigned', undefined, prefix, argument)
 
   // 2. Return the IDL unsigned long long value that
   //    represents the same numeric value as x.
@@ -46193,9 +46297,9 @@ webidl.converters['unsigned long long'] = function (V) {
 }
 
 // https://webidl.spec.whatwg.org/#es-unsigned-long
-webidl.converters['unsigned long'] = function (V) {
+webidl.converters['unsigned long'] = function (V, prefix, argument) {
   // 1. Let x be ? ConvertToInt(V, 32, "unsigned").
-  const x = webidl.util.ConvertToInt(V, 32, 'unsigned')
+  const x = webidl.util.ConvertToInt(V, 32, 'unsigned', undefined, prefix, argument)
 
   // 2. Return the IDL unsigned long value that
   //    represents the same numeric value as x.
@@ -46203,9 +46307,9 @@ webidl.converters['unsigned long'] = function (V) {
 }
 
 // https://webidl.spec.whatwg.org/#es-unsigned-short
-webidl.converters['unsigned short'] = function (V, opts) {
+webidl.converters['unsigned short'] = function (V, prefix, argument, opts) {
   // 1. Let x be ? ConvertToInt(V, 16, "unsigned").
-  const x = webidl.util.ConvertToInt(V, 16, 'unsigned', opts)
+  const x = webidl.util.ConvertToInt(V, 16, 'unsigned', opts, prefix, argument)
 
   // 2. Return the IDL unsigned short value that represents
   //    the same numeric value as x.
@@ -46213,7 +46317,7 @@ webidl.converters['unsigned short'] = function (V, opts) {
 }
 
 // https://webidl.spec.whatwg.org/#idl-ArrayBuffer
-webidl.converters.ArrayBuffer = function (V, opts = {}) {
+webidl.converters.ArrayBuffer = function (V, prefix, argument, opts) {
   // 1. If Type(V) is not Object, or V does not have an
   //    [[ArrayBufferData]] internal slot, then throw a
   //    TypeError.
@@ -46224,8 +46328,8 @@ webidl.converters.ArrayBuffer = function (V, opts = {}) {
     !types.isAnyArrayBuffer(V)
   ) {
     throw webidl.errors.conversionFailed({
-      prefix: webidl.util.Stringify(V),
-      argument: webidl.util.Stringify(V),
+      prefix,
+      argument: `${argument} ("${webidl.util.Stringify(V)}")`,
       types: ['ArrayBuffer']
     })
   }
@@ -46234,7 +46338,7 @@ webidl.converters.ArrayBuffer = function (V, opts = {}) {
   //    with the [AllowShared] extended attribute, and
   //    IsSharedArrayBuffer(V) is true, then throw a
   //    TypeError.
-  if (opts.allowShared === false && types.isSharedArrayBuffer(V)) {
+  if (opts?.allowShared === false && types.isSharedArrayBuffer(V)) {
     throw webidl.errors.exception({
       header: 'ArrayBuffer',
       message: 'SharedArrayBuffer is not allowed.'
@@ -46257,7 +46361,7 @@ webidl.converters.ArrayBuffer = function (V, opts = {}) {
   return V
 }
 
-webidl.converters.TypedArray = function (V, T, opts = {}) {
+webidl.converters.TypedArray = function (V, T, prefix, name, opts) {
   // 1. Let T be the IDL type V is being converted to.
 
   // 2. If Type(V) is not Object, or V does not have a
@@ -46269,8 +46373,8 @@ webidl.converters.TypedArray = function (V, T, opts = {}) {
     V.constructor.name !== T.name
   ) {
     throw webidl.errors.conversionFailed({
-      prefix: `${T.name}`,
-      argument: webidl.util.Stringify(V),
+      prefix,
+      argument: `${name} ("${webidl.util.Stringify(V)}")`,
       types: [T.name]
     })
   }
@@ -46279,7 +46383,7 @@ webidl.converters.TypedArray = function (V, T, opts = {}) {
   //    with the [AllowShared] extended attribute, and
   //    IsSharedArrayBuffer(V.[[ViewedArrayBuffer]]) is
   //    true, then throw a TypeError.
-  if (opts.allowShared === false && types.isSharedArrayBuffer(V.buffer)) {
+  if (opts?.allowShared === false && types.isSharedArrayBuffer(V.buffer)) {
     throw webidl.errors.exception({
       header: 'ArrayBuffer',
       message: 'SharedArrayBuffer is not allowed.'
@@ -46302,13 +46406,13 @@ webidl.converters.TypedArray = function (V, T, opts = {}) {
   return V
 }
 
-webidl.converters.DataView = function (V, opts = {}) {
+webidl.converters.DataView = function (V, prefix, name, opts) {
   // 1. If Type(V) is not Object, or V does not have a
   //    [[DataView]] internal slot, then throw a TypeError.
   if (webidl.util.Type(V) !== 'Object' || !types.isDataView(V)) {
     throw webidl.errors.exception({
-      header: 'DataView',
-      message: 'Object is not a DataView.'
+      header: prefix,
+      message: `${name} is not a DataView.`
     })
   }
 
@@ -46316,7 +46420,7 @@ webidl.converters.DataView = function (V, opts = {}) {
   //    with the [AllowShared] extended attribute, and
   //    IsSharedArrayBuffer(V.[[ViewedArrayBuffer]]) is true,
   //    then throw a TypeError.
-  if (opts.allowShared === false && types.isSharedArrayBuffer(V.buffer)) {
+  if (opts?.allowShared === false && types.isSharedArrayBuffer(V.buffer)) {
     throw webidl.errors.exception({
       header: 'ArrayBuffer',
       message: 'SharedArrayBuffer is not allowed.'
@@ -46340,20 +46444,24 @@ webidl.converters.DataView = function (V, opts = {}) {
 }
 
 // https://webidl.spec.whatwg.org/#BufferSource
-webidl.converters.BufferSource = function (V, opts = {}) {
+webidl.converters.BufferSource = function (V, prefix, name, opts) {
   if (types.isAnyArrayBuffer(V)) {
-    return webidl.converters.ArrayBuffer(V, { ...opts, allowShared: false })
+    return webidl.converters.ArrayBuffer(V, prefix, name, { ...opts, allowShared: false })
   }
 
   if (types.isTypedArray(V)) {
-    return webidl.converters.TypedArray(V, V.constructor, { ...opts, allowShared: false })
+    return webidl.converters.TypedArray(V, V.constructor, prefix, name, { ...opts, allowShared: false })
   }
 
   if (types.isDataView(V)) {
-    return webidl.converters.DataView(V, opts, { ...opts, allowShared: false })
+    return webidl.converters.DataView(V, prefix, name, { ...opts, allowShared: false })
   }
 
-  throw new TypeError(`Could not convert ${webidl.util.Stringify(V)} to a BufferSource.`)
+  throw webidl.errors.conversionFailed({
+    prefix,
+    argument: `${name} ("${webidl.util.Stringify(V)}")`,
+    types: ['BufferSource']
+  })
 }
 
 webidl.converters['sequence<ByteString>'] = webidl.sequenceConverter(
@@ -46719,7 +46827,7 @@ class FileReader extends EventTarget {
   readAsArrayBuffer (blob) {
     webidl.brandCheck(this, FileReader)
 
-    webidl.argumentLengthCheck(arguments, 1, { header: 'FileReader.readAsArrayBuffer' })
+    webidl.argumentLengthCheck(arguments, 1, 'FileReader.readAsArrayBuffer')
 
     blob = webidl.converters.Blob(blob, { strict: false })
 
@@ -46735,7 +46843,7 @@ class FileReader extends EventTarget {
   readAsBinaryString (blob) {
     webidl.brandCheck(this, FileReader)
 
-    webidl.argumentLengthCheck(arguments, 1, { header: 'FileReader.readAsBinaryString' })
+    webidl.argumentLengthCheck(arguments, 1, 'FileReader.readAsBinaryString')
 
     blob = webidl.converters.Blob(blob, { strict: false })
 
@@ -46752,12 +46860,12 @@ class FileReader extends EventTarget {
   readAsText (blob, encoding = undefined) {
     webidl.brandCheck(this, FileReader)
 
-    webidl.argumentLengthCheck(arguments, 1, { header: 'FileReader.readAsText' })
+    webidl.argumentLengthCheck(arguments, 1, 'FileReader.readAsText')
 
     blob = webidl.converters.Blob(blob, { strict: false })
 
     if (encoding !== undefined) {
-      encoding = webidl.converters.DOMString(encoding)
+      encoding = webidl.converters.DOMString(encoding, 'FileReader.readAsText', 'encoding')
     }
 
     // The readAsText(blob, encoding) method, when invoked,
@@ -46772,7 +46880,7 @@ class FileReader extends EventTarget {
   readAsDataURL (blob) {
     webidl.brandCheck(this, FileReader)
 
-    webidl.argumentLengthCheck(arguments, 1, { header: 'FileReader.readAsDataURL' })
+    webidl.argumentLengthCheck(arguments, 1, 'FileReader.readAsDataURL')
 
     blob = webidl.converters.Blob(blob, { strict: false })
 
@@ -47041,7 +47149,7 @@ const kState = Symbol('ProgressEvent state')
  */
 class ProgressEvent extends Event {
   constructor (type, eventInitDict = {}) {
-    type = webidl.converters.DOMString(type)
+    type = webidl.converters.DOMString(type, 'ProgressEvent constructor', 'type')
     eventInitDict = webidl.converters.ProgressEventInit(eventInitDict ?? {})
 
     super(type, eventInitDict)
@@ -47076,32 +47184,32 @@ webidl.converters.ProgressEventInit = webidl.dictionaryConverter([
   {
     key: 'lengthComputable',
     converter: webidl.converters.boolean,
-    defaultValue: false
+    defaultValue: () => false
   },
   {
     key: 'loaded',
     converter: webidl.converters['unsigned long long'],
-    defaultValue: 0
+    defaultValue: () => 0
   },
   {
     key: 'total',
     converter: webidl.converters['unsigned long long'],
-    defaultValue: 0
+    defaultValue: () => 0
   },
   {
     key: 'bubbles',
     converter: webidl.converters.boolean,
-    defaultValue: false
+    defaultValue: () => false
   },
   {
     key: 'cancelable',
     converter: webidl.converters.boolean,
-    defaultValue: false
+    defaultValue: () => false
   },
   {
     key: 'composed',
     converter: webidl.converters.boolean,
-    defaultValue: false
+    defaultValue: () => false
   }
 ])
 
@@ -47802,7 +47910,7 @@ function onSocketClose () {
   //    decode without BOM to the WebSocket connection close
   //    reason.
   // TODO: process.nextTick
-  fireEvent('close', ws, CloseEvent, {
+  fireEvent('close', ws, (type, init) => new CloseEvent(type, init), {
     wasClean, code, reason
   })
 
@@ -47908,6 +48016,7 @@ module.exports = {
 
 const { webidl } = __nccwpck_require__(4890)
 const { kEnumerableProperty } = __nccwpck_require__(3983)
+const { kConstruct } = __nccwpck_require__(2785)
 const { MessagePort } = __nccwpck_require__(4086)
 
 /**
@@ -47917,10 +48026,16 @@ class MessageEvent extends Event {
   #eventInit
 
   constructor (type, eventInitDict = {}) {
-    webidl.argumentLengthCheck(arguments, 1, { header: 'MessageEvent constructor' })
+    if (type === kConstruct) {
+      super(arguments[1], arguments[2])
+      return
+    }
 
-    type = webidl.converters.DOMString(type)
-    eventInitDict = webidl.converters.MessageEventInit(eventInitDict)
+    const prefix = 'MessageEvent constructor'
+    webidl.argumentLengthCheck(arguments, 1, prefix)
+
+    type = webidl.converters.DOMString(type, prefix, 'type')
+    eventInitDict = webidl.converters.MessageEventInit(eventInitDict, prefix, 'eventInitDict')
 
     super(type, eventInitDict)
 
@@ -47973,13 +48088,27 @@ class MessageEvent extends Event {
   ) {
     webidl.brandCheck(this, MessageEvent)
 
-    webidl.argumentLengthCheck(arguments, 1, { header: 'MessageEvent.initMessageEvent' })
+    webidl.argumentLengthCheck(arguments, 1, 'MessageEvent.initMessageEvent')
 
     return new MessageEvent(type, {
       bubbles, cancelable, data, origin, lastEventId, source, ports
     })
   }
+
+  static createFastMessageEvent (type, init) {
+    const messageEvent = new MessageEvent(kConstruct, type, init)
+    messageEvent.#eventInit = init
+    messageEvent.#eventInit.data ??= null
+    messageEvent.#eventInit.origin ??= ''
+    messageEvent.#eventInit.lastEventId ??= ''
+    messageEvent.#eventInit.source ??= null
+    messageEvent.#eventInit.ports ??= []
+    return messageEvent
+  }
 }
+
+const { createFastMessageEvent } = MessageEvent
+delete MessageEvent.createFastMessageEvent
 
 /**
  * @see https://websockets.spec.whatwg.org/#the-closeevent-interface
@@ -47988,9 +48117,10 @@ class CloseEvent extends Event {
   #eventInit
 
   constructor (type, eventInitDict = {}) {
-    webidl.argumentLengthCheck(arguments, 1, { header: 'CloseEvent constructor' })
+    const prefix = 'CloseEvent constructor'
+    webidl.argumentLengthCheck(arguments, 1, prefix)
 
-    type = webidl.converters.DOMString(type)
+    type = webidl.converters.DOMString(type, prefix, 'type')
     eventInitDict = webidl.converters.CloseEventInit(eventInitDict)
 
     super(type, eventInitDict)
@@ -48022,11 +48152,12 @@ class ErrorEvent extends Event {
   #eventInit
 
   constructor (type, eventInitDict) {
-    webidl.argumentLengthCheck(arguments, 1, { header: 'ErrorEvent constructor' })
+    const prefix = 'ErrorEvent constructor'
+    webidl.argumentLengthCheck(arguments, 1, prefix)
 
     super(type, eventInitDict)
 
-    type = webidl.converters.DOMString(type)
+    type = webidl.converters.DOMString(type, prefix, 'type')
     eventInitDict = webidl.converters.ErrorEventInit(eventInitDict ?? {})
 
     this.#eventInit = eventInitDict
@@ -48108,17 +48239,17 @@ const eventInit = [
   {
     key: 'bubbles',
     converter: webidl.converters.boolean,
-    defaultValue: false
+    defaultValue: () => false
   },
   {
     key: 'cancelable',
     converter: webidl.converters.boolean,
-    defaultValue: false
+    defaultValue: () => false
   },
   {
     key: 'composed',
     converter: webidl.converters.boolean,
-    defaultValue: false
+    defaultValue: () => false
   }
 ]
 
@@ -48127,31 +48258,29 @@ webidl.converters.MessageEventInit = webidl.dictionaryConverter([
   {
     key: 'data',
     converter: webidl.converters.any,
-    defaultValue: null
+    defaultValue: () => null
   },
   {
     key: 'origin',
     converter: webidl.converters.USVString,
-    defaultValue: ''
+    defaultValue: () => ''
   },
   {
     key: 'lastEventId',
     converter: webidl.converters.DOMString,
-    defaultValue: ''
+    defaultValue: () => ''
   },
   {
     key: 'source',
     // Node doesn't implement WindowProxy or ServiceWorker, so the only
     // valid value for source is a MessagePort.
     converter: webidl.nullableConverter(webidl.converters.MessagePort),
-    defaultValue: null
+    defaultValue: () => null
   },
   {
     key: 'ports',
     converter: webidl.converters['sequence<MessagePort>'],
-    get defaultValue () {
-      return []
-    }
+    defaultValue: () => new Array(0)
   }
 ])
 
@@ -48160,17 +48289,17 @@ webidl.converters.CloseEventInit = webidl.dictionaryConverter([
   {
     key: 'wasClean',
     converter: webidl.converters.boolean,
-    defaultValue: false
+    defaultValue: () => false
   },
   {
     key: 'code',
     converter: webidl.converters['unsigned short'],
-    defaultValue: 0
+    defaultValue: () => 0
   },
   {
     key: 'reason',
     converter: webidl.converters.USVString,
-    defaultValue: ''
+    defaultValue: () => ''
   }
 ])
 
@@ -48179,22 +48308,22 @@ webidl.converters.ErrorEventInit = webidl.dictionaryConverter([
   {
     key: 'message',
     converter: webidl.converters.DOMString,
-    defaultValue: ''
+    defaultValue: () => ''
   },
   {
     key: 'filename',
     converter: webidl.converters.USVString,
-    defaultValue: ''
+    defaultValue: () => ''
   },
   {
     key: 'lineno',
     converter: webidl.converters['unsigned long'],
-    defaultValue: 0
+    defaultValue: () => 0
   },
   {
     key: 'colno',
     converter: webidl.converters['unsigned long'],
-    defaultValue: 0
+    defaultValue: () => 0
   },
   {
     key: 'error',
@@ -48205,7 +48334,8 @@ webidl.converters.ErrorEventInit = webidl.dictionaryConverter([
 module.exports = {
   MessageEvent,
   CloseEvent,
-  ErrorEvent
+  ErrorEvent,
+  createFastMessageEvent
 }
 
 
@@ -48661,7 +48791,7 @@ module.exports = {
 
 const { kReadyState, kController, kResponse, kBinaryType, kWebSocketURL } = __nccwpck_require__(9769)
 const { states, opcodes } = __nccwpck_require__(3587)
-const { MessageEvent, ErrorEvent } = __nccwpck_require__(5033)
+const { ErrorEvent, createFastMessageEvent } = __nccwpck_require__(5033)
 const { isUtf8 } = __nccwpck_require__(2254)
 
 /* globals Blob */
@@ -48710,15 +48840,16 @@ function isClosed (ws) {
  * @see https://dom.spec.whatwg.org/#concept-event-fire
  * @param {string} e
  * @param {EventTarget} target
+ * @param {(...args: ConstructorParameters<typeof Event>) => Event} eventFactory
  * @param {EventInit | undefined} eventInitDict
  */
-function fireEvent (e, target, eventConstructor = Event, eventInitDict = {}) {
+function fireEvent (e, target, eventFactory = (type, init) => new Event(type, init), eventInitDict = {}) {
   // 1. If eventConstructor is not given, then let eventConstructor be Event.
 
   // 2. Let event be the result of creating an event given eventConstructor,
   //    in the relevant realm of target.
   // 3. Initialize event’s type attribute to e.
-  const event = new eventConstructor(e, eventInitDict) // eslint-disable-line new-cap
+  const event = eventFactory(e, eventInitDict)
 
   // 4. Initialize any other IDL attributes of event as described in the
   //    invocation of this algorithm.
@@ -48769,7 +48900,7 @@ function websocketMessageReceived (ws, type, data) {
   // 3. Fire an event named message at the WebSocket object, using MessageEvent,
   //    with the origin attribute initialized to the serialization of the WebSocket
   //    object’s url's origin, and the data attribute initialized to dataForEvent.
-  fireEvent('message', ws, MessageEvent, {
+  fireEvent('message', ws, createFastMessageEvent, {
     origin: ws[kWebSocketURL].origin,
     data: dataForEvent
   })
@@ -48854,7 +48985,7 @@ function failWebsocketConnection (ws, reason) {
 
   if (reason) {
     // TODO: process.nextTick
-    fireEvent('error', ws, ErrorEvent, {
+    fireEvent('error', ws, (type, init) => new ErrorEvent(type, init), {
       error: new Error(reason)
     })
   }
@@ -48950,7 +49081,8 @@ class WebSocket extends EventTarget {
   constructor (url, protocols = []) {
     super()
 
-    webidl.argumentLengthCheck(arguments, 1, { header: 'WebSocket constructor' })
+    const prefix = 'WebSocket constructor'
+    webidl.argumentLengthCheck(arguments, 1, prefix)
 
     if (!experimentalWarned) {
       experimentalWarned = true
@@ -48959,9 +49091,9 @@ class WebSocket extends EventTarget {
       })
     }
 
-    const options = webidl.converters['DOMString or sequence<DOMString> or WebSocketInit'](protocols)
+    const options = webidl.converters['DOMString or sequence<DOMString> or WebSocketInit'](protocols, prefix, 'options')
 
-    url = webidl.converters.USVString(url)
+    url = webidl.converters.USVString(url, prefix, 'url')
     protocols = options.protocols
 
     // 1. Let baseURL be this's relevant settings object's API base URL.
@@ -49058,12 +49190,14 @@ class WebSocket extends EventTarget {
   close (code = undefined, reason = undefined) {
     webidl.brandCheck(this, WebSocket)
 
+    const prefix = 'WebSocket.close'
+
     if (code !== undefined) {
-      code = webidl.converters['unsigned short'](code, { clamp: true })
+      code = webidl.converters['unsigned short'](code, prefix, 'code', { clamp: true })
     }
 
     if (reason !== undefined) {
-      reason = webidl.converters.USVString(reason)
+      reason = webidl.converters.USVString(reason, prefix, 'reason')
     }
 
     // 1. If code is present, but is neither an integer equal to 1000 nor an
@@ -49163,9 +49297,10 @@ class WebSocket extends EventTarget {
   send (data) {
     webidl.brandCheck(this, WebSocket)
 
-    webidl.argumentLengthCheck(arguments, 1, { header: 'WebSocket.send' })
+    const prefix = 'WebSocket.send'
+    webidl.argumentLengthCheck(arguments, 1, prefix)
 
-    data = webidl.converters.WebSocketSendData(data)
+    data = webidl.converters.WebSocketSendData(data, prefix, 'data')
 
     // 1. If this's ready state is CONNECTING, then throw an
     //    "InvalidStateError" DOMException.
@@ -49494,12 +49629,12 @@ webidl.converters['sequence<DOMString>'] = webidl.sequenceConverter(
   webidl.converters.DOMString
 )
 
-webidl.converters['DOMString or sequence<DOMString>'] = function (V) {
+webidl.converters['DOMString or sequence<DOMString>'] = function (V, prefix, argument) {
   if (webidl.util.Type(V) === 'Object' && Symbol.iterator in V) {
     return webidl.converters['sequence<DOMString>'](V)
   }
 
-  return webidl.converters.DOMString(V)
+  return webidl.converters.DOMString(V, prefix, argument)
 }
 
 // This implements the propsal made in https://github.com/whatwg/websockets/issues/42
@@ -49507,16 +49642,12 @@ webidl.converters.WebSocketInit = webidl.dictionaryConverter([
   {
     key: 'protocols',
     converter: webidl.converters['DOMString or sequence<DOMString>'],
-    get defaultValue () {
-      return []
-    }
+    defaultValue: () => new Array(0)
   },
   {
     key: 'dispatcher',
     converter: (V) => V,
-    get defaultValue () {
-      return getGlobalDispatcher()
-    }
+    defaultValue: () => getGlobalDispatcher()
   },
   {
     key: 'headers',
