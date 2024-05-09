@@ -8114,11 +8114,10 @@ module.exports = pipeline
 
 const assert = __nccwpck_require__(8061)
 const { Readable } = __nccwpck_require__(3858)
-const { InvalidArgumentError } = __nccwpck_require__(8045)
+const { InvalidArgumentError, RequestAbortedError } = __nccwpck_require__(8045)
 const util = __nccwpck_require__(3983)
 const { getResolveErrorBodyCallback } = __nccwpck_require__(7474)
 const { AsyncResource } = __nccwpck_require__(2761)
-const { addSignal, removeSignal } = __nccwpck_require__(7032)
 
 class RequestHandler extends AsyncResource {
   constructor (opts, callback) {
@@ -8168,6 +8167,9 @@ class RequestHandler extends AsyncResource {
     this.onInfo = onInfo || null
     this.throwOnError = throwOnError
     this.highWaterMark = highWaterMark
+    this.signal = signal
+    this.reason = null
+    this.removeAbortListener = null
 
     if (util.isStream(body)) {
       body.on('error', (err) => {
@@ -8175,7 +8177,26 @@ class RequestHandler extends AsyncResource {
       })
     }
 
-    addSignal(this, signal)
+    if (this.signal) {
+      if (this.signal.aborted) {
+        this.reason = this.signal.reason ?? new RequestAbortedError()
+      } else {
+        this.removeAbortListener = util.addAbortListener(this.signal, () => {
+          this.reason = this.signal.reason ?? new RequestAbortedError()
+          if (this.res) {
+            util.destroy(this.res, this.reason)
+          } else if (this.abort) {
+            this.abort(this.reason)
+          }
+
+          if (this.removeAbortListener) {
+            this.res?.off('close', this.removeAbortListener)
+            this.removeAbortListener()
+            this.removeAbortListener = null
+          }
+        })
+      }
+    }
   }
 
   onConnect (abort, context) {
@@ -8205,14 +8226,18 @@ class RequestHandler extends AsyncResource {
     const parsedHeaders = responseHeaders === 'raw' ? util.parseHeaders(rawHeaders) : headers
     const contentType = parsedHeaders['content-type']
     const contentLength = parsedHeaders['content-length']
-    const body = new Readable({ resume, abort, contentType, contentLength, highWaterMark })
+    const res = new Readable({ resume, abort, contentType, contentLength, highWaterMark })
+
+    if (this.removeAbortListener) {
+      res.on('close', this.removeAbortListener)
+    }
 
     this.callback = null
-    this.res = body
+    this.res = res
     if (callback !== null) {
       if (this.throwOnError && statusCode >= 400) {
         this.runInAsyncScope(getResolveErrorBodyCallback, null,
-          { callback, body, contentType, statusCode, statusMessage, headers }
+          { callback, body: res, contentType, statusCode, statusMessage, headers }
         )
       } else {
         this.runInAsyncScope(callback, null, null, {
@@ -8220,7 +8245,7 @@ class RequestHandler extends AsyncResource {
           headers,
           trailers: this.trailers,
           opaque,
-          body,
+          body: res,
           context
         })
       }
@@ -8228,24 +8253,16 @@ class RequestHandler extends AsyncResource {
   }
 
   onData (chunk) {
-    const { res } = this
-    return res.push(chunk)
+    return this.res.push(chunk)
   }
 
   onComplete (trailers) {
-    const { res } = this
-
-    removeSignal(this)
-
     util.parseHeaders(trailers, this.trailers)
-
-    res.push(null)
+    this.res.push(null)
   }
 
   onError (err) {
     const { res, callback, body, opaque } = this
-
-    removeSignal(this)
 
     if (callback) {
       // TODO: Does this need queueMicrotask?
@@ -8266,6 +8283,12 @@ class RequestHandler extends AsyncResource {
     if (body) {
       this.body = null
       util.destroy(body, err)
+    }
+
+    if (this.removeAbortListener) {
+      res?.off('close', this.removeAbortListener)
+      this.removeAbortListener()
+      this.removeAbortListener = null
     }
   }
 }
@@ -8724,9 +8747,13 @@ class BodyReadable extends Readable {
     // tick as it is created, then a user who is waiting for a
     // promise (i.e micro tick) for installing a 'error' listener will
     // never get a chance and will always encounter an unhandled exception.
-    setImmediate(() => {
+    if (!this[kReading]) {
+      setImmediate(() => {
+        callback(err)
+      })
+    } else {
       callback(err)
-    })
+    }
   }
 
   on (ev, ...args) {
@@ -13398,6 +13425,7 @@ function writeH2 (client, request) {
       }
     } else if (util.isStream(body)) {
       writeStream({
+        abort,
         body,
         client,
         request,
@@ -13409,6 +13437,7 @@ function writeH2 (client, request) {
       })
     } else if (util.isIterable(body)) {
       writeIterable({
+        abort,
         body,
         client,
         request,
@@ -21116,13 +21145,13 @@ const encoder = new TextEncoder()
 /**
  * @see https://mimesniff.spec.whatwg.org/#http-token-code-point
  */
-const HTTP_TOKEN_CODEPOINTS = /^[!#$%&'*+-.^_|~A-Za-z0-9]+$/
+const HTTP_TOKEN_CODEPOINTS = /^[!#$%&'*+\-.^_|~A-Za-z0-9]+$/
 const HTTP_WHITESPACE_REGEX = /[\u000A\u000D\u0009\u0020]/ // eslint-disable-line
 const ASCII_WHITESPACE_REPLACE_REGEX = /[\u0009\u000A\u000C\u000D\u0020]/g // eslint-disable-line
 /**
  * @see https://mimesniff.spec.whatwg.org/#http-quoted-string-token-code-point
  */
-const HTTP_QUOTED_STRING_TOKENS = /[\u0009\u0020-\u007E\u0080-\u00FF]/ // eslint-disable-line
+const HTTP_QUOTED_STRING_TOKENS = /^[\u0009\u0020-\u007E\u0080-\u00FF]+$/ // eslint-disable-line
 
 // https://fetch.spec.whatwg.org/#data-url-processor
 /** @param {URL} dataURL */
@@ -23076,13 +23105,17 @@ class HeadersList {
   get entries () {
     const headers = {}
 
-    if (this[kHeadersMap].size) {
+    if (this[kHeadersMap].size !== 0) {
       for (const { name, value } of this[kHeadersMap].values()) {
         headers[name] = value
       }
     }
 
     return headers
+  }
+
+  rawValues () {
+    return this[kHeadersMap].values()
   }
 
   get entriesList () {
@@ -23608,12 +23641,16 @@ class Fetch extends EE {
   }
 }
 
+function handleFetchDone (response) {
+  finalizeAndReportTiming(response, 'fetch')
+}
+
 // https://fetch.spec.whatwg.org/#fetch-method
 function fetch (input, init = undefined) {
   webidl.argumentLengthCheck(arguments, 1, 'globalThis.fetch')
 
   // 1. Let p be a new promise.
-  const p = createDeferredPromise()
+  let p = createDeferredPromise()
 
   // 2. Let requestObject be the result of invoking the initial value of
   // Request as constructor with input and init as arguments. If this throws
@@ -23673,16 +23710,17 @@ function fetch (input, init = undefined) {
       // 3. Abort controller with requestObject’s signal’s abort reason.
       controller.abort(requestObject.signal.reason)
 
+      const realResponse = responseObject?.deref()
+
       // 4. Abort the fetch() call with p, request, responseObject,
       //    and requestObject’s signal’s abort reason.
-      abortFetch(p, request, responseObject, requestObject.signal.reason)
+      abortFetch(p, request, realResponse, requestObject.signal.reason)
     }
   )
 
   // 12. Let handleFetchDone given response response be to finalize and
   // report timing with response, globalObject, and "fetch".
-  const handleFetchDone = (response) =>
-    finalizeAndReportTiming(response, 'fetch')
+  // see function handleFetchDone
 
   // 13. Set controller to the result of calling fetch given request,
   // with processResponseEndOfBody set to handleFetchDone, and processResponse
@@ -23716,10 +23754,11 @@ function fetch (input, init = undefined) {
 
     // 4. Set responseObject to the result of creating a Response object,
     // given response, "immutable", and relevantRealm.
-    responseObject = fromInnerResponse(response, 'immutable')
+    responseObject = new WeakRef(fromInnerResponse(response, 'immutable'))
 
     // 5. Resolve p with responseObject.
-    p.resolve(responseObject)
+    p.resolve(responseObject.deref())
+    p = null
   }
 
   controller = fetching({
@@ -23802,7 +23841,10 @@ const markResourceTiming = performance.markResourceTiming
 // https://fetch.spec.whatwg.org/#abort-fetch
 function abortFetch (p, request, responseObject, error) {
   // 1. Reject promise with error.
-  p.reject(error)
+  if (p) {
+    // We might have already resolved the promise at this stage
+    p.reject(error)
+  }
 
   // 2. If request’s body is not null and is readable, then cancel request’s
   // body with error.
@@ -24554,7 +24596,10 @@ function fetchFinale (fetchParams, response) {
   // 4. If fetchParams’s process response is non-null, then queue a fetch task to run fetchParams’s
   //    process response given response, with fetchParams’s task destination.
   if (fetchParams.processResponse != null) {
-    queueMicrotask(() => fetchParams.processResponse(response))
+    queueMicrotask(() => {
+      fetchParams.processResponse(response)
+      fetchParams.processResponse = null
+    })
   }
 
   // 5. Let internalResponse be response, if response is a network error; otherwise response’s internal response.
@@ -25372,7 +25417,11 @@ async function httpNetworkFetch (
   // 12. Let cancelAlgorithm be an algorithm that aborts fetchParams’s
   // controller with reason, given reason.
   const cancelAlgorithm = (reason) => {
-    fetchParams.controller.abort(reason)
+    // If the aborted fetch was already terminated, then we do not
+    // need to do anything.
+    if (!isCancelled(fetchParams)) {
+      fetchParams.controller.abort(reason)
+    }
   }
 
   // 13. Let highWaterMark be a non-negative, non-NaN number, chosen by
@@ -25590,20 +25639,16 @@ async function httpNetworkFetch (
 
           const headersList = new HeadersList()
 
-          // For H2, the rawHeaders are a plain JS object
-          // We distinguish between them and iterate accordingly
-          if (Array.isArray(rawHeaders)) {
-            for (let i = 0; i < rawHeaders.length; i += 2) {
-              headersList.append(bufferToLowerCasedHeaderName(rawHeaders[i]), rawHeaders[i + 1].toString('latin1'), true)
-            }
-            const contentEncoding = headersList.get('content-encoding', true)
-            if (contentEncoding) {
-              // https://www.rfc-editor.org/rfc/rfc7231#section-3.1.2.1
-              // "All content-coding values are case-insensitive..."
-              codings = contentEncoding.toLowerCase().split(',').map((x) => x.trim())
-            }
-            location = headersList.get('location', true)
+          for (let i = 0; i < rawHeaders.length; i += 2) {
+            headersList.append(bufferToLowerCasedHeaderName(rawHeaders[i]), rawHeaders[i + 1].toString('latin1'), true)
           }
+          const contentEncoding = headersList.get('content-encoding', true)
+          if (contentEncoding) {
+            // https://www.rfc-editor.org/rfc/rfc7231#section-3.1.2.1
+            // "All content-coding values are case-insensitive..."
+            codings = contentEncoding.toLowerCase().split(',').map((x) => x.trim())
+          }
+          location = headersList.get('location', true)
 
           this.body = new Readable({ read: resume })
 
@@ -25613,7 +25658,7 @@ async function httpNetworkFetch (
             redirectStatusSet.has(status)
 
           // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Encoding
-          if (request.method !== 'HEAD' && request.method !== 'CONNECT' && !nullBodyStatus.includes(status) && !willFollow) {
+          if (codings.length !== 0 && request.method !== 'HEAD' && request.method !== 'CONNECT' && !nullBodyStatus.includes(status) && !willFollow) {
             for (let i = 0; i < codings.length; ++i) {
               const coding = codings[i]
               // https://www.rfc-editor.org/rfc/rfc9112.html#section-7.2
@@ -26216,9 +26261,8 @@ class Request {
       // 4. If headers is a Headers object, then for each header in its header
       // list, append header’s name/header’s value to this’s headers.
       if (headers instanceof HeadersList) {
-        for (const { 0: key, 1: val } of headers) {
-          // Note: The header names are already in lowercase.
-          headersList.append(key, val, true)
+        for (const { name, value } of headers.rawValues()) {
+          headersList.append(name, value, false)
         }
         // Note: Copy the `set-cookie` meta-data.
         headersList.cookies = headers.cookies
@@ -26559,51 +26603,50 @@ class Request {
 
 mixinBody(Request)
 
+// https://fetch.spec.whatwg.org/#requests
 function makeRequest (init) {
-  // https://fetch.spec.whatwg.org/#requests
-  const request = {
-    method: 'GET',
-    localURLsOnly: false,
-    unsafeRequest: false,
-    body: null,
-    client: null,
-    reservedClient: null,
-    replacesClientId: '',
-    window: 'client',
-    keepalive: false,
-    serviceWorkers: 'all',
-    initiator: '',
-    destination: '',
-    priority: null,
-    origin: 'client',
-    policyContainer: 'client',
-    referrer: 'client',
-    referrerPolicy: '',
-    mode: 'no-cors',
-    useCORSPreflightFlag: false,
-    credentials: 'same-origin',
-    useCredentials: false,
-    cache: 'default',
-    redirect: 'follow',
-    integrity: '',
-    cryptoGraphicsNonceMetadata: '',
-    parserMetadata: '',
-    reloadNavigation: false,
-    historyNavigation: false,
-    userActivation: false,
-    taintedOrigin: false,
-    redirectCount: 0,
-    responseTainting: 'basic',
-    preventNoCacheCacheControlHeaderModification: false,
-    done: false,
-    timingAllowFailed: false,
-    ...init,
+  return {
+    method: init.method ?? 'GET',
+    localURLsOnly: init.localURLsOnly ?? false,
+    unsafeRequest: init.unsafeRequest ?? false,
+    body: init.body ?? null,
+    client: init.client ?? null,
+    reservedClient: init.reservedClient ?? null,
+    replacesClientId: init.replacesClientId ?? '',
+    window: init.window ?? 'client',
+    keepalive: init.keepalive ?? false,
+    serviceWorkers: init.serviceWorkers ?? 'all',
+    initiator: init.initiator ?? '',
+    destination: init.destination ?? '',
+    priority: init.priority ?? null,
+    origin: init.origin ?? 'client',
+    policyContainer: init.policyContainer ?? 'client',
+    referrer: init.referrer ?? 'client',
+    referrerPolicy: init.referrerPolicy ?? '',
+    mode: init.mode ?? 'no-cors',
+    useCORSPreflightFlag: init.useCORSPreflightFlag ?? false,
+    credentials: init.credentials ?? 'same-origin',
+    useCredentials: init.useCredentials ?? false,
+    cache: init.cache ?? 'default',
+    redirect: init.redirect ?? 'follow',
+    integrity: init.integrity ?? '',
+    cryptoGraphicsNonceMetadata: init.cryptoGraphicsNonceMetadata ?? '',
+    parserMetadata: init.parserMetadata ?? '',
+    reloadNavigation: init.reloadNavigation ?? false,
+    historyNavigation: init.historyNavigation ?? false,
+    userActivation: init.userActivation ?? false,
+    taintedOrigin: init.taintedOrigin ?? false,
+    redirectCount: init.redirectCount ?? 0,
+    responseTainting: init.responseTainting ?? 'basic',
+    preventNoCacheCacheControlHeaderModification: init.preventNoCacheCacheControlHeaderModification ?? false,
+    done: init.done ?? false,
+    timingAllowFailed: init.timingAllowFailed ?? false,
+    urlList: init.urlList,
+    url: init.urlList[0],
     headersList: init.headersList
       ? new HeadersList(init.headersList)
       : new HeadersList()
   }
-  request.url = request.urlList[0]
-  return request
 }
 
 // https://fetch.spec.whatwg.org/#concept-request-clone
@@ -26809,8 +26852,22 @@ const { URLSerializer } = __nccwpck_require__(7704)
 const { kHeadersList, kConstruct } = __nccwpck_require__(2785)
 const assert = __nccwpck_require__(8061)
 const { types } = __nccwpck_require__(7261)
+const { isDisturbed, isErrored } = __nccwpck_require__(4492)
 
 const textEncoder = new TextEncoder('utf-8')
+
+const hasFinalizationRegistry = globalThis.FinalizationRegistry && process.version.indexOf('v18') !== 0
+let registry
+
+if (hasFinalizationRegistry) {
+  registry = new FinalizationRegistry((stream) => {
+    if (!stream.locked && !isDisturbed(stream) && !isErrored(stream)) {
+      stream.cancel('Response object has been garbage collected').catch(noop)
+    }
+  })
+}
+
+function noop () {}
 
 // https://fetch.spec.whatwg.org/#response-class
 class Response {
@@ -27293,6 +27350,11 @@ function fromInnerResponse (innerResponse, guard) {
   response[kHeaders] = new Headers(kConstruct)
   response[kHeaders][kHeadersList] = innerResponse.headersList
   response[kHeaders][kGuard] = guard
+
+  if (hasFinalizationRegistry && innerResponse.body?.stream) {
+    registry.register(response, innerResponse.body.stream)
+  }
+
   return response
 }
 
@@ -29304,6 +29366,7 @@ webidl.sequenceConverter = function (converter) {
     /** @type {Generator} */
     const method = typeof Iterable === 'function' ? Iterable() : V?.[Symbol.iterator]?.()
     const seq = []
+    let index = 0
 
     // 3. If method is undefined, throw a TypeError.
     if (
@@ -29324,7 +29387,7 @@ webidl.sequenceConverter = function (converter) {
         break
       }
 
-      seq.push(converter(value, prefix, argument))
+      seq.push(converter(value, prefix, `${argument}[${index++}]`))
     }
 
     return seq
@@ -30907,14 +30970,15 @@ module.exports = {
 "use strict";
 
 
-const { uid, states, sentCloseFrameState } = __nccwpck_require__(3587)
+const { uid, states, sentCloseFrameState, emptyBuffer, opcodes } = __nccwpck_require__(3587)
 const {
   kReadyState,
   kSentClose,
   kByteParser,
-  kReceivedClose
+  kReceivedClose,
+  kResponse
 } = __nccwpck_require__(9769)
-const { fireEvent, failWebsocketConnection } = __nccwpck_require__(9902)
+const { fireEvent, failWebsocketConnection, isClosing, isClosed, isEstablished } = __nccwpck_require__(9902)
 const { channels } = __nccwpck_require__(8438)
 const { CloseEvent } = __nccwpck_require__(5033)
 const { makeRequest } = __nccwpck_require__(610)
@@ -30922,6 +30986,7 @@ const { fetching } = __nccwpck_require__(5170)
 const { Headers } = __nccwpck_require__(2991)
 const { getDecodeSplit } = __nccwpck_require__(1310)
 const { kHeadersList } = __nccwpck_require__(2785)
+const { WebsocketFrameSend } = __nccwpck_require__(2391)
 
 /** @type {import('crypto')} */
 let crypto
@@ -31118,6 +31183,72 @@ function establishWebSocketConnection (url, protocols, ws, onEstablish, options)
   return controller
 }
 
+function closeWebSocketConnection (ws, code, reason, reasonByteLength) {
+  if (isClosing(ws) || isClosed(ws)) {
+    // If this's ready state is CLOSING (2) or CLOSED (3)
+    // Do nothing.
+  } else if (!isEstablished(ws)) {
+    // If the WebSocket connection is not yet established
+    // Fail the WebSocket connection and set this's ready state
+    // to CLOSING (2).
+    failWebsocketConnection(ws, 'Connection was closed before it was established.')
+    ws[kReadyState] = states.CLOSING
+  } else if (ws[kSentClose] === sentCloseFrameState.NOT_SENT) {
+    // If the WebSocket closing handshake has not yet been started
+    // Start the WebSocket closing handshake and set this's ready
+    // state to CLOSING (2).
+    // - If neither code nor reason is present, the WebSocket Close
+    //   message must not have a body.
+    // - If code is present, then the status code to use in the
+    //   WebSocket Close message must be the integer given by code.
+    // - If reason is also present, then reasonBytes must be
+    //   provided in the Close message after the status code.
+
+    ws[kSentClose] = sentCloseFrameState.PROCESSING
+
+    const frame = new WebsocketFrameSend()
+
+    // If neither code nor reason is present, the WebSocket Close
+    // message must not have a body.
+
+    // If code is present, then the status code to use in the
+    // WebSocket Close message must be the integer given by code.
+    if (code !== undefined && reason === undefined) {
+      frame.frameData = Buffer.allocUnsafe(2)
+      frame.frameData.writeUInt16BE(code, 0)
+    } else if (code !== undefined && reason !== undefined) {
+      // If reason is also present, then reasonBytes must be
+      // provided in the Close message after the status code.
+      frame.frameData = Buffer.allocUnsafe(2 + reasonByteLength)
+      frame.frameData.writeUInt16BE(code, 0)
+      // the body MAY contain UTF-8-encoded data with value /reason/
+      frame.frameData.write(reason, 2, 'utf-8')
+    } else {
+      frame.frameData = emptyBuffer
+    }
+
+    /** @type {import('stream').Duplex} */
+    const socket = ws[kResponse].socket
+
+    socket.write(frame.createFrame(opcodes.CLOSE), (err) => {
+      if (!err) {
+        ws[kSentClose] = sentCloseFrameState.SENT
+      }
+    })
+
+    ws[kSentClose] = sentCloseFrameState.PROCESSING
+
+    // Upon either sending or receiving a Close control frame, it is said
+    // that _The WebSocket Closing Handshake is Started_ and that the
+    // WebSocket connection is in the CLOSING state.
+    ws[kReadyState] = states.CLOSING
+  } else {
+    // Otherwise
+    // Set this's ready state to CLOSING (2).
+    ws[kReadyState] = states.CLOSING
+  }
+}
+
 /**
  * @param {Buffer} chunk
  */
@@ -31144,10 +31275,10 @@ function onSocketClose () {
 
   const result = ws[kByteParser].closingInfo
 
-  if (result) {
+  if (result && !result.error) {
     code = result.code ?? 1005
     reason = result.reason
-  } else if (ws[kSentClose] !== sentCloseFrameState.SENT) {
+  } else if (!ws[kReceivedClose]) {
     // If _The WebSocket
     // Connection is Closed_ and no Close control frame was received by the
     // endpoint (such as could occur if the underlying transport connection
@@ -31200,7 +31331,8 @@ function onSocketError (error) {
 }
 
 module.exports = {
-  establishWebSocketConnection
+  establishWebSocketConnection,
+  closeWebSocketConnection
 }
 
 
@@ -31613,13 +31745,34 @@ module.exports = {
 
 const { maxUnsigned16Bit } = __nccwpck_require__(3587)
 
+const BUFFER_SIZE = 16386
+
 /** @type {import('crypto')} */
 let crypto
+let buffer = null
+let bufIdx = BUFFER_SIZE
+
 try {
   crypto = __nccwpck_require__(6005)
 /* c8 ignore next 3 */
 } catch {
+  crypto = {
+    // not full compatibility, but minimum.
+    randomFillSync: function randomFillSync (buffer, _offset, _size) {
+      for (let i = 0; i < buffer.length; ++i) {
+        buffer[i] = Math.random() * 255 | 0
+      }
+      return buffer
+    }
+  }
+}
 
+function generateMask () {
+  if (bufIdx === BUFFER_SIZE) {
+    bufIdx = 0
+    crypto.randomFillSync((buffer ??= Buffer.allocUnsafe(BUFFER_SIZE)), 0, BUFFER_SIZE)
+  }
+  return [buffer[bufIdx++], buffer[bufIdx++], buffer[bufIdx++], buffer[bufIdx++]]
 }
 
 class WebsocketFrameSend {
@@ -31628,11 +31781,12 @@ class WebsocketFrameSend {
    */
   constructor (data) {
     this.frameData = data
-    this.maskKey = crypto.randomBytes(4)
   }
 
   createFrame (opcode) {
-    const bodyLength = this.frameData?.byteLength ?? 0
+    const frameData = this.frameData
+    const maskKey = generateMask()
+    const bodyLength = frameData?.byteLength ?? 0
 
     /** @type {number} */
     let payloadLength = bodyLength // 0-125
@@ -31654,10 +31808,10 @@ class WebsocketFrameSend {
     buffer[0] = (buffer[0] & 0xF0) + opcode // opcode
 
     /*! ws. MIT License. Einar Otto Stangvik <einaros@gmail.com> */
-    buffer[offset - 4] = this.maskKey[0]
-    buffer[offset - 3] = this.maskKey[1]
-    buffer[offset - 2] = this.maskKey[2]
-    buffer[offset - 1] = this.maskKey[3]
+    buffer[offset - 4] = maskKey[0]
+    buffer[offset - 3] = maskKey[1]
+    buffer[offset - 2] = maskKey[2]
+    buffer[offset - 1] = maskKey[3]
 
     buffer[1] = payloadLength
 
@@ -31672,8 +31826,8 @@ class WebsocketFrameSend {
     buffer[1] |= 0x80 // MASK
 
     // mask body
-    for (let i = 0; i < bodyLength; i++) {
-      buffer[offset + i] = this.frameData[i] ^ this.maskKey[i % 4]
+    for (let i = 0; i < bodyLength; ++i) {
+      buffer[offset + i] = frameData[i] ^ maskKey[i & 3]
     }
 
     return buffer
@@ -31699,6 +31853,7 @@ const { kReadyState, kSentClose, kResponse, kReceivedClose } = __nccwpck_require
 const { channels } = __nccwpck_require__(8438)
 const { isValidStatusCode, failWebsocketConnection, websocketMessageReceived, utf8Decode } = __nccwpck_require__(9902)
 const { WebsocketFrameSend } = __nccwpck_require__(2391)
+const { CloseEvent } = __nccwpck_require__(5033)
 
 // This code was influenced by ws released under the MIT license.
 // Copyright (c) 2011 Einar Otto Stangvik <einaros@gmail.com>
@@ -31748,6 +31903,12 @@ class ByteParser extends Writable {
 
         this.#info.fin = (buffer[0] & 0x80) !== 0
         this.#info.opcode = buffer[0] & 0x0F
+        this.#info.masked = (buffer[1] & 0x80) === 0x80
+
+        if (this.#info.masked) {
+          failWebsocketConnection(this.ws, 'Frame cannot be masked')
+          return callback()
+        }
 
         // If we receive a fragmented message, we use the type of the first
         // frame to parse the full message as binary/text, when it's terminated
@@ -31794,6 +31955,13 @@ class ByteParser extends Writable {
           const body = this.consume(payloadLength)
 
           this.#info.closeInfo = this.parseCloseBody(body)
+
+          if (this.#info.closeInfo.error) {
+            const { code, reason } = this.#info.closeInfo
+
+            callback(new CloseEvent('close', { wasClean: false, reason, code }))
+            return
+          }
 
           if (this.ws[kSentClose] !== sentCloseFrameState.SENT) {
             // If an endpoint receives a Close frame and did not previously send a
@@ -31932,7 +32100,7 @@ class ByteParser extends Writable {
         }
       }
 
-      if (this.#byteOffset === 0) {
+      if (this.#byteOffset === 0 && this.#info.payloadLength !== 0) {
         callback()
         break
       }
@@ -32003,16 +32171,16 @@ class ByteParser extends Writable {
     }
 
     if (code !== undefined && !isValidStatusCode(code)) {
-      return null
+      return { code: 1002, reason: 'Invalid status code', error: true }
     }
 
     try {
       reason = utf8Decode(reason)
     } catch {
-      return null
+      return { code: 1007, reason: 'Invalid UTF-8', error: true }
     }
 
-    return { code, reason }
+    return { code, reason, error: false }
   }
 
   get closingInfo () {
@@ -32157,7 +32325,7 @@ function websocketMessageReceived (ws, type, data) {
       // -> type indicates that the data is Binary and binary type is "arraybuffer"
       //      a new ArrayBuffer object, created in the relevant Realm of the
       //      WebSocket object, whose contents are data
-      dataForEvent = new Uint8Array(data).buffer
+      dataForEvent = toArrayBuffer(data)
     }
   }
 
@@ -32168,6 +32336,13 @@ function websocketMessageReceived (ws, type, data) {
     origin: ws[kWebSocketURL].origin,
     data: dataForEvent
   })
+}
+
+function toArrayBuffer (buffer) {
+  if (buffer.byteLength === buffer.buffer.byteLength) {
+    return buffer.buffer
+  }
+  return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
 }
 
 /**
@@ -32250,7 +32425,8 @@ function failWebsocketConnection (ws, reason) {
   if (reason) {
     // TODO: process.nextTick
     fireEvent('error', ws, (type, init) => new ErrorEvent(type, init), {
-      error: new Error(reason)
+      error: new Error(reason),
+      message: reason
     })
   }
 }
@@ -32296,8 +32472,8 @@ module.exports = {
 
 const { webidl } = __nccwpck_require__(4890)
 const { URLSerializer } = __nccwpck_require__(7704)
-const { getGlobalOrigin } = __nccwpck_require__(2850)
-const { staticPropertyDescriptors, states, sentCloseFrameState, opcodes, emptyBuffer } = __nccwpck_require__(3587)
+const { environmentSettingsObject } = __nccwpck_require__(1310)
+const { staticPropertyDescriptors, states, sentCloseFrameState, opcodes } = __nccwpck_require__(3587)
 const {
   kWebSocketURL,
   kReadyState,
@@ -32310,20 +32486,21 @@ const {
 const {
   isConnecting,
   isEstablished,
-  isClosed,
   isClosing,
   isValidSubprotocol,
-  failWebsocketConnection,
   fireEvent
 } = __nccwpck_require__(9902)
-const { establishWebSocketConnection } = __nccwpck_require__(8380)
+const { establishWebSocketConnection, closeWebSocketConnection } = __nccwpck_require__(8380)
 const { WebsocketFrameSend } = __nccwpck_require__(2391)
 const { ByteParser } = __nccwpck_require__(5442)
 const { kEnumerableProperty, isBlobLike } = __nccwpck_require__(3983)
 const { getGlobalDispatcher } = __nccwpck_require__(1892)
 const { types } = __nccwpck_require__(7261)
+const { ErrorEvent } = __nccwpck_require__(5033)
 
 let experimentalWarned = false
+
+const FastBuffer = Buffer[Symbol.species]
 
 // https://websockets.spec.whatwg.org/#interface-definition
 class WebSocket extends EventTarget {
@@ -32361,7 +32538,7 @@ class WebSocket extends EventTarget {
     protocols = options.protocols
 
     // 1. Let baseURL be this's relevant settings object's API base URL.
-    const baseURL = getGlobalOrigin()
+    const baseURL = environmentSettingsObject.settingsObject.baseUrl
 
     // 1. Let urlRecord be the result of applying the URL parser to url with baseURL.
     let urlRecord
@@ -32491,67 +32668,7 @@ class WebSocket extends EventTarget {
     }
 
     // 3. Run the first matching steps from the following list:
-    if (isClosing(this) || isClosed(this)) {
-      // If this's ready state is CLOSING (2) or CLOSED (3)
-      // Do nothing.
-    } else if (!isEstablished(this)) {
-      // If the WebSocket connection is not yet established
-      // Fail the WebSocket connection and set this's ready state
-      // to CLOSING (2).
-      failWebsocketConnection(this, 'Connection was closed before it was established.')
-      this[kReadyState] = WebSocket.CLOSING
-    } else if (this[kSentClose] === sentCloseFrameState.NOT_SENT) {
-      // If the WebSocket closing handshake has not yet been started
-      // Start the WebSocket closing handshake and set this's ready
-      // state to CLOSING (2).
-      // - If neither code nor reason is present, the WebSocket Close
-      //   message must not have a body.
-      // - If code is present, then the status code to use in the
-      //   WebSocket Close message must be the integer given by code.
-      // - If reason is also present, then reasonBytes must be
-      //   provided in the Close message after the status code.
-
-      this[kSentClose] = sentCloseFrameState.PROCESSING
-
-      const frame = new WebsocketFrameSend()
-
-      // If neither code nor reason is present, the WebSocket Close
-      // message must not have a body.
-
-      // If code is present, then the status code to use in the
-      // WebSocket Close message must be the integer given by code.
-      if (code !== undefined && reason === undefined) {
-        frame.frameData = Buffer.allocUnsafe(2)
-        frame.frameData.writeUInt16BE(code, 0)
-      } else if (code !== undefined && reason !== undefined) {
-        // If reason is also present, then reasonBytes must be
-        // provided in the Close message after the status code.
-        frame.frameData = Buffer.allocUnsafe(2 + reasonByteLength)
-        frame.frameData.writeUInt16BE(code, 0)
-        // the body MAY contain UTF-8-encoded data with value /reason/
-        frame.frameData.write(reason, 2, 'utf-8')
-      } else {
-        frame.frameData = emptyBuffer
-      }
-
-      /** @type {import('stream').Duplex} */
-      const socket = this[kResponse].socket
-
-      socket.write(frame.createFrame(opcodes.CLOSE), (err) => {
-        if (!err) {
-          this[kSentClose] = sentCloseFrameState.SENT
-        }
-      })
-
-      // Upon either sending or receiving a Close control frame, it is said
-      // that _The WebSocket Closing Handshake is Started_ and that the
-      // WebSocket connection is in the CLOSING state.
-      this[kReadyState] = states.CLOSING
-    } else {
-      // Otherwise
-      // Set this's ready state to CLOSING (2).
-      this[kReadyState] = WebSocket.CLOSING
-    }
+    closeWebSocketConnection(this, code, reason, reasonByteLength)
   }
 
   /**
@@ -32617,7 +32734,7 @@ class WebSocket extends EventTarget {
       // increase the bufferedAmount attribute by the length of the
       // ArrayBuffer in bytes.
 
-      const value = Buffer.from(data)
+      const value = new FastBuffer(data)
       const frame = new WebsocketFrameSend(value)
       const buffer = frame.createFrame(opcodes.BINARY)
 
@@ -32638,7 +32755,7 @@ class WebSocket extends EventTarget {
       // not throw an exception must increase the bufferedAmount attribute
       // by the length of data’s buffer in bytes.
 
-      const ab = Buffer.from(data, data.byteOffset, data.byteLength)
+      const ab = new FastBuffer(data, data.byteOffset, data.byteLength)
 
       const frame = new WebsocketFrameSend(ab)
       const buffer = frame.createFrame(opcodes.BINARY)
@@ -32662,7 +32779,7 @@ class WebSocket extends EventTarget {
       const frame = new WebsocketFrameSend()
 
       data.arrayBuffer().then((ab) => {
-        const value = Buffer.from(ab)
+        const value = new FastBuffer(ab)
         frame.frameData = value
         const buffer = frame.createFrame(opcodes.BINARY)
 
@@ -32815,9 +32932,8 @@ class WebSocket extends EventTarget {
     this[kResponse] = response
 
     const parser = new ByteParser(this)
-    parser.on('drain', function onParserDrain () {
-      this.ws[kResponse].socket.resume()
-    })
+    parser.on('drain', onParserDrain)
+    parser.on('error', onParserError.bind(this))
 
     response.socket.ws = this
     this[kByteParser] = parser
@@ -32939,6 +33055,16 @@ webidl.converters.WebSocketSendData = function (V) {
   }
 
   return webidl.converters.USVString(V)
+}
+
+function onParserDrain () {
+  this.ws[kResponse].socket.resume()
+}
+
+function onParserError (err) {
+  fireEvent('error', this, () => new ErrorEvent('error', { error: err, message: err.reason }))
+
+  closeWebSocketConnection(this, err.code)
 }
 
 module.exports = {
