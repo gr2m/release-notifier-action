@@ -8156,6 +8156,7 @@ class RequestHandler extends AsyncResource {
       throw err
     }
 
+    this.method = method
     this.responseHeaders = responseHeaders || null
     this.opaque = opaque || null
     this.callback = callback
@@ -8226,7 +8227,15 @@ class RequestHandler extends AsyncResource {
     const parsedHeaders = responseHeaders === 'raw' ? util.parseHeaders(rawHeaders) : headers
     const contentType = parsedHeaders['content-type']
     const contentLength = parsedHeaders['content-length']
-    const res = new Readable({ resume, abort, contentType, contentLength, highWaterMark })
+    const res = new Readable({
+      resume,
+      abort,
+      contentType,
+      contentLength: this.method !== 'HEAD' && contentLength
+        ? Number(contentLength)
+        : null,
+      highWaterMark
+    })
 
     if (this.removeAbortListener) {
       res.on('close', this.removeAbortListener)
@@ -9318,7 +9327,7 @@ function setupTimeout (onConnectTimeout, timeout) {
   let s1 = null
   let s2 = null
   const timeoutId = setTimeout(() => {
-    // setImmediate is added to make sure that we priotorise socket error events over timeouts
+    // setImmediate is added to make sure that we prioritize socket error events over timeouts
     s1 = setImmediate(() => {
       if (process.platform === 'win32') {
         // Windows needs an extra setImmediate probably due to implementation differences in the socket logic
@@ -23965,8 +23974,7 @@ function fetching ({
   // 9. If request’s origin is "client", then set request’s origin to request’s
   // client’s origin.
   if (request.origin === 'client') {
-    // TODO: What if request.client is null?
-    request.origin = request.client?.origin
+    request.origin = request.client.origin
   }
 
   // 10. If all of the following conditions are true:
@@ -27720,16 +27728,23 @@ function appendFetchMetadata (httpRequest) {
 
 // https://fetch.spec.whatwg.org/#append-a-request-origin-header
 function appendRequestOriginHeader (request) {
-  // 1. Let serializedOrigin be the result of byte-serializing a request origin with request.
+  // 1. Let serializedOrigin be the result of byte-serializing a request origin
+  //    with request.
+  // TODO: implement "byte-serializing a request origin"
   let serializedOrigin = request.origin
 
-  // 2. If request’s response tainting is "cors" or request’s mode is "websocket", then append (`Origin`, serializedOrigin) to request’s header list.
-  if (request.responseTainting === 'cors' || request.mode === 'websocket') {
-    if (serializedOrigin) {
-      request.headersList.append('origin', serializedOrigin, true)
-    }
+  // "'client' is changed to an origin during fetching."
+  // This doesn't happen in undici (in most cases) because undici, by default,
+  // has no concept of origin.
+  if (serializedOrigin === 'client') {
+    return
+  }
 
+  // 2. If request’s response tainting is "cors" or request’s mode is "websocket",
+  //    then append (`Origin`, serializedOrigin) to request’s header list.
   // 3. Otherwise, if request’s method is neither `GET` nor `HEAD`, then:
+  if (request.responseTainting === 'cors' || request.mode === 'websocket') {
+    request.headersList.append('origin', serializedOrigin, true)
   } else if (request.method !== 'GET' && request.method !== 'HEAD') {
     // 1. Switch on request’s referrer policy:
     switch (request.referrerPolicy) {
@@ -27740,13 +27755,16 @@ function appendRequestOriginHeader (request) {
       case 'no-referrer-when-downgrade':
       case 'strict-origin':
       case 'strict-origin-when-cross-origin':
-        // If request’s origin is a tuple origin, its scheme is "https", and request’s current URL’s scheme is not "https", then set serializedOrigin to `null`.
+        // If request’s origin is a tuple origin, its scheme is "https", and
+        // request’s current URL’s scheme is not "https", then set
+        // serializedOrigin to `null`.
         if (request.origin && urlHasHttpsScheme(request.origin) && !urlHasHttpsScheme(requestCurrentURL(request))) {
           serializedOrigin = null
         }
         break
       case 'same-origin':
-        // If request’s origin is not same origin with request’s current URL’s origin, then set serializedOrigin to `null`.
+        // If request’s origin is not same origin with request’s current URL’s
+        // origin, then set serializedOrigin to `null`.
         if (!sameOrigin(request, requestCurrentURL(request))) {
           serializedOrigin = null
         }
@@ -27755,10 +27773,8 @@ function appendRequestOriginHeader (request) {
         // Do nothing.
     }
 
-    if (serializedOrigin) {
-      // 2. Append (`Origin`, serializedOrigin) to request’s header list.
-      request.headersList.append('origin', serializedOrigin, true)
-    }
+    // 2. Append (`Origin`, serializedOrigin) to request’s header list.
+    request.headersList.append('origin', serializedOrigin, true)
   }
 }
 
@@ -31005,7 +31021,7 @@ try {
  * @param {(response: any) => void} onEstablish
  * @param {Partial<import('../../types/websocket').WebSocketInit>} options
  */
-function establishWebSocketConnection (url, protocols, ws, onEstablish, options) {
+function establishWebSocketConnection (url, protocols, client, ws, onEstablish, options) {
   // 1. Let requestURL be a copy of url, with its scheme set to "http", if url’s
   //    scheme is "ws", and to "https" otherwise.
   const requestURL = url
@@ -31018,6 +31034,7 @@ function establishWebSocketConnection (url, protocols, ws, onEstablish, options)
   //    and redirect mode is "error".
   const request = makeRequest({
     urlList: [requestURL],
+    client,
     serviceWorkers: 'none',
     referrer: 'no-referrer',
     mode: 'websocket',
@@ -32059,7 +32076,7 @@ class ByteParser extends Writable {
         const buffer = this.consume(8)
         const upper = buffer.readUInt32BE(0)
 
-        // 2^31 is the maxinimum bytes an arraybuffer can contain
+        // 2^31 is the maximum bytes an arraybuffer can contain
         // on 32-bit systems. Although, on 64-bit systems, this is
         // 2^53-1 bytes.
         // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Errors/Invalid_array_length
@@ -32161,6 +32178,10 @@ class ByteParser extends Writable {
       code = data.readUInt16BE(0)
     }
 
+    if (code !== undefined && !isValidStatusCode(code)) {
+      return { code: 1002, reason: 'Invalid status code', error: true }
+    }
+
     // https://datatracker.ietf.org/doc/html/rfc6455#section-7.1.6
     /** @type {Buffer} */
     let reason = data.subarray(2)
@@ -32168,10 +32189,6 @@ class ByteParser extends Writable {
     // Remove BOM
     if (reason[0] === 0xEF && reason[1] === 0xBB && reason[2] === 0xBF) {
       reason = reason.subarray(3)
-    }
-
-    if (code !== undefined && !isValidStatusCode(code)) {
-      return { code: 1002, reason: 'Invalid status code', error: true }
     }
 
     try {
@@ -32594,6 +32611,7 @@ class WebSocket extends EventTarget {
     this[kWebSocketURL] = new URL(urlRecord.href)
 
     // 11. Let client be this's relevant settings object.
+    const client = environmentSettingsObject.settingsObject
 
     // 12. Run this step in parallel:
 
@@ -32602,6 +32620,7 @@ class WebSocket extends EventTarget {
     this[kController] = establishWebSocketConnection(
       urlRecord,
       protocols,
+      client,
       this,
       (response) => this.#onConnectionEstablished(response),
       options
@@ -33017,7 +33036,7 @@ webidl.converters['DOMString or sequence<DOMString>'] = function (V, prefix, arg
   return webidl.converters.DOMString(V, prefix, argument)
 }
 
-// This implements the propsal made in https://github.com/whatwg/websockets/issues/42
+// This implements the proposal made in https://github.com/whatwg/websockets/issues/42
 webidl.converters.WebSocketInit = webidl.dictionaryConverter([
   {
     key: 'protocols',
