@@ -22026,6 +22026,7 @@ module.exports = {
   collectAnHTTPQuotedString,
   serializeAMimeType,
   removeChars,
+  removeHTTPWhitespace,
   minimizeSupportedMimeType,
   HTTP_TOKEN_CODEPOINTS,
   isomorphicDecode
@@ -31163,7 +31164,7 @@ const {
   kReceivedClose,
   kResponse
 } = __nccwpck_require__(9769)
-const { fireEvent, failWebsocketConnection, isClosing, isClosed, isEstablished } = __nccwpck_require__(9902)
+const { fireEvent, failWebsocketConnection, isClosing, isClosed, isEstablished, parseExtensions } = __nccwpck_require__(9902)
 const { channels } = __nccwpck_require__(8438)
 const { CloseEvent } = __nccwpck_require__(5033)
 const { makeRequest } = __nccwpck_require__(610)
@@ -31186,7 +31187,7 @@ try {
  * @param {URL} url
  * @param {string|string[]} protocols
  * @param {import('./websocket').WebSocket} ws
- * @param {(response: any) => void} onEstablish
+ * @param {(response: any, extensions: string[] | undefined) => void} onEstablish
  * @param {Partial<import('../../types/websocket').WebSocketInit>} options
  */
 function establishWebSocketConnection (url, protocols, client, ws, onEstablish, options) {
@@ -31246,12 +31247,11 @@ function establishWebSocketConnection (url, protocols, client, ws, onEstablish, 
   // 9. Let permessageDeflate be a user-agent defined
   //    "permessage-deflate" extension header value.
   // https://github.com/mozilla/gecko-dev/blob/ce78234f5e653a5d3916813ff990f053510227bc/netwerk/protocol/websocket/WebSocketChannel.cpp#L2673
-  // TODO: enable once permessage-deflate is supported
-  const permessageDeflate = '' // 'permessage-deflate; 15'
+  const permessageDeflate = 'permessage-deflate; client_max_window_bits'
 
   // 10. Append (`Sec-WebSocket-Extensions`, permessageDeflate) to
   //     request’s header list.
-  // request.headersList.append('sec-websocket-extensions', permessageDeflate)
+  request.headersList.append('sec-websocket-extensions', permessageDeflate)
 
   // 11. Fetch request with useParallelQueue set to true, and
   //     processResponse given response being these steps:
@@ -31322,10 +31322,15 @@ function establishWebSocketConnection (url, protocols, client, ws, onEstablish, 
       //    header field to determine which extensions are requested is
       //    discussed in Section 9.1.)
       const secExtension = response.headersList.get('Sec-WebSocket-Extensions')
+      let extensions
 
-      if (secExtension !== null && secExtension !== permessageDeflate) {
-        failWebsocketConnection(ws, 'Received different permessage-deflate than the one set.')
-        return
+      if (secExtension !== null) {
+        extensions = parseExtensions(secExtension)
+
+        if (!extensions.has('permessage-deflate')) {
+          failWebsocketConnection(ws, 'Sec-WebSocket-Extensions header does not match.')
+          return
+        }
       }
 
       // 6. If the response includes a |Sec-WebSocket-Protocol| header field
@@ -31361,7 +31366,7 @@ function establishWebSocketConnection (url, protocols, client, ws, onEstablish, 
         })
       }
 
-      onEstablish(response)
+      onEstablish(response, extensions)
     }
   })
 
@@ -31445,6 +31450,11 @@ function onSocketData (chunk) {
  */
 function onSocketClose () {
   const { ws } = this
+  const { [kResponse]: response } = ws
+
+  response.socket.off('data', onSocketData)
+  response.socket.off('close', onSocketClose)
+  response.socket.off('error', onSocketError)
 
   // If the TCP connection was closed after the
   // WebSocket closing handshake was completed, the WebSocket connection
@@ -31571,6 +31581,13 @@ const parserStates = {
 
 const emptyBuffer = Buffer.allocUnsafe(0)
 
+const sendHints = {
+  string: 1,
+  typedArray: 2,
+  arrayBuffer: 3,
+  blob: 4
+}
+
 module.exports = {
   uid,
   sentCloseFrameState,
@@ -31579,7 +31596,8 @@ module.exports = {
   opcodes,
   maxUnsigned16Bit,
   parserStates,
-  emptyBuffer
+  emptyBuffer,
+  sendHints
 }
 
 
@@ -32022,6 +32040,84 @@ module.exports = {
 
 /***/ }),
 
+/***/ 8236:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const { createInflateRaw, Z_DEFAULT_WINDOWBITS } = __nccwpck_require__(5628)
+const { isValidClientWindowBits } = __nccwpck_require__(9902)
+
+const tail = Buffer.from([0x00, 0x00, 0xff, 0xff])
+const kBuffer = Symbol('kBuffer')
+const kLength = Symbol('kLength')
+
+class PerMessageDeflate {
+  /** @type {import('node:zlib').InflateRaw} */
+  #inflate
+
+  #options = {}
+
+  constructor (extensions) {
+    this.#options.serverNoContextTakeover = extensions.has('server_no_context_takeover')
+    this.#options.serverMaxWindowBits = extensions.get('server_max_window_bits')
+  }
+
+  decompress (chunk, fin, callback) {
+    // An endpoint uses the following algorithm to decompress a message.
+    // 1.  Append 4 octets of 0x00 0x00 0xff 0xff to the tail end of the
+    //     payload of the message.
+    // 2.  Decompress the resulting data using DEFLATE.
+
+    if (!this.#inflate) {
+      let windowBits = Z_DEFAULT_WINDOWBITS
+
+      if (this.#options.serverMaxWindowBits) { // empty values default to Z_DEFAULT_WINDOWBITS
+        if (!isValidClientWindowBits(this.#options.serverMaxWindowBits)) {
+          callback(new Error('Invalid server_max_window_bits'))
+          return
+        }
+
+        windowBits = Number.parseInt(this.#options.serverMaxWindowBits)
+      }
+
+      this.#inflate = createInflateRaw({ windowBits })
+      this.#inflate[kBuffer] = []
+      this.#inflate[kLength] = 0
+
+      this.#inflate.on('data', (data) => {
+        this.#inflate[kBuffer].push(data)
+        this.#inflate[kLength] += data.length
+      })
+
+      this.#inflate.on('error', (err) => {
+        this.#inflate = null
+        callback(err)
+      })
+    }
+
+    this.#inflate.write(chunk)
+    if (fin) {
+      this.#inflate.write(tail)
+    }
+
+    this.#inflate.flush(() => {
+      const full = Buffer.concat(this.#inflate[kBuffer], this.#inflate[kLength])
+
+      this.#inflate[kBuffer].length = 0
+      this.#inflate[kLength] = 0
+
+      callback(null, full)
+    })
+  }
+}
+
+module.exports = { PerMessageDeflate }
+
+
+/***/ }),
+
 /***/ 5442:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
@@ -32045,6 +32141,7 @@ const {
 } = __nccwpck_require__(9902)
 const { WebsocketFrameSend } = __nccwpck_require__(2391)
 const { closeWebSocketConnection } = __nccwpck_require__(8380)
+const { PerMessageDeflate } = __nccwpck_require__(8236)
 
 // This code was influenced by ws released under the MIT license.
 // Copyright (c) 2011 Einar Otto Stangvik <einaros@gmail.com>
@@ -32061,10 +32158,18 @@ class ByteParser extends Writable {
   #info = {}
   #fragments = []
 
-  constructor (ws) {
+  /** @type {Map<string, PerMessageDeflate>} */
+  #extensions
+
+  constructor (ws, extensions) {
     super()
 
     this.ws = ws
+    this.#extensions = extensions == null ? new Map() : extensions
+
+    if (this.#extensions.has('permessage-deflate')) {
+      this.#extensions.set('permessage-deflate', new PerMessageDeflate(extensions))
+    }
   }
 
   /**
@@ -32119,7 +32224,16 @@ class ByteParser extends Writable {
         // the negotiated extensions defines the meaning of such a nonzero
         // value, the receiving endpoint MUST _Fail the WebSocket
         // Connection_.
-        if (rsv1 !== 0 || rsv2 !== 0 || rsv3 !== 0) {
+        // This document allocates the RSV1 bit of the WebSocket header for
+        // PMCEs and calls the bit the "Per-Message Compressed" bit.  On a
+        // WebSocket connection where a PMCE is in use, this bit indicates
+        // whether a message is compressed or not.
+        if (rsv1 !== 0 && !this.#extensions.has('permessage-deflate')) {
+          failWebsocketConnection(this.ws, 'Expected RSV1 to be clear.')
+          return
+        }
+
+        if (rsv2 !== 0 || rsv3 !== 0) {
           failWebsocketConnection(this.ws, 'RSV1, RSV2, RSV3 must be clear')
           return
         }
@@ -32150,7 +32264,7 @@ class ByteParser extends Writable {
           return
         }
 
-        if (isContinuationFrame(opcode) && this.#fragments.length === 0) {
+        if (isContinuationFrame(opcode) && this.#fragments.length === 0 && !this.#info.compressed) {
           failWebsocketConnection(this.ws, 'Unexpected continuation frame')
           return
         }
@@ -32166,6 +32280,7 @@ class ByteParser extends Writable {
 
         if (isTextBinaryFrame(opcode)) {
           this.#info.binaryType = opcode
+          this.#info.compressed = rsv1 !== 0
         }
 
         this.#info.opcode = opcode
@@ -32213,21 +32328,50 @@ class ByteParser extends Writable {
 
         if (isControlFrame(this.#info.opcode)) {
           this.#loop = this.parseControlFrame(body)
+          this.#state = parserStates.INFO
         } else {
-          this.#fragments.push(body)
+          if (!this.#info.compressed) {
+            this.#fragments.push(body)
 
-          // If the frame is not fragmented, a message has been received.
-          // If the frame is fragmented, it will terminate with a fin bit set
-          // and an opcode of 0 (continuation), therefore we handle that when
-          // parsing continuation frames, not here.
-          if (!this.#info.fragmented && this.#info.fin) {
-            const fullMessage = Buffer.concat(this.#fragments)
-            websocketMessageReceived(this.ws, this.#info.binaryType, fullMessage)
-            this.#fragments.length = 0
+            // If the frame is not fragmented, a message has been received.
+            // If the frame is fragmented, it will terminate with a fin bit set
+            // and an opcode of 0 (continuation), therefore we handle that when
+            // parsing continuation frames, not here.
+            if (!this.#info.fragmented && this.#info.fin) {
+              const fullMessage = Buffer.concat(this.#fragments)
+              websocketMessageReceived(this.ws, this.#info.binaryType, fullMessage)
+              this.#fragments.length = 0
+            }
+
+            this.#state = parserStates.INFO
+          } else {
+            this.#extensions.get('permessage-deflate').decompress(body, this.#info.fin, (error, data) => {
+              if (error) {
+                closeWebSocketConnection(this.ws, 1007, error.message, error.message.length)
+                return
+              }
+
+              this.#fragments.push(data)
+
+              if (!this.#info.fin) {
+                this.#state = parserStates.INFO
+                this.#loop = true
+                this.run(callback)
+                return
+              }
+
+              websocketMessageReceived(this.ws, this.#info.binaryType, Buffer.concat(this.#fragments))
+
+              this.#loop = true
+              this.#state = parserStates.INFO
+              this.run(callback)
+              this.#fragments.length = 0
+            })
+
+            this.#loop = false
+            break
           }
         }
-
-        this.#state = parserStates.INFO
       }
     }
   }
@@ -32361,7 +32505,6 @@ class ByteParser extends Writable {
       this.ws[kReadyState] = states.CLOSING
       this.ws[kReceivedClose] = true
 
-      this.end()
       return false
     } else if (opcode === opcodes.PING) {
       // Upon receipt of a Ping frame, an endpoint MUST send a Pong frame in
@@ -32407,6 +32550,99 @@ module.exports = {
 
 /***/ }),
 
+/***/ 4821:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const { WebsocketFrameSend } = __nccwpck_require__(2391)
+const { opcodes, sendHints } = __nccwpck_require__(3587)
+
+/** @type {Uint8Array} */
+const FastBuffer = Buffer[Symbol.species]
+
+class SendQueue {
+  #queued = new Set()
+  #size = 0
+
+  /** @type {import('net').Socket} */
+  #socket
+
+  constructor (socket) {
+    this.#socket = socket
+  }
+
+  add (item, cb, hint) {
+    if (hint !== sendHints.blob) {
+      const data = clone(item, hint)
+
+      if (this.#size === 0) {
+        this.#dispatch(data, cb, hint)
+      } else {
+        this.#queued.add([data, cb, true, hint])
+        this.#size++
+
+        this.#run()
+      }
+
+      return
+    }
+
+    const promise = item.arrayBuffer()
+    const queue = [null, cb, false, hint]
+    promise.then((ab) => {
+      queue[0] = clone(ab, hint)
+      queue[2] = true
+
+      this.#run()
+    })
+
+    this.#queued.add(queue)
+    this.#size++
+  }
+
+  #run () {
+    for (const queued of this.#queued) {
+      const [data, cb, done, hint] = queued
+
+      if (!done) return
+
+      this.#queued.delete(queued)
+      this.#size--
+
+      this.#dispatch(data, cb, hint)
+    }
+  }
+
+  #dispatch (data, cb, hint) {
+    const frame = new WebsocketFrameSend()
+    const opcode = hint === sendHints.string ? opcodes.TEXT : opcodes.BINARY
+
+    frame.frameData = data
+    const buffer = frame.createFrame(opcode)
+
+    this.#socket.write(buffer, cb)
+  }
+}
+
+function clone (data, hint) {
+  switch (hint) {
+    case sendHints.string:
+      return Buffer.from(data)
+    case sendHints.arrayBuffer:
+    case sendHints.blob:
+      return new FastBuffer(data)
+    case sendHints.typedArray:
+      return Buffer.copyBytesFrom(data)
+  }
+}
+
+module.exports = { SendQueue }
+
+
+/***/ }),
+
 /***/ 9769:
 /***/ ((module) => {
 
@@ -32437,6 +32673,7 @@ const { kReadyState, kController, kResponse, kBinaryType, kWebSocketURL } = __nc
 const { states, opcodes } = __nccwpck_require__(3587)
 const { ErrorEvent, createFastMessageEvent } = __nccwpck_require__(5033)
 const { isUtf8 } = __nccwpck_require__(2254)
+const { collectASequenceOfCodePointsFast, removeHTTPWhitespace } = __nccwpck_require__(7704)
 
 /* globals Blob */
 
@@ -32667,6 +32904,48 @@ function isValidOpcode (opcode) {
   return isTextBinaryFrame(opcode) || isContinuationFrame(opcode) || isControlFrame(opcode)
 }
 
+/**
+ * Parses a Sec-WebSocket-Extensions header value.
+ * @param {string} extensions
+ * @returns {Map<string, string>}
+ */
+// TODO(@Uzlopak, @KhafraDev): make compliant https://datatracker.ietf.org/doc/html/rfc6455#section-9.1
+function parseExtensions (extensions) {
+  const position = { position: 0 }
+  const extensionList = new Map()
+
+  while (position.position < extensions.length) {
+    const pair = collectASequenceOfCodePointsFast(';', extensions, position)
+    const [name, value = ''] = pair.split('=')
+
+    extensionList.set(
+      removeHTTPWhitespace(name, true, false),
+      removeHTTPWhitespace(value, false, true)
+    )
+
+    position.position++
+  }
+
+  return extensionList
+}
+
+/**
+ * @see https://www.rfc-editor.org/rfc/rfc7692#section-7.1.2.2
+ * @description "client-max-window-bits = 1*DIGIT"
+ * @param {string} value
+ */
+function isValidClientWindowBits (value) {
+  for (let i = 0; i < value.length; i++) {
+    const byte = value.charCodeAt(i)
+
+    if (byte < 0x30 || byte > 0x39) {
+      return false
+    }
+  }
+
+  return true
+}
+
 // https://nodejs.org/api/intl.html#detecting-internationalization-support
 const hasIntl = typeof process.versions.icu === 'string'
 const fatalDecoder = hasIntl ? new TextDecoder('utf-8', { fatal: true }) : undefined
@@ -32698,7 +32977,9 @@ module.exports = {
   isControlFrame,
   isContinuationFrame,
   isTextBinaryFrame,
-  isValidOpcode
+  isValidOpcode,
+  parseExtensions,
+  isValidClientWindowBits
 }
 
 
@@ -32713,7 +32994,7 @@ module.exports = {
 const { webidl } = __nccwpck_require__(4890)
 const { URLSerializer } = __nccwpck_require__(7704)
 const { environmentSettingsObject } = __nccwpck_require__(1310)
-const { staticPropertyDescriptors, states, sentCloseFrameState, opcodes } = __nccwpck_require__(3587)
+const { staticPropertyDescriptors, states, sentCloseFrameState, sendHints } = __nccwpck_require__(3587)
 const {
   kWebSocketURL,
   kReadyState,
@@ -32731,16 +33012,14 @@ const {
   fireEvent
 } = __nccwpck_require__(9902)
 const { establishWebSocketConnection, closeWebSocketConnection } = __nccwpck_require__(8380)
-const { WebsocketFrameSend } = __nccwpck_require__(2391)
 const { ByteParser } = __nccwpck_require__(5442)
 const { kEnumerableProperty, isBlobLike } = __nccwpck_require__(3983)
 const { getGlobalDispatcher } = __nccwpck_require__(1892)
 const { types } = __nccwpck_require__(7261)
 const { ErrorEvent, CloseEvent } = __nccwpck_require__(5033)
+const { SendQueue } = __nccwpck_require__(4821)
 
 let experimentalWarned = false
-
-const FastBuffer = Buffer[Symbol.species]
 
 // https://websockets.spec.whatwg.org/#interface-definition
 class WebSocket extends EventTarget {
@@ -32754,6 +33033,9 @@ class WebSocket extends EventTarget {
   #bufferedAmount = 0
   #protocol = ''
   #extensions = ''
+
+  /** @type {SendQueue} */
+  #sendQueue
 
   /**
    * @param {string} url
@@ -32845,7 +33127,7 @@ class WebSocket extends EventTarget {
       protocols,
       client,
       this,
-      (response) => this.#onConnectionEstablished(response),
+      (response, extensions) => this.#onConnectionEstablished(response, extensions),
       options
     )
 
@@ -32939,9 +33221,6 @@ class WebSocket extends EventTarget {
       return
     }
 
-    /** @type {import('stream').Duplex} */
-    const socket = this[kResponse].socket
-
     // If data is a string
     if (typeof data === 'string') {
       // If the WebSocket connection is established and the WebSocket
@@ -32955,14 +33234,12 @@ class WebSocket extends EventTarget {
       // the bufferedAmount attribute by the number of bytes needed to
       // express the argument as UTF-8.
 
-      const value = Buffer.from(data)
-      const frame = new WebsocketFrameSend(value)
-      const buffer = frame.createFrame(opcodes.TEXT)
+      const length = Buffer.byteLength(data)
 
-      this.#bufferedAmount += value.byteLength
-      socket.write(buffer, () => {
-        this.#bufferedAmount -= value.byteLength
-      })
+      this.#bufferedAmount += length
+      this.#sendQueue.add(data, () => {
+        this.#bufferedAmount -= length
+      }, sendHints.string)
     } else if (types.isArrayBuffer(data)) {
       // If the WebSocket connection is established, and the WebSocket
       // closing handshake has not yet started, then the user agent must
@@ -32976,14 +33253,10 @@ class WebSocket extends EventTarget {
       // increase the bufferedAmount attribute by the length of the
       // ArrayBuffer in bytes.
 
-      const value = new FastBuffer(data)
-      const frame = new WebsocketFrameSend(value)
-      const buffer = frame.createFrame(opcodes.BINARY)
-
-      this.#bufferedAmount += value.byteLength
-      socket.write(buffer, () => {
-        this.#bufferedAmount -= value.byteLength
-      })
+      this.#bufferedAmount += data.byteLength
+      this.#sendQueue.add(data, () => {
+        this.#bufferedAmount -= data.byteLength
+      }, sendHints.arrayBuffer)
     } else if (ArrayBuffer.isView(data)) {
       // If the WebSocket connection is established, and the WebSocket
       // closing handshake has not yet started, then the user agent must
@@ -32997,15 +33270,10 @@ class WebSocket extends EventTarget {
       // not throw an exception must increase the bufferedAmount attribute
       // by the length of data’s buffer in bytes.
 
-      const ab = new FastBuffer(data.buffer, data.byteOffset, data.byteLength)
-
-      const frame = new WebsocketFrameSend(ab)
-      const buffer = frame.createFrame(opcodes.BINARY)
-
-      this.#bufferedAmount += ab.byteLength
-      socket.write(buffer, () => {
-        this.#bufferedAmount -= ab.byteLength
-      })
+      this.#bufferedAmount += data.byteLength
+      this.#sendQueue.add(data, () => {
+        this.#bufferedAmount -= data.byteLength
+      }, sendHints.typedArray)
     } else if (isBlobLike(data)) {
       // If the WebSocket connection is established, and the WebSocket
       // closing handshake has not yet started, then the user agent must
@@ -33018,18 +33286,10 @@ class WebSocket extends EventTarget {
       // an exception must increase the bufferedAmount attribute by the size
       // of the Blob object’s raw data, in bytes.
 
-      const frame = new WebsocketFrameSend()
-
-      data.arrayBuffer().then((ab) => {
-        const value = new FastBuffer(ab)
-        frame.frameData = value
-        const buffer = frame.createFrame(opcodes.BINARY)
-
-        this.#bufferedAmount += value.byteLength
-        socket.write(buffer, () => {
-          this.#bufferedAmount -= value.byteLength
-        })
-      })
+      this.#bufferedAmount += data.size
+      this.#sendQueue.add(data, () => {
+        this.#bufferedAmount -= data.size
+      }, sendHints.blob)
     }
   }
 
@@ -33168,17 +33428,19 @@ class WebSocket extends EventTarget {
   /**
    * @see https://websockets.spec.whatwg.org/#feedback-from-the-protocol
    */
-  #onConnectionEstablished (response) {
+  #onConnectionEstablished (response, parsedExtensions) {
     // processResponse is called when the "response’s header list has been received and initialized."
     // once this happens, the connection is open
     this[kResponse] = response
 
-    const parser = new ByteParser(this)
+    const parser = new ByteParser(this, parsedExtensions)
     parser.on('drain', onParserDrain)
     parser.on('error', onParserError.bind(this))
 
     response.socket.ws = this
     this[kByteParser] = parser
+
+    this.#sendQueue = new SendQueue(response.socket)
 
     // 1. Change the ready state to OPEN (1).
     this[kReadyState] = states.OPEN
@@ -33268,7 +33530,7 @@ webidl.converters.WebSocketInit = webidl.dictionaryConverter([
   },
   {
     key: 'dispatcher',
-    converter: (V) => V,
+    converter: webidl.converters.any,
     defaultValue: () => getGlobalDispatcher()
   },
   {
