@@ -21025,7 +21025,7 @@ function bodyMixinMethods (instance) {
         // Return a Blob whose contents are bytes and type attribute
         // is mimeType.
         return new Blob([bytes], { type: mimeType })
-      }, instance, false)
+      }, instance)
     },
 
     arrayBuffer () {
@@ -21034,21 +21034,20 @@ function bodyMixinMethods (instance) {
       // given a byte sequence bytes: return a new ArrayBuffer
       // whose contents are bytes.
       return consumeBody(this, (bytes) => {
-        // Note: arrayBuffer already cloned.
-        return bytes.buffer
-      }, instance, true)
+        return new Uint8Array(bytes).buffer
+      }, instance)
     },
 
     text () {
       // The text() method steps are to return the result of running
       // consume body with this and UTF-8 decode.
-      return consumeBody(this, utf8DecodeBytes, instance, false)
+      return consumeBody(this, utf8DecodeBytes, instance)
     },
 
     json () {
       // The json() method steps are to return the result of running
       // consume body with this and parse JSON from bytes.
-      return consumeBody(this, parseJSONFromBytes, instance, false)
+      return consumeBody(this, parseJSONFromBytes, instance)
     },
 
     formData () {
@@ -21100,7 +21099,7 @@ function bodyMixinMethods (instance) {
         throw new TypeError(
           'Content-Type was not one of "multipart/form-data" or "application/x-www-form-urlencoded".'
         )
-      }, instance, false)
+      }, instance)
     },
 
     bytes () {
@@ -21108,8 +21107,8 @@ function bodyMixinMethods (instance) {
       // with this and the following step given a byte sequence bytes: return the
       // result of creating a Uint8Array from bytes in this’s relevant realm.
       return consumeBody(this, (bytes) => {
-        return new Uint8Array(bytes.buffer, 0, bytes.byteLength)
-      }, instance, true)
+        return new Uint8Array(bytes)
+      }, instance)
     }
   }
 
@@ -21125,9 +21124,8 @@ function mixinBody (prototype) {
  * @param {Response|Request} object
  * @param {(value: unknown) => unknown} convertBytesToJSValue
  * @param {Response|Request} instance
- * @param {boolean} [shouldClone]
  */
-async function consumeBody (object, convertBytesToJSValue, instance, shouldClone) {
+async function consumeBody (object, convertBytesToJSValue, instance) {
   webidl.brandCheck(object, instance)
 
   // 1. If object is unusable, then return a promise rejected
@@ -21165,7 +21163,7 @@ async function consumeBody (object, convertBytesToJSValue, instance, shouldClone
 
   // 6. Otherwise, fully read object’s body given successSteps,
   //    errorSteps, and object’s relevant global object.
-  await fullyReadBody(object[kState].body, successSteps, errorSteps, shouldClone)
+  await fullyReadBody(object[kState].body, successSteps, errorSteps)
 
   // 7. Return promise.
   return promise.promise
@@ -27964,10 +27962,13 @@ function appendRequestOriginHeader (request) {
   // TODO: implement "byte-serializing a request origin"
   let serializedOrigin = request.origin
 
-  // "'client' is changed to an origin during fetching."
-  // This doesn't happen in undici (in most cases) because undici, by default,
-  // has no concept of origin.
-  if (serializedOrigin === 'client') {
+  // - "'client' is changed to an origin during fetching."
+  //   This doesn't happen in undici (in most cases) because undici, by default,
+  //   has no concept of origin.
+  // - request.origin can also be set to request.client.origin (client being
+  //   an environment settings object), which is undefined without using
+  //   setGlobalOrigin.
+  if (serializedOrigin === 'client' || serializedOrigin === undefined) {
     return
   }
 
@@ -28730,7 +28731,7 @@ function iteratorMixin (name, object, kInternalIterator, keyIndex = 0, valueInde
 /**
  * @see https://fetch.spec.whatwg.org/#body-fully-read
  */
-async function fullyReadBody (body, processBody, processBodyError, shouldClone) {
+async function fullyReadBody (body, processBody, processBodyError) {
   // 1. If taskDestination is null, then set taskDestination to
   //    the result of starting a new parallel queue.
 
@@ -28756,7 +28757,7 @@ async function fullyReadBody (body, processBody, processBodyError, shouldClone) 
 
   // 5. Read all bytes from reader, given successSteps and errorSteps.
   try {
-    successSteps(await readAllBytes(reader, shouldClone))
+    successSteps(await readAllBytes(reader))
   } catch (e) {
     errorSteps(e)
   }
@@ -28804,9 +28805,8 @@ function isomorphicEncode (input) {
  * @see https://streams.spec.whatwg.org/#readablestreamdefaultreader-read-all-bytes
  * @see https://streams.spec.whatwg.org/#read-loop
  * @param {ReadableStreamDefaultReader} reader
- * @param {boolean} [shouldClone]
  */
-async function readAllBytes (reader, shouldClone) {
+async function readAllBytes (reader) {
   const bytes = []
   let byteLength = 0
 
@@ -28815,13 +28815,6 @@ async function readAllBytes (reader, shouldClone) {
 
     if (done) {
       // 1. Call successSteps with bytes.
-      if (bytes.length === 1) {
-        const { buffer, byteOffset, byteLength } = bytes[0]
-        if (shouldClone === false) {
-          return Buffer.from(buffer, byteOffset, byteLength)
-        }
-        return Buffer.from(buffer.slice(byteOffset, byteOffset + byteLength), 0, byteLength)
-      }
       return Buffer.concat(bytes, byteLength)
     }
 
