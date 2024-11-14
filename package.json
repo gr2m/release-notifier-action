@@ -17,7 +17,7 @@
   "dependencies": {
     "@actions/core": "^1.11.1",
     "octokit": "^4.0.2",
-    "undici": "^6.20.0"
+    "undici": "^6.21.0"
   },
   "release": {
     "branches": [
