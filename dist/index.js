@@ -43048,7 +43048,7 @@ var external_node_buffer_ = __nccwpck_require__(4573);
 
 
 // pkg/dist-src/version.js
-var webhooks_methods_dist_node_VERSION = "5.1.0";
+var webhooks_methods_dist_node_VERSION = "5.1.1";
 
 // pkg/dist-src/node/sign.js
 async function sign(secret, payload) {
@@ -43584,10 +43584,11 @@ function createEventHandler(options) {
 // pkg/dist-src/verify-and-receive.js
 
 async function verifyAndReceive(state, event) {
-  const matchesSignature = await verify(
+  const matchesSignature = await verifyWithFallback(
     state.secret,
     event.payload,
-    event.signature
+    event.signature,
+    state.additionalSecrets
   ).catch(() => false);
   if (!matchesSignature) {
     const error = new Error(
@@ -43775,6 +43776,7 @@ var Webhooks = class {
     const state = {
       eventHandler: createEventHandler(options),
       secret: options.secret,
+      additionalSecrets: options.additionalSecrets,
       hooks: {},
       log: createLogger(options.log)
     };
@@ -43797,7 +43799,7 @@ var Webhooks = class {
 
 
 // pkg/dist-src/version.js
-var app_dist_node_VERSION = "15.1.2";
+var app_dist_node_VERSION = "15.1.3";
 
 // pkg/dist-src/webhooks.js
 
