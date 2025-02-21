@@ -35996,9 +35996,9 @@ function addQueryParameters(url, parameters) {
 }
 
 // pkg/dist-src/util/extract-url-variable-names.js
-var urlVariableRegex = /\{[^}]+\}/g;
+var urlVariableRegex = /\{[^{}}]+\}/g;
 function removeNonChars(variableName) {
-  return variableName.replace(/^\W+|\W+$/g, "").split(/,/);
+  return variableName.replace(/(?:^\W+)|(?:(?<!\W)\W+$)/g, "").split(/,/);
 }
 function extractUrlVariableNames(url) {
   const matches = url.match(urlVariableRegex);
@@ -36184,7 +36184,7 @@ function parse(options) {
     }
     if (url.endsWith("/graphql")) {
       if (options.mediaType.previews?.length) {
-        const previewsFromAcceptHeader = headers.accept.match(/[\w-]+(?=-preview)/g) || [];
+        const previewsFromAcceptHeader = headers.accept.match(/(?<![\w-])[\w-]+(?=-preview)/g) || [];
         headers.accept = previewsFromAcceptHeader.concat(options.mediaType.previews).map((preview) => {
           const format = options.mediaType.format ? `.${options.mediaType.format}` : "+json";
           return `application/vnd.github.${preview}-preview${format}`;
@@ -36268,7 +36268,7 @@ class RequestError extends Error {
     if (options.request.headers.authorization) {
       requestCopy.headers = Object.assign({}, options.request.headers, {
         authorization: options.request.headers.authorization.replace(
-          / .*$/,
+          /(?<! ) .*$/,
           " [REDACTED]"
         )
       });
@@ -36374,7 +36374,7 @@ async function fetchWrapper(requestOptions) {
     data: ""
   };
   if ("deprecation" in responseHeaders) {
-    const matches = responseHeaders.link && responseHeaders.link.match(/<([^>]+)>; rel="deprecation"/);
+    const matches = responseHeaders.link && responseHeaders.link.match(/<([^<>]+)>; rel="deprecation"/);
     const deprecationLink = matches && matches.pop();
     log.warn(
       `[@octokit/request] "${requestOptions.method} ${requestOptions.url}" is deprecated. It is scheduled to be removed on ${responseHeaders.sunset}${deprecationLink ? `. See ${deprecationLink}` : ""}`
@@ -36415,7 +36415,7 @@ async function getResponseData(response) {
     return response.text().catch(() => "");
   }
   const mimetype = (0,fast_content_type_parse/* safeParse */.xL)(contentType);
-  if (mimetype.type === "application/json") {
+  if (isJSONResponse(mimetype)) {
     let text = "";
     try {
       text = await response.text();
@@ -36428,6 +36428,9 @@ async function getResponseData(response) {
   } else {
     return response.arrayBuffer().catch(() => new ArrayBuffer(0));
   }
+}
+function isJSONResponse(mimetype) {
+  return mimetype.type === "application/json" || mimetype.type === "application/scim+json";
 }
 function toErrorMessage(data) {
   if (typeof data === "string") {
@@ -36651,7 +36654,7 @@ var createTokenAuth = function createTokenAuth2(token) {
 
 
 ;// CONCATENATED MODULE: ./node_modules/@octokit/core/dist-src/version.js
-const version_VERSION = "6.1.3";
+const version_VERSION = "6.1.4";
 
 
 ;// CONCATENATED MODULE: ./node_modules/@octokit/core/dist-src/index.js
@@ -36836,7 +36839,7 @@ function iterator(octokit, route, parameters) {
           const response = await requestMethod({ method, url, headers });
           const normalizedResponse = normalizePaginatedListResponse(response);
           url = ((normalizedResponse.headers.link || "").match(
-            /<([^>]+)>;\s*rel="next"/
+            /<([^<>]+)>;\s*rel="next"/
           ) || [])[1];
           return { value: normalizedResponse };
         } catch (error) {
@@ -37350,7 +37353,7 @@ function paginateGraphQL(octokit) {
 
 
 ;// CONCATENATED MODULE: ./node_modules/@octokit/plugin-rest-endpoint-methods/dist-src/version.js
-const dist_src_version_VERSION = "13.3.0";
+const dist_src_version_VERSION = "13.3.1";
 
 //# sourceMappingURL=version.js.map
 
@@ -39966,8 +39969,7 @@ function getWebFlowAuthorizationUrl({
 // pkg/dist-src/exchange-web-flow-code.js
 
 async function exchangeWebFlowCode(options) {
-  const request = options.request || /* istanbul ignore next: we always pass a custom request in tests */
-  dist_bundle_request;
+  const request = options.request || dist_bundle_request;
   const response = await oauthRequest(
     request,
     "POST /login/oauth/access_token",
@@ -40007,8 +40009,7 @@ function toTimestamp(apiTimeInMs, expirationInSeconds) {
 // pkg/dist-src/create-device-code.js
 
 async function createDeviceCode(options) {
-  const request = options.request || /* istanbul ignore next: we always pass a custom request in tests */
-  dist_bundle_request;
+  const request = options.request || dist_bundle_request;
   const parameters = {
     client_id: options.clientId
   };
@@ -40021,8 +40022,7 @@ async function createDeviceCode(options) {
 // pkg/dist-src/exchange-device-code.js
 
 async function exchangeDeviceCode(options) {
-  const request = options.request || /* istanbul ignore next: we always pass a custom request in tests */
-  dist_bundle_request;
+  const request = options.request || dist_bundle_request;
   const response = await oauthRequest(
     request,
     "POST /login/oauth/access_token",
@@ -40063,8 +40063,7 @@ function toTimestamp2(apiTimeInMs, expirationInSeconds) {
 // pkg/dist-src/check-token.js
 
 async function checkToken(options) {
-  const request = options.request || /* istanbul ignore next: we always pass a custom request in tests */
-  dist_bundle_request;
+  const request = options.request || dist_bundle_request;
   const response = await request("POST /applications/{client_id}/token", {
     headers: {
       authorization: `basic ${btoa(
@@ -40092,8 +40091,7 @@ async function checkToken(options) {
 // pkg/dist-src/refresh-token.js
 
 async function refreshToken(options) {
-  const request = options.request || /* istanbul ignore next: we always pass a custom request in tests */
-  dist_bundle_request;
+  const request = options.request || dist_bundle_request;
   const response = await oauthRequest(
     request,
     "POST /login/oauth/access_token",
@@ -40134,8 +40132,7 @@ async function scopeToken(options) {
     token,
     ...requestOptions
   } = options;
-  const request = optionsRequest || /* istanbul ignore next: we always pass a custom request in tests */
-  dist_bundle_request;
+  const request = options.request || dist_bundle_request;
   const response = await request(
     "POST /applications/{client_id}/token/scoped",
     {
@@ -40162,8 +40159,7 @@ async function scopeToken(options) {
 // pkg/dist-src/reset-token.js
 
 async function resetToken(options) {
-  const request = options.request || /* istanbul ignore next: we always pass a custom request in tests */
-  dist_bundle_request;
+  const request = options.request || dist_bundle_request;
   const auth = btoa(`${options.clientId}:${options.clientSecret}`);
   const response = await request(
     "PATCH /applications/{client_id}/token",
@@ -40193,8 +40189,7 @@ async function resetToken(options) {
 // pkg/dist-src/delete-token.js
 
 async function deleteToken(options) {
-  const request = options.request || /* istanbul ignore next: we always pass a custom request in tests */
-  dist_bundle_request;
+  const request = options.request || dist_bundle_request;
   const auth = btoa(`${options.clientId}:${options.clientSecret}`);
   return request(
     "DELETE /applications/{client_id}/token",
@@ -40211,8 +40206,7 @@ async function deleteToken(options) {
 // pkg/dist-src/delete-authorization.js
 
 async function deleteAuthorization(options) {
-  const request = options.request || /* istanbul ignore next: we always pass a custom request in tests */
-  dist_bundle_request;
+  const request = options.request || dist_bundle_request;
   const auth = btoa(`${options.clientId}:${options.clientSecret}`);
   return request(
     "DELETE /applications/{client_id}/grant",
@@ -42133,7 +42127,7 @@ async function sendRequestWithRetries(state, request, options, createdAt, retrie
 }
 
 // pkg/dist-src/version.js
-var dist_node_VERSION = "7.1.4";
+var dist_node_VERSION = "7.1.5";
 
 // pkg/dist-src/index.js
 
@@ -42193,7 +42187,6 @@ async function auth_unauthenticated_dist_node_auth(reason) {
 }
 
 // pkg/dist-src/is-rate-limit-error.js
-
 function isRateLimitError(error) {
   if (error.status !== 403) {
     return false;
@@ -42205,7 +42198,6 @@ function isRateLimitError(error) {
 }
 
 // pkg/dist-src/is-abuse-limit-error.js
-
 var REGEX_ABUSE_LIMIT_MESSAGE = /\babuse\b/i;
 function isAbuseLimitError(error) {
   if (error.status !== 403) {
@@ -42265,7 +42257,7 @@ var createUnauthenticatedAuth = function createUnauthenticatedAuth2(options) {
 
 
 // pkg/dist-src/version.js
-var oauth_app_dist_node_VERSION = "7.1.5";
+var oauth_app_dist_node_VERSION = "7.1.6";
 
 // pkg/dist-src/add-event-handler.js
 function addEventHandler(state, eventName, eventHandler) {
@@ -43385,11 +43377,14 @@ var emitterEventNames = [
   "repository_vulnerability_alert.resolve",
   "secret_scanning_alert",
   "secret_scanning_alert.created",
+  "secret_scanning_alert.publicly_leaked",
   "secret_scanning_alert.reopened",
   "secret_scanning_alert.resolved",
   "secret_scanning_alert.validated",
   "secret_scanning_alert_location",
   "secret_scanning_alert_location.created",
+  "secret_scanning_scan",
+  "secret_scanning_scan.completed",
   "security_advisory",
   "security_advisory.published",
   "security_advisory.updated",
@@ -43799,7 +43794,7 @@ var Webhooks = class {
 
 
 // pkg/dist-src/version.js
-var app_dist_node_VERSION = "15.1.3";
+var app_dist_node_VERSION = "15.1.4";
 
 // pkg/dist-src/webhooks.js
 
