@@ -4959,6 +4959,7 @@ const { InvalidArgumentError } = errors
 const api = __nccwpck_require__(6615)
 const buildConnector = __nccwpck_require__(9136)
 const MockClient = __nccwpck_require__(7365)
+const { MockCallHistory, MockCallHistoryLog } = __nccwpck_require__(431)
 const MockAgent = __nccwpck_require__(7501)
 const MockPool = __nccwpck_require__(4004)
 const mockErrors = __nccwpck_require__(2429)
@@ -5114,6 +5115,8 @@ module.exports.connect = makeDispatcher(api.connect)
 module.exports.upgrade = makeDispatcher(api.upgrade)
 
 module.exports.MockClient = MockClient
+module.exports.MockCallHistory = MockCallHistory
+module.exports.MockCallHistoryLog = MockCallHistoryLog
 module.exports.MockPool = MockPool
 module.exports.MockAgent = MockAgent
 module.exports.mockErrors = mockErrors
@@ -6778,7 +6781,13 @@ class MemoryCacheStore {
     const entry = this.#entries.get(topLevelKey)?.find((entry) => (
       entry.deleteAt > now &&
       entry.method === key.method &&
-      (entry.vary == null || Object.keys(entry.vary).every(headerName => entry.vary[headerName] === key.headers?.[headerName]))
+      (entry.vary == null || Object.keys(entry.vary).every(headerName => {
+        if (entry.vary[headerName] === null) {
+          return key.headers[headerName] === undefined
+        }
+
+        return entry.vary[headerName] === key.headers[headerName]
+      }))
     ))
 
     return entry == null
@@ -7116,7 +7125,7 @@ module.exports = class SqliteCacheStore {
     const value = this.#findValue(key)
     return value
       ? {
-          body: value.body ? Buffer.from(value.body.buffer) : undefined,
+          body: value.body ? Buffer.from(value.body.buffer, value.body.byteOffset, value.body.byteLength) : undefined,
           statusCode: value.statusCode,
           statusMessage: value.statusMessage,
           headers: value.headers ? JSON.parse(value.headers) : undefined,
@@ -7295,10 +7304,6 @@ module.exports = class SqliteCacheStore {
       let matches = true
 
       if (value.vary) {
-        if (!headers) {
-          return undefined
-        }
-
         const vary = JSON.parse(value.vary)
 
         for (const header in vary) {
@@ -7324,18 +7329,21 @@ module.exports = class SqliteCacheStore {
  * @returns {boolean}
  */
 function headerValueEquals (lhs, rhs) {
+  if (lhs == null && rhs == null) {
+    return true
+  }
+
+  if ((lhs == null && rhs != null) ||
+      (lhs != null && rhs == null)) {
+    return false
+  }
+
   if (Array.isArray(lhs) && Array.isArray(rhs)) {
     if (lhs.length !== rhs.length) {
       return false
     }
 
-    for (let i = 0; i < lhs.length; i++) {
-      if (rhs.includes(lhs[i])) {
-        return false
-      }
-    }
-
-    return true
+    return lhs.every((x, i) => x === rhs[i])
   }
 
   return lhs === rhs
@@ -12744,7 +12752,7 @@ class Client extends DispatcherBase {
         allowH2,
         socketPath,
         timeout: connectTimeout,
-        ...(autoSelectFamily ? { autoSelectFamily, autoSelectFamilyAttemptTimeout } : undefined),
+        ...(typeof autoSelectFamily === 'boolean' ? { autoSelectFamily, autoSelectFamilyAttemptTimeout } : undefined),
         ...connect
       })
     }
@@ -13389,8 +13397,6 @@ const DEFAULT_PORTS = {
   'https:': 443
 }
 
-let experimentalWarned = false
-
 class EnvHttpProxyAgent extends DispatcherBase {
   #noProxyValue = null
   #noProxyEntries = null
@@ -13399,13 +13405,6 @@ class EnvHttpProxyAgent extends DispatcherBase {
   constructor (opts = {}) {
     super()
     this.#opts = opts
-
-    if (!experimentalWarned) {
-      experimentalWarned = true
-      process.emitWarning('EnvHttpProxyAgent is experimental, expect them to change at any time.', {
-        code: 'UNDICI-EHPA'
-      })
-    }
 
     const { httpProxy, httpsProxy, noProxy, ...agentOpts } = opts
 
@@ -14018,7 +14017,7 @@ class Pool extends PoolBase {
         allowH2,
         socketPath,
         timeout: connectTimeout,
-        ...(autoSelectFamily ? { autoSelectFamily, autoSelectFamilyAttemptTimeout } : undefined),
+        ...(typeof autoSelectFamily === 'boolean' ? { autoSelectFamily, autoSelectFamilyAttemptTimeout } : undefined),
         ...connect
       })
     }
@@ -14030,6 +14029,20 @@ class Pool extends PoolBase {
       ? { ...options.interceptors }
       : undefined
     this[kFactory] = factory
+
+    this.on('connectionError', (origin, targets, error) => {
+      // If a connection error occurs, we remove the client from the pool,
+      // and emit a connectionError event. They will not be re-used.
+      // Fixes https://github.com/nodejs/undici/issues/3895
+      for (const target of targets) {
+        // Do not use kRemoveClient here, as it will close the client,
+        // but the client cannot be closed in this state.
+        const idx = this[kClients].indexOf(target)
+        if (idx !== -1) {
+          this[kClients].splice(idx, 1)
+        }
+      }
+    })
   }
 
   [kGetDispatcher] () {
@@ -15247,8 +15260,8 @@ const {
 } = __nccwpck_require__(3440)
 
 function calculateRetryAfterHeader (retryAfter) {
-  const current = Date.now()
-  return new Date(retryAfter).getTime() - current
+  const retryTime = new Date(retryAfter).getTime()
+  return isNaN(retryTime) ? 0 : retryTime - Date.now()
 }
 
 class RetryHandler {
@@ -15360,7 +15373,7 @@ class RetryHandler {
     if (retryAfterHeader) {
       retryAfterHeader = Number(retryAfterHeader)
       retryAfterHeader = Number.isNaN(retryAfterHeader)
-        ? calculateRetryAfterHeader(retryAfterHeader)
+        ? calculateRetryAfterHeader(headers['retry-after'])
         : retryAfterHeader * 1e3 // Retry-After is in seconds
     }
 
@@ -17467,31 +17480,44 @@ const {
   kNetConnect,
   kGetNetConnect,
   kOptions,
-  kFactory
+  kFactory,
+  kMockAgentRegisterCallHistory,
+  kMockAgentIsCallHistoryEnabled,
+  kMockAgentAddCallHistoryLog,
+  kMockAgentMockCallHistoryInstance,
+  kMockCallHistoryAddLog
 } = __nccwpck_require__(1117)
 const MockClient = __nccwpck_require__(7365)
 const MockPool = __nccwpck_require__(4004)
-const { matchValue, buildMockOptions } = __nccwpck_require__(3397)
+const { matchValue, buildAndValidateMockOptions } = __nccwpck_require__(3397)
 const { InvalidArgumentError, UndiciError } = __nccwpck_require__(8707)
 const Dispatcher = __nccwpck_require__(883)
 const PendingInterceptorsFormatter = __nccwpck_require__(6142)
+const { MockCallHistory } = __nccwpck_require__(431)
 
 class MockAgent extends Dispatcher {
   constructor (opts) {
     super(opts)
 
+    const mockOptions = buildAndValidateMockOptions(opts)
+
     this[kNetConnect] = true
     this[kIsMockActive] = true
+    this[kMockAgentIsCallHistoryEnabled] = mockOptions?.enableCallHistory ?? false
 
     // Instantiate Agent and encapsulate
-    if ((opts?.agent && typeof opts.agent.dispatch !== 'function')) {
+    if (opts?.agent && typeof opts.agent.dispatch !== 'function') {
       throw new InvalidArgumentError('Argument opts.agent must implement Agent')
     }
     const agent = opts?.agent ? opts.agent : new Agent(opts)
     this[kAgent] = agent
 
     this[kClients] = agent[kClients]
-    this[kOptions] = buildMockOptions(opts)
+    this[kOptions] = mockOptions
+
+    if (this[kMockAgentIsCallHistoryEnabled]) {
+      this[kMockAgentRegisterCallHistory]()
+    }
   }
 
   get (origin) {
@@ -17507,10 +17533,14 @@ class MockAgent extends Dispatcher {
   dispatch (opts, handler) {
     // Call MockAgent.get to perform additional setup before dispatching as normal
     this.get(opts.origin)
+
+    this[kMockAgentAddCallHistoryLog](opts)
+
     return this[kAgent].dispatch(opts, handler)
   }
 
   async close () {
+    this.clearCallHistory()
     await this[kAgent].close()
     this[kClients].clear()
   }
@@ -17541,10 +17571,48 @@ class MockAgent extends Dispatcher {
     this[kNetConnect] = false
   }
 
+  enableCallHistory () {
+    this[kMockAgentIsCallHistoryEnabled] = true
+
+    return this
+  }
+
+  disableCallHistory () {
+    this[kMockAgentIsCallHistoryEnabled] = false
+
+    return this
+  }
+
+  getCallHistory () {
+    return this[kMockAgentMockCallHistoryInstance]
+  }
+
+  clearCallHistory () {
+    if (this[kMockAgentMockCallHistoryInstance] !== undefined) {
+      this[kMockAgentMockCallHistoryInstance].clear()
+    }
+  }
+
   // This is required to bypass issues caused by using global symbols - see:
   // https://github.com/nodejs/undici/issues/1447
   get isMockActive () {
     return this[kIsMockActive]
+  }
+
+  [kMockAgentRegisterCallHistory] () {
+    if (this[kMockAgentMockCallHistoryInstance] === undefined) {
+      this[kMockAgentMockCallHistoryInstance] = new MockCallHistory()
+    }
+  }
+
+  [kMockAgentAddCallHistoryLog] (opts) {
+    if (this[kMockAgentIsCallHistoryEnabled]) {
+      // additional setup when enableCallHistory class method is used after mockAgent instantiation
+      this[kMockAgentRegisterCallHistory]()
+
+      // add call history log on every call (intercepted or not)
+      this[kMockAgentMockCallHistoryInstance][kMockCallHistoryAddLog](opts)
+    }
   }
 
   [kMockAgentSet] (origin, dispatcher) {
@@ -17611,6 +17679,262 @@ class MockAgent extends Dispatcher {
 }
 
 module.exports = MockAgent
+
+
+/***/ }),
+
+/***/ 431:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const { kMockCallHistoryAddLog } = __nccwpck_require__(1117)
+const { InvalidArgumentError } = __nccwpck_require__(8707)
+
+function handleFilterCallsWithOptions (criteria, options, handler, store) {
+  switch (options.operator) {
+    case 'OR':
+      store.push(...handler(criteria))
+
+      return store
+    case 'AND':
+      return handler.call({ logs: store }, criteria)
+    default:
+      // guard -- should never happens because buildAndValidateFilterCallsOptions is called before
+      throw new InvalidArgumentError('options.operator must to be a case insensitive string equal to \'OR\' or \'AND\'')
+  }
+}
+
+function buildAndValidateFilterCallsOptions (options = {}) {
+  const finalOptions = {}
+
+  if ('operator' in options) {
+    if (typeof options.operator !== 'string' || (options.operator.toUpperCase() !== 'OR' && options.operator.toUpperCase() !== 'AND')) {
+      throw new InvalidArgumentError('options.operator must to be a case insensitive string equal to \'OR\' or \'AND\'')
+    }
+
+    return {
+      ...finalOptions,
+      operator: options.operator.toUpperCase()
+    }
+  }
+
+  return finalOptions
+}
+
+function makeFilterCalls (parameterName) {
+  return (parameterValue) => {
+    if (typeof parameterValue === 'string' || parameterValue == null) {
+      return this.logs.filter((log) => {
+        return log[parameterName] === parameterValue
+      })
+    }
+    if (parameterValue instanceof RegExp) {
+      return this.logs.filter((log) => {
+        return parameterValue.test(log[parameterName])
+      })
+    }
+
+    throw new InvalidArgumentError(`${parameterName} parameter should be one of string, regexp, undefined or null`)
+  }
+}
+function computeUrlWithMaybeSearchParameters (requestInit) {
+  // path can contains query url parameters
+  // or query can contains query url parameters
+  try {
+    const url = new URL(requestInit.path, requestInit.origin)
+
+    // requestInit.path contains query url parameters
+    // requestInit.query is then undefined
+    if (url.search.length !== 0) {
+      return url
+    }
+
+    // requestInit.query can be populated here
+    url.search = new URLSearchParams(requestInit.query).toString()
+
+    return url
+  } catch (error) {
+    throw new InvalidArgumentError('An error occurred when computing MockCallHistoryLog.url', { cause: error })
+  }
+}
+
+class MockCallHistoryLog {
+  constructor (requestInit = {}) {
+    this.body = requestInit.body
+    this.headers = requestInit.headers
+    this.method = requestInit.method
+
+    const url = computeUrlWithMaybeSearchParameters(requestInit)
+
+    this.fullUrl = url.toString()
+    this.origin = url.origin
+    this.path = url.pathname
+    this.searchParams = Object.fromEntries(url.searchParams)
+    this.protocol = url.protocol
+    this.host = url.host
+    this.port = url.port
+    this.hash = url.hash
+  }
+
+  toMap () {
+    return new Map([
+      ['protocol', this.protocol],
+      ['host', this.host],
+      ['port', this.port],
+      ['origin', this.origin],
+      ['path', this.path],
+      ['hash', this.hash],
+      ['searchParams', this.searchParams],
+      ['fullUrl', this.fullUrl],
+      ['method', this.method],
+      ['body', this.body],
+      ['headers', this.headers]]
+    )
+  }
+
+  toString () {
+    const options = { betweenKeyValueSeparator: '->', betweenPairSeparator: '|' }
+    let result = ''
+
+    this.toMap().forEach((value, key) => {
+      if (typeof value === 'string' || value === undefined || value === null) {
+        result = `${result}${key}${options.betweenKeyValueSeparator}${value}${options.betweenPairSeparator}`
+      }
+      if ((typeof value === 'object' && value !== null) || Array.isArray(value)) {
+        result = `${result}${key}${options.betweenKeyValueSeparator}${JSON.stringify(value)}${options.betweenPairSeparator}`
+      }
+      // maybe miss something for non Record / Array headers and searchParams here
+    })
+
+    // delete last betweenPairSeparator
+    return result.slice(0, -1)
+  }
+}
+
+class MockCallHistory {
+  logs = []
+
+  calls () {
+    return this.logs
+  }
+
+  firstCall () {
+    return this.logs.at(0)
+  }
+
+  lastCall () {
+    return this.logs.at(-1)
+  }
+
+  nthCall (number) {
+    if (typeof number !== 'number') {
+      throw new InvalidArgumentError('nthCall must be called with a number')
+    }
+    if (!Number.isInteger(number)) {
+      throw new InvalidArgumentError('nthCall must be called with an integer')
+    }
+    if (Math.sign(number) !== 1) {
+      throw new InvalidArgumentError('nthCall must be called with a positive value. use firstCall or lastCall instead')
+    }
+
+    // non zero based index. this is more human readable
+    return this.logs.at(number - 1)
+  }
+
+  filterCalls (criteria, options) {
+    // perf
+    if (this.logs.length === 0) {
+      return this.logs
+    }
+    if (typeof criteria === 'function') {
+      return this.logs.filter(criteria)
+    }
+    if (criteria instanceof RegExp) {
+      return this.logs.filter((log) => {
+        return criteria.test(log.toString())
+      })
+    }
+    if (typeof criteria === 'object' && criteria !== null) {
+      // no criteria - returning all logs
+      if (Object.keys(criteria).length === 0) {
+        return this.logs
+      }
+
+      const finalOptions = { operator: 'OR', ...buildAndValidateFilterCallsOptions(options) }
+
+      let maybeDuplicatedLogsFiltered = []
+      if ('protocol' in criteria) {
+        maybeDuplicatedLogsFiltered = handleFilterCallsWithOptions(criteria.protocol, finalOptions, this.filterCallsByProtocol, maybeDuplicatedLogsFiltered)
+      }
+      if ('host' in criteria) {
+        maybeDuplicatedLogsFiltered = handleFilterCallsWithOptions(criteria.host, finalOptions, this.filterCallsByHost, maybeDuplicatedLogsFiltered)
+      }
+      if ('port' in criteria) {
+        maybeDuplicatedLogsFiltered = handleFilterCallsWithOptions(criteria.port, finalOptions, this.filterCallsByPort, maybeDuplicatedLogsFiltered)
+      }
+      if ('origin' in criteria) {
+        maybeDuplicatedLogsFiltered = handleFilterCallsWithOptions(criteria.origin, finalOptions, this.filterCallsByOrigin, maybeDuplicatedLogsFiltered)
+      }
+      if ('path' in criteria) {
+        maybeDuplicatedLogsFiltered = handleFilterCallsWithOptions(criteria.path, finalOptions, this.filterCallsByPath, maybeDuplicatedLogsFiltered)
+      }
+      if ('hash' in criteria) {
+        maybeDuplicatedLogsFiltered = handleFilterCallsWithOptions(criteria.hash, finalOptions, this.filterCallsByHash, maybeDuplicatedLogsFiltered)
+      }
+      if ('fullUrl' in criteria) {
+        maybeDuplicatedLogsFiltered = handleFilterCallsWithOptions(criteria.fullUrl, finalOptions, this.filterCallsByFullUrl, maybeDuplicatedLogsFiltered)
+      }
+      if ('method' in criteria) {
+        maybeDuplicatedLogsFiltered = handleFilterCallsWithOptions(criteria.method, finalOptions, this.filterCallsByMethod, maybeDuplicatedLogsFiltered)
+      }
+
+      const uniqLogsFiltered = [...new Set(maybeDuplicatedLogsFiltered)]
+
+      return uniqLogsFiltered
+    }
+
+    throw new InvalidArgumentError('criteria parameter should be one of function, regexp, or object')
+  }
+
+  filterCallsByProtocol = makeFilterCalls.call(this, 'protocol')
+
+  filterCallsByHost = makeFilterCalls.call(this, 'host')
+
+  filterCallsByPort = makeFilterCalls.call(this, 'port')
+
+  filterCallsByOrigin = makeFilterCalls.call(this, 'origin')
+
+  filterCallsByPath = makeFilterCalls.call(this, 'path')
+
+  filterCallsByHash = makeFilterCalls.call(this, 'hash')
+
+  filterCallsByFullUrl = makeFilterCalls.call(this, 'fullUrl')
+
+  filterCallsByMethod = makeFilterCalls.call(this, 'method')
+
+  clear () {
+    this.logs = []
+  }
+
+  [kMockCallHistoryAddLog] (requestInit) {
+    const log = new MockCallHistoryLog(requestInit)
+
+    this.logs.push(log)
+
+    return log
+  }
+
+  * [Symbol.iterator] () {
+    for (const log of this.calls()) {
+      yield log
+    }
+  }
+}
+
+module.exports.MockCallHistory = MockCallHistory
+module.exports.MockCallHistoryLog = MockCallHistoryLog
 
 
 /***/ }),
@@ -18030,7 +18354,12 @@ module.exports = {
   kNetConnect: Symbol('net connect'),
   kGetNetConnect: Symbol('get net connect'),
   kConnected: Symbol('connected'),
-  kIgnoreTrailingSlash: Symbol('ignore trailing slash')
+  kIgnoreTrailingSlash: Symbol('ignore trailing slash'),
+  kMockAgentMockCallHistoryInstance: Symbol('mock agent mock call history name'),
+  kMockAgentRegisterCallHistory: Symbol('mock agent register mock call history'),
+  kMockAgentAddCallHistoryLog: Symbol('mock agent add call history log'),
+  kMockAgentIsCallHistoryEnabled: Symbol('mock agent is call history enabled'),
+  kMockCallHistoryAddLog: Symbol('mock call history add log')
 }
 
 
@@ -18057,6 +18386,7 @@ const {
     isPromise
   }
 } = __nccwpck_require__(7975)
+const { InvalidArgumentError } = __nccwpck_require__(8707)
 
 function matchValue (match, value) {
   if (typeof match === 'string') {
@@ -18166,8 +18496,10 @@ function getResponseData (data) {
     return data
   } else if (typeof data === 'object') {
     return JSON.stringify(data)
-  } else {
+  } else if (data) {
     return data.toString()
+  } else {
+    return ''
   }
 }
 
@@ -18407,9 +18739,14 @@ function checkNetConnect (netConnect, origin) {
   return false
 }
 
-function buildMockOptions (opts) {
+function buildAndValidateMockOptions (opts) {
   if (opts) {
     const { agent, ...mockOptions } = opts
+
+    if ('enableCallHistory' in mockOptions && typeof mockOptions.enableCallHistory !== 'boolean') {
+      throw new InvalidArgumentError('options.enableCallHistory must to be a boolean')
+    }
+
     return mockOptions
   }
 }
@@ -18427,7 +18764,7 @@ module.exports = {
   mockDispatch,
   buildMockDispatch,
   checkNetConnect,
-  buildMockOptions,
+  buildAndValidateMockOptions,
   getHeaderByName,
   buildHeadersFromArray
 }
@@ -18518,10 +18855,14 @@ function makeCacheKey (opts) {
       if (typeof key !== 'string' || typeof val !== 'string') {
         throw new Error('opts.headers is not a valid header map')
       }
-      headers[key] = val
+      headers[key.toLowerCase()] = val
     }
   } else if (typeof opts.headers === 'object') {
-    headers = opts.headers
+    headers = {}
+
+    for (const key of Object.keys(opts.headers)) {
+      headers[key.toLowerCase()] = opts.headers[key]
+    }
   } else {
     throw new Error('opts.headers is not an object')
   }
@@ -18752,19 +19093,16 @@ function parseVaryHeader (varyHeader, headers) {
     return headers
   }
 
-  const output = /** @type {Record<string, string | string[]>} */ ({})
+  const output = /** @type {Record<string, string | string[] | null>} */ ({})
 
   const varyingHeaders = typeof varyHeader === 'string'
     ? varyHeader.split(',')
     : varyHeader
+
   for (const header of varyingHeaders) {
     const trimmedHeader = header.trim().toLowerCase()
 
-    if (headers[trimmedHeader]) {
-      output[trimmedHeader] = headers[trimmedHeader]
-    } else {
-      return undefined
-    }
+    output[trimmedHeader] = headers[trimmedHeader] ?? null
   }
 
   return output
@@ -22454,7 +22792,7 @@ try {
   const crypto = __nccwpck_require__(7598)
   random = (max) => crypto.randomInt(0, max)
 } catch {
-  random = (max) => Math.floor(Math.random(max))
+  random = (max) => Math.floor(Math.random() * max)
 }
 
 const textEncoder = new TextEncoder()
@@ -27773,6 +28111,14 @@ const requestFinalizer = new FinalizationRegistry(({ signal, abort }) => {
 
 const dependentControllerMap = new WeakMap()
 
+let abortSignalHasEventHandlerLeakWarning
+
+try {
+  abortSignalHasEventHandlerLeakWarning = getMaxListeners(new AbortController().signal) > 0
+} catch {
+  abortSignalHasEventHandlerLeakWarning = false
+}
+
 function buildAbort (acRef) {
   return abort
 
@@ -28160,15 +28506,10 @@ class Request {
         const acRef = new WeakRef(ac)
         const abort = buildAbort(acRef)
 
-        // Third-party AbortControllers may not work with these.
-        // See, https://github.com/nodejs/undici/pull/1910#issuecomment-1464495619.
-        try {
-          // If the max amount of listeners is equal to the default, increase it
-          // This is only available in node >= v19.9.0
-          if (typeof getMaxListeners === 'function' && getMaxListeners(signal) === defaultMaxListeners) {
-            setMaxListeners(1500, signal)
-          }
-        } catch {}
+        // If the max amount of listeners is equal to the default, increase it
+        if (abortSignalHasEventHandlerLeakWarning && getMaxListeners(signal) === defaultMaxListeners) {
+          setMaxListeners(1500, signal)
+        }
 
         util.addAbortListener(signal, abort)
         // The third argument must be a registry key to be unregistered.
