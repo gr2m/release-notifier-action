@@ -8875,7 +8875,7 @@ const { InvalidArgumentError } = __nccwpck_require__(8707)
 const { headerNameLowerCasedRecord } = __nccwpck_require__(735)
 const { tree } = __nccwpck_require__(7752)
 
-const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(v => Number(v))
+const [nodeMajor, nodeMinor] = process.versions.node.split('.', 2).map(v => Number(v))
 
 class BodyAsyncIterable {
   constructor (body) {
@@ -14816,7 +14816,7 @@ const assert = __nccwpck_require__(4589)
  *  here, which we then just pass on to the next handler (most likely a
  *  CacheHandler). Note that this assumes the proper headers were already
  *  included in the request to tell the origin that we want to revalidate the
- *  response (i.e. if-modified-since).
+ *  response (i.e. if-modified-since or if-none-match).
  *
  * @see https://www.rfc-editor.org/rfc/rfc9111.html#name-validation
  *
@@ -15812,7 +15812,7 @@ const util = __nccwpck_require__(3440)
 const CacheHandler = __nccwpck_require__(9976)
 const MemoryCacheStore = __nccwpck_require__(4889)
 const CacheRevalidationHandler = __nccwpck_require__(7133)
-const { assertCacheStore, assertCacheMethods, makeCacheKey, parseCacheControlHeader } = __nccwpck_require__(7659)
+const { assertCacheStore, assertCacheMethods, makeCacheKey, normaliseHeaders, parseCacheControlHeader } = __nccwpck_require__(7659)
 const { AbortError } = __nccwpck_require__(8707)
 
 /**
@@ -16027,7 +16027,7 @@ function handleResult (
   // Check if the response is stale
   if (needsRevalidation(result, reqCacheControl)) {
     if (util.isStream(opts.body) && util.bodyLength(opts.body) !== 0) {
-      // If body is is stream we can't revalidate...
+      // If body is a stream we can't revalidate...
       // TODO (fix): This could be less strict...
       return dispatch(opts, new CacheHandler(globalOpts, cacheKey, handler))
     }
@@ -16039,7 +16039,7 @@ function handleResult (
     }
 
     let headers = {
-      ...opts.headers,
+      ...normaliseHeaders(opts),
       'if-modified-since': new Date(result.cachedAt).toUTCString()
     }
 
@@ -18468,7 +18468,7 @@ function safeUrl (path) {
     return path
   }
 
-  const pathSegments = path.split('?')
+  const pathSegments = path.split('?', 3)
 
   if (pathSegments.length !== 2) {
     return path
@@ -18841,7 +18841,21 @@ function makeCacheKey (opts) {
     throw new Error('opts.origin is undefined')
   }
 
-  /** @type {Record<string, string[] | string>} */
+  const headers = normaliseHeaders(opts)
+
+  return {
+    origin: opts.origin.toString(),
+    method: opts.method,
+    path: opts.path,
+    headers
+  }
+}
+
+/**
+ * @param {Record<string, string[] | string>}
+ * @return {Record<string, string[] | string>}
+ */
+function normaliseHeaders (opts) {
   let headers
   if (opts.headers == null) {
     headers = {}
@@ -18867,12 +18881,7 @@ function makeCacheKey (opts) {
     throw new Error('opts.headers is not an object')
   }
 
-  return {
-    origin: opts.origin.toString(),
-    method: opts.method,
-    path: opts.path,
-    headers
-  }
+  return headers
 }
 
 /**
@@ -19179,6 +19188,7 @@ function assertCacheMethods (methods, name = 'CacheMethods') {
 
 module.exports = {
   makeCacheKey,
+  normaliseHeaders,
   assertCacheKey,
   assertCacheValue,
   parseCacheControlHeader,
@@ -26118,7 +26128,9 @@ function finalizeAndReportTiming (response, initiatorType = 'other') {
     originalURL.href,
     initiatorType,
     globalThis,
-    cacheState
+    cacheState,
+    '', // bodyType
+    response.status
   )
 }
 
@@ -26803,7 +26815,7 @@ function fetchFinale (fetchParams, response) {
     // 3. Set fetchParams’s controller’s report timing steps to the following steps given a global object global:
     fetchParams.controller.reportTimingSteps = () => {
       // 1. If fetchParams’s request’s URL’s scheme is not an HTTP(S) scheme, then return.
-      if (fetchParams.request.url.protocol !== 'https:') {
+      if (!urlIsHttpHttpsScheme(fetchParams.request.url)) {
         return
       }
 
@@ -26845,7 +26857,6 @@ function fetchFinale (fetchParams, response) {
       //    fetchParams’s request’s URL, fetchParams’s request’s initiator type, global, cacheState, bodyInfo,
       //    and responseStatus.
       if (fetchParams.request.initiatorType != null) {
-        // TODO: update markresourcetiming
         markResourceTiming(timingInfo, fetchParams.request.url.href, fetchParams.request.initiatorType, globalThis, cacheState, bodyInfo, responseStatus)
       }
     }
@@ -34762,7 +34773,7 @@ function parseExtensions (extensions) {
 
   while (position.position < extensions.length) {
     const pair = collectASequenceOfCodePointsFast(';', extensions, position)
-    const [name, value = ''] = pair.split('=')
+    const [name, value = ''] = pair.split('=', 2)
 
     extensionList.set(
       removeHTTPWhitespace(name, true, false),
