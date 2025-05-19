@@ -4953,6 +4953,7 @@ const Agent = __nccwpck_require__(7405)
 const ProxyAgent = __nccwpck_require__(6672)
 const EnvHttpProxyAgent = __nccwpck_require__(3137)
 const RetryAgent = __nccwpck_require__(50)
+const H2CClient = __nccwpck_require__(6815)
 const errors = __nccwpck_require__(8707)
 const util = __nccwpck_require__(3440)
 const { InvalidArgumentError } = errors
@@ -4978,6 +4979,7 @@ module.exports.Agent = Agent
 module.exports.ProxyAgent = ProxyAgent
 module.exports.EnvHttpProxyAgent = EnvHttpProxyAgent
 module.exports.RetryAgent = RetryAgent
+module.exports.H2CClient = H2CClient
 module.exports.RetryHandler = RetryHandler
 
 module.exports.DecoratorHandler = DecoratorHandler
@@ -6778,17 +6780,9 @@ class MemoryCacheStore {
     const topLevelKey = `${key.origin}:${key.path}`
 
     const now = Date.now()
-    const entry = this.#entries.get(topLevelKey)?.find((entry) => (
-      entry.deleteAt > now &&
-      entry.method === key.method &&
-      (entry.vary == null || Object.keys(entry.vary).every(headerName => {
-        if (entry.vary[headerName] === null) {
-          return key.headers[headerName] === undefined
-        }
+    const entries = this.#entries.get(topLevelKey)
 
-        return entry.vary[headerName] === key.headers[headerName]
-      }))
-    ))
+    const entry = entries ? findEntry(key, entries, now) : null
 
     return entry == null
       ? undefined
@@ -6842,10 +6836,17 @@ class MemoryCacheStore {
           entries = []
           store.#entries.set(topLevelKey, entries)
         }
-        entries.push(entry)
+        const previousEntry = findEntry(key, entries, Date.now())
+        if (previousEntry) {
+          const index = entries.indexOf(previousEntry)
+          entries.splice(index, 1, entry)
+          store.#size -= previousEntry.size
+        } else {
+          entries.push(entry)
+          store.#count += 1
+        }
 
         store.#size += entry.size
-        store.#count += 1
 
         if (store.#size > store.#maxSize || store.#count > store.#maxCount) {
           for (const [key, entries] of store.#entries) {
@@ -6880,6 +6881,20 @@ class MemoryCacheStore {
     }
     this.#entries.delete(topLevelKey)
   }
+}
+
+function findEntry (key, entries, now) {
+  return entries.find((entry) => (
+    entry.deleteAt > now &&
+    entry.method === key.method &&
+    (entry.vary == null || Object.keys(entry.vary).every(headerName => {
+      if (entry.vary[headerName] === null) {
+        return key.headers[headerName] === undefined
+      }
+
+      return entry.vary[headerName] === key.headers[headerName]
+    }))
+  ))
 }
 
 module.exports = MemoryCacheStore
@@ -7008,6 +7023,11 @@ module.exports = class SqliteCacheStore {
     this.#db = new DatabaseSync(opts?.location ?? ':memory:')
 
     this.#db.exec(`
+      PRAGMA journal_mode = WAL;
+      PRAGMA synchronous = NORMAL;
+      PRAGMA temp_store = memory;
+      PRAGMA optimize;
+
       CREATE TABLE IF NOT EXISTS cacheInterceptorV${VERSION} (
         -- Data specific to us
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -7027,9 +7047,8 @@ module.exports = class SqliteCacheStore {
         staleAt INTEGER NOT NULL
       );
 
-      CREATE INDEX IF NOT EXISTS idx_cacheInterceptorV${VERSION}_url ON cacheInterceptorV${VERSION}(url);
-      CREATE INDEX IF NOT EXISTS idx_cacheInterceptorV${VERSION}_method ON cacheInterceptorV${VERSION}(method);
-      CREATE INDEX IF NOT EXISTS idx_cacheInterceptorV${VERSION}_deleteAt ON cacheInterceptorV${VERSION}(deleteAt);
+      CREATE INDEX IF NOT EXISTS idx_cacheInterceptorV${VERSION}_getValuesQuery ON cacheInterceptorV${VERSION}(url, method, deleteAt);
+      CREATE INDEX IF NOT EXISTS idx_cacheInterceptorV${VERSION}_deleteByUrlQuery ON cacheInterceptorV${VERSION}(deleteAt);
     `)
 
     this.#getValuesQuery = this.#db.prepare(`
@@ -7239,7 +7258,7 @@ module.exports = class SqliteCacheStore {
   }
 
   #prune () {
-    if (this.size <= this.#maxCount) {
+    if (Number.isFinite(this.#maxCount) && this.size <= this.#maxCount) {
       return 0
     }
 
@@ -7361,10 +7380,7 @@ function headerValueEquals (lhs, rhs) {
 const net = __nccwpck_require__(7030)
 const assert = __nccwpck_require__(4589)
 const util = __nccwpck_require__(3440)
-const { InvalidArgumentError, ConnectTimeoutError } = __nccwpck_require__(8707)
-const timers = __nccwpck_require__(6603)
-
-function noop () {}
+const { InvalidArgumentError } = __nccwpck_require__(8707)
 
 let tls // include tls conditionally since it is not always available
 
@@ -7464,7 +7480,6 @@ function buildConnector ({ allowH2, maxCachedSessions, socketPath, timeout, sess
         servername,
         session,
         localAddress,
-        // TODO(HTTP/2): Add support for h2c
         ALPNProtocols: allowH2 ? ['http/1.1', 'h2'] : ['http/1.1'],
         socket: httpSocket, // upgrade socket connection
         port,
@@ -7496,7 +7511,7 @@ function buildConnector ({ allowH2, maxCachedSessions, socketPath, timeout, sess
       socket.setKeepAlive(true, keepAliveInitialDelay)
     }
 
-    const clearConnectTimeout = setupConnectTimeout(new WeakRef(socket), { timeout, hostname, port })
+    const clearConnectTimeout = util.setupConnectTimeout(new WeakRef(socket), { timeout, hostname, port })
 
     socket
       .setNoDelay(true)
@@ -7521,78 +7536,6 @@ function buildConnector ({ allowH2, maxCachedSessions, socketPath, timeout, sess
 
     return socket
   }
-}
-
-/**
- * @param {WeakRef<net.Socket>} socketWeakRef
- * @param {object} opts
- * @param {number} opts.timeout
- * @param {string} opts.hostname
- * @param {number} opts.port
- * @returns {() => void}
- */
-const setupConnectTimeout = process.platform === 'win32'
-  ? (socketWeakRef, opts) => {
-      if (!opts.timeout) {
-        return noop
-      }
-
-      let s1 = null
-      let s2 = null
-      const fastTimer = timers.setFastTimeout(() => {
-      // setImmediate is added to make sure that we prioritize socket error events over timeouts
-        s1 = setImmediate(() => {
-        // Windows needs an extra setImmediate probably due to implementation differences in the socket logic
-          s2 = setImmediate(() => onConnectTimeout(socketWeakRef.deref(), opts))
-        })
-      }, opts.timeout)
-      return () => {
-        timers.clearFastTimeout(fastTimer)
-        clearImmediate(s1)
-        clearImmediate(s2)
-      }
-    }
-  : (socketWeakRef, opts) => {
-      if (!opts.timeout) {
-        return noop
-      }
-
-      let s1 = null
-      const fastTimer = timers.setFastTimeout(() => {
-      // setImmediate is added to make sure that we prioritize socket error events over timeouts
-        s1 = setImmediate(() => {
-          onConnectTimeout(socketWeakRef.deref(), opts)
-        })
-      }, opts.timeout)
-      return () => {
-        timers.clearFastTimeout(fastTimer)
-        clearImmediate(s1)
-      }
-    }
-
-/**
- * @param {net.Socket} socket
- * @param {object} opts
- * @param {number} opts.timeout
- * @param {string} opts.hostname
- * @param {number} opts.port
- */
-function onConnectTimeout (socket, opts) {
-  // The socket could be already garbage collected
-  if (socket == null) {
-    return
-  }
-
-  let message = 'Connect Timeout Error'
-  if (Array.isArray(socket.autoSelectFamilyAttemptedAddresses)) {
-    message += ` (attempted addresses: ${socket.autoSelectFamilyAttemptedAddresses.join(', ')},`
-  } else {
-    message += ` (attempted address: ${opts.hostname}:${opts.port},`
-  }
-
-  message += ` timeout: ${opts.timeout}ms)`
-
-  util.destroy(socket, new ConnectTimeoutError(message))
 }
 
 module.exports = buildConnector
@@ -8871,7 +8814,8 @@ const { Blob } = __nccwpck_require__(4573)
 const nodeUtil = __nccwpck_require__(7975)
 const { stringify } = __nccwpck_require__(1792)
 const { EventEmitter: EE } = __nccwpck_require__(8474)
-const { InvalidArgumentError } = __nccwpck_require__(8707)
+const timers = __nccwpck_require__(6603)
+const { InvalidArgumentError, ConnectTimeoutError } = __nccwpck_require__(8707)
 const { headerNameLowerCasedRecord } = __nccwpck_require__(735)
 const { tree } = __nccwpck_require__(7752)
 
@@ -8889,6 +8833,8 @@ class BodyAsyncIterable {
     yield * this[kBody]
   }
 }
+
+function noop () {}
 
 /**
  * @param {*} body
@@ -9699,6 +9645,78 @@ function errorRequest (client, request, err) {
   }
 }
 
+/**
+ * @param {WeakRef<net.Socket>} socketWeakRef
+ * @param {object} opts
+ * @param {number} opts.timeout
+ * @param {string} opts.hostname
+ * @param {number} opts.port
+ * @returns {() => void}
+ */
+const setupConnectTimeout = process.platform === 'win32'
+  ? (socketWeakRef, opts) => {
+      if (!opts.timeout) {
+        return noop
+      }
+
+      let s1 = null
+      let s2 = null
+      const fastTimer = timers.setFastTimeout(() => {
+      // setImmediate is added to make sure that we prioritize socket error events over timeouts
+        s1 = setImmediate(() => {
+        // Windows needs an extra setImmediate probably due to implementation differences in the socket logic
+          s2 = setImmediate(() => onConnectTimeout(socketWeakRef.deref(), opts))
+        })
+      }, opts.timeout)
+      return () => {
+        timers.clearFastTimeout(fastTimer)
+        clearImmediate(s1)
+        clearImmediate(s2)
+      }
+    }
+  : (socketWeakRef, opts) => {
+      if (!opts.timeout) {
+        return noop
+      }
+
+      let s1 = null
+      const fastTimer = timers.setFastTimeout(() => {
+      // setImmediate is added to make sure that we prioritize socket error events over timeouts
+        s1 = setImmediate(() => {
+          onConnectTimeout(socketWeakRef.deref(), opts)
+        })
+      }, opts.timeout)
+      return () => {
+        timers.clearFastTimeout(fastTimer)
+        clearImmediate(s1)
+      }
+    }
+
+/**
+ * @param {net.Socket} socket
+ * @param {object} opts
+ * @param {number} opts.timeout
+ * @param {string} opts.hostname
+ * @param {number} opts.port
+ */
+function onConnectTimeout (socket, opts) {
+  // The socket could be already garbage collected
+  if (socket == null) {
+    return
+  }
+
+  let message = 'Connect Timeout Error'
+  if (Array.isArray(socket.autoSelectFamilyAttemptedAddresses)) {
+    message += ` (attempted addresses: ${socket.autoSelectFamilyAttemptedAddresses.join(', ')},`
+  } else {
+    message += ` (attempted address: ${opts.hostname}:${opts.port},`
+  }
+
+  message += ` timeout: ${opts.timeout}ms)`
+
+  destroy(socket, new ConnectTimeoutError(message))
+}
+
 const kEnumerableProperty = Object.create(null)
 kEnumerableProperty.enumerable = true
 
@@ -9770,7 +9788,8 @@ module.exports = {
   nodeMajor,
   nodeMinor,
   safeHTTPMethods: Object.freeze(['GET', 'HEAD', 'OPTIONS', 'TRACE']),
-  wrapRequestBody
+  wrapRequestBody,
+  setupConnectTimeout
 }
 
 
@@ -9783,7 +9802,7 @@ module.exports = {
 
 
 const { InvalidArgumentError } = __nccwpck_require__(8707)
-const { kClients, kRunning, kClose, kDestroy, kDispatch } = __nccwpck_require__(6443)
+const { kClients, kRunning, kClose, kDestroy, kDispatch, kUrl } = __nccwpck_require__(6443)
 const DispatcherBase = __nccwpck_require__(1841)
 const Pool = __nccwpck_require__(628)
 const Client = __nccwpck_require__(3701)
@@ -9891,6 +9910,16 @@ class Agent extends DispatcherBase {
     this[kClients].clear()
 
     await Promise.all(destroyPromises)
+  }
+
+  get stats () {
+    const allClientStats = {}
+    for (const client of this[kClients].values()) {
+      if (client.stats) {
+        allClientStats[client[kUrl].origin] = client.stats
+      }
+    }
+    return allClientStats
   }
 }
 
@@ -11950,6 +11979,7 @@ function onHttp2SessionGoAway (errorCode) {
   assert(client[kRunning] === 0)
 
   client.emit('disconnect', client[kUrl], [client], err)
+  client.emit('connectionError', client[kUrl], [client], err)
 
   client[kResume]()
 }
@@ -12036,11 +12066,13 @@ function writeH2 (client, request) {
     if (Array.isArray(val)) {
       for (let i = 0; i < val.length; i++) {
         if (headers[key]) {
-          headers[key] += `,${val[i]}`
+          headers[key] += `, ${val[i]}`
         } else {
           headers[key] = val[i]
         }
       }
+    } else if (headers[key]) {
+      headers[key] += `, ${val}`
     } else {
       headers[key] = val
     }
@@ -12549,6 +12581,7 @@ const assert = __nccwpck_require__(4589)
 const net = __nccwpck_require__(7030)
 const http = __nccwpck_require__(7067)
 const util = __nccwpck_require__(3440)
+const { ClientStats } = __nccwpck_require__(6854)
 const { channels } = __nccwpck_require__(2414)
 const Request = __nccwpck_require__(4655)
 const DispatcherBase = __nccwpck_require__(1841)
@@ -12803,6 +12836,10 @@ class Client extends DispatcherBase {
   set pipelining (value) {
     this[kPipelining] = value
     this[kResume](true)
+  }
+
+  get stats () {
+    return new ClientStats(this)
   }
 
   get [kPending] () {
@@ -13707,16 +13744,146 @@ module.exports = class FixedQueue {
 
 /***/ }),
 
+/***/ 6815:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+const { connect } = __nccwpck_require__(7030)
+
+const { kClose, kDestroy } = __nccwpck_require__(6443)
+const { InvalidArgumentError } = __nccwpck_require__(8707)
+const util = __nccwpck_require__(3440)
+
+const Client = __nccwpck_require__(3701)
+const DispatcherBase = __nccwpck_require__(1841)
+
+class H2CClient extends DispatcherBase {
+  #client = null
+
+  constructor (origin, clientOpts) {
+    super()
+
+    if (typeof origin === 'string') {
+      origin = new URL(origin)
+    }
+
+    if (origin.protocol !== 'http:') {
+      throw new InvalidArgumentError(
+        'h2c-client: Only h2c protocol is supported'
+      )
+    }
+
+    const { connect, maxConcurrentStreams, pipelining, ...opts } =
+      clientOpts ?? {}
+    let defaultMaxConcurrentStreams = 100
+    let defaultPipelining = 100
+
+    if (
+      maxConcurrentStreams != null &&
+      Number.isInteger(maxConcurrentStreams) &&
+      maxConcurrentStreams > 0
+    ) {
+      defaultMaxConcurrentStreams = maxConcurrentStreams
+    }
+
+    if (pipelining != null && Number.isInteger(pipelining) && pipelining > 0) {
+      defaultPipelining = pipelining
+    }
+
+    if (defaultPipelining > defaultMaxConcurrentStreams) {
+      throw new InvalidArgumentError(
+        'h2c-client: pipelining cannot be greater than maxConcurrentStreams'
+      )
+    }
+
+    this.#client = new Client(origin, {
+      ...opts,
+      connect: this.#buildConnector(connect),
+      maxConcurrentStreams: defaultMaxConcurrentStreams,
+      pipelining: defaultPipelining,
+      allowH2: true
+    })
+  }
+
+  #buildConnector (connectOpts) {
+    return (opts, callback) => {
+      const timeout = connectOpts?.connectOpts ?? 10e3
+      const { hostname, port, pathname } = opts
+      const socket = connect({
+        ...opts,
+        host: hostname,
+        port,
+        pathname
+      })
+
+      // Set TCP keep alive options on the socket here instead of in connect() for the case of assigning the socket
+      if (opts.keepAlive == null || opts.keepAlive) {
+        const keepAliveInitialDelay =
+          opts.keepAliveInitialDelay == null ? 60e3 : opts.keepAliveInitialDelay
+        socket.setKeepAlive(true, keepAliveInitialDelay)
+      }
+
+      socket.alpnProtocol = 'h2'
+
+      const clearConnectTimeout = util.setupConnectTimeout(
+        new WeakRef(socket),
+        { timeout, hostname, port }
+      )
+
+      socket
+        .setNoDelay(true)
+        .once('connect', function () {
+          queueMicrotask(clearConnectTimeout)
+
+          if (callback) {
+            const cb = callback
+            callback = null
+            cb(null, this)
+          }
+        })
+        .on('error', function (err) {
+          queueMicrotask(clearConnectTimeout)
+
+          if (callback) {
+            const cb = callback
+            callback = null
+            cb(err)
+          }
+        })
+
+      return socket
+    }
+  }
+
+  dispatch (opts, handler) {
+    return this.#client.dispatch(opts, handler)
+  }
+
+  async [kClose] () {
+    await this.#client.close()
+  }
+
+  async [kDestroy] () {
+    await this.#client.destroy()
+  }
+}
+
+module.exports = H2CClient
+
+
+/***/ }),
+
 /***/ 2128:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
+const { PoolStats } = __nccwpck_require__(6854)
 const DispatcherBase = __nccwpck_require__(1841)
 const FixedQueue = __nccwpck_require__(4660)
 const { kConnected, kSize, kRunning, kPending, kQueued, kBusy, kFree, kUrl, kClose, kDestroy, kDispatch } = __nccwpck_require__(6443)
-const PoolStats = __nccwpck_require__(3246)
 
 const kClients = Symbol('clients')
 const kNeedDrain = Symbol('needDrain')
@@ -13729,7 +13896,6 @@ const kOnConnectionError = Symbol('onConnectionError')
 const kGetDispatcher = Symbol('get dispatcher')
 const kAddClient = Symbol('add client')
 const kRemoveClient = Symbol('remove client')
-const kStats = Symbol('stats')
 
 class PoolBase extends DispatcherBase {
   constructor () {
@@ -13780,8 +13946,6 @@ class PoolBase extends DispatcherBase {
     this[kOnConnectionError] = (origin, targets, err) => {
       pool.emit('connectionError', origin, [pool, ...targets], err)
     }
-
-    this[kStats] = new PoolStats(this)
   }
 
   get [kBusy] () {
@@ -13821,7 +13985,7 @@ class PoolBase extends DispatcherBase {
   }
 
   get stats () {
-    return this[kStats]
+    return new PoolStats(this)
   }
 
   async [kClose] () {
@@ -13905,50 +14069,6 @@ module.exports = {
   kRemoveClient,
   kGetDispatcher
 }
-
-
-/***/ }),
-
-/***/ 3246:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
-
-"use strict";
-
-
-const { kFree, kConnected, kPending, kQueued, kRunning, kSize } = __nccwpck_require__(6443)
-const kPool = Symbol('pool')
-
-class PoolStats {
-  constructor (pool) {
-    this[kPool] = pool
-  }
-
-  get connected () {
-    return this[kPool][kConnected]
-  }
-
-  get free () {
-    return this[kPool][kFree]
-  }
-
-  get pending () {
-    return this[kPool][kPending]
-  }
-
-  get queued () {
-    return this[kPool][kQueued]
-  }
-
-  get running () {
-    return this[kPool][kRunning]
-  }
-
-  get size () {
-    return this[kPool][kSize]
-  }
-}
-
-module.exports = PoolStats
 
 
 /***/ }),
@@ -15826,7 +15946,12 @@ const { AbortError } = __nccwpck_require__(8707)
  */
 function needsRevalidation (result, cacheControlDirectives) {
   if (cacheControlDirectives?.['no-cache']) {
-    // Always revalidate requests with the no-cache directive
+    // Always revalidate requests with the no-cache request directive
+    return true
+  }
+
+  if (result.cacheControlDirectives?.['no-cache'] && !Array.isArray(result.cacheControlDirectives['no-cache'])) {
+    // Always revalidate requests with unqualified no-cache response directive
     return true
   }
 
@@ -16039,7 +16164,7 @@ function handleResult (
     }
 
     let headers = {
-      ...normaliseHeaders(opts),
+      ...opts.headers,
       'if-modified-since': new Date(result.cachedAt).toUTCString()
     }
 
@@ -16123,6 +16248,11 @@ module.exports = (opts = {}) => {
       if (!opts.origin || safeMethodsToNotCache.includes(opts.method)) {
         // Not a method we want to cache or we don't have the origin, skip
         return dispatch(opts, handler)
+      }
+
+      opts = {
+        ...opts,
+        headers: normaliseHeaders(opts)
       }
 
       const reqCacheControl = opts.headers?.['cache-control']
@@ -17485,11 +17615,12 @@ const {
   kMockAgentIsCallHistoryEnabled,
   kMockAgentAddCallHistoryLog,
   kMockAgentMockCallHistoryInstance,
+  kMockAgentAcceptsNonStandardSearchParameters,
   kMockCallHistoryAddLog
 } = __nccwpck_require__(1117)
 const MockClient = __nccwpck_require__(7365)
 const MockPool = __nccwpck_require__(4004)
-const { matchValue, buildAndValidateMockOptions } = __nccwpck_require__(3397)
+const { matchValue, normalizeSearchParams, buildAndValidateMockOptions } = __nccwpck_require__(3397)
 const { InvalidArgumentError, UndiciError } = __nccwpck_require__(8707)
 const Dispatcher = __nccwpck_require__(883)
 const PendingInterceptorsFormatter = __nccwpck_require__(6142)
@@ -17504,6 +17635,7 @@ class MockAgent extends Dispatcher {
     this[kNetConnect] = true
     this[kIsMockActive] = true
     this[kMockAgentIsCallHistoryEnabled] = mockOptions?.enableCallHistory ?? false
+    this[kMockAgentAcceptsNonStandardSearchParameters] = mockOptions?.acceptNonStandardSearchParameters ?? false
 
     // Instantiate Agent and encapsulate
     if (opts?.agent && typeof opts.agent.dispatch !== 'function') {
@@ -17536,7 +17668,17 @@ class MockAgent extends Dispatcher {
 
     this[kMockAgentAddCallHistoryLog](opts)
 
-    return this[kAgent].dispatch(opts, handler)
+    const acceptNonStandardSearchParameters = this[kMockAgentAcceptsNonStandardSearchParameters]
+
+    const dispatchOpts = { ...opts }
+
+    if (acceptNonStandardSearchParameters && dispatchOpts.path) {
+      const [path, searchParams] = dispatchOpts.path.split('?')
+      const normalizedSearchParams = normalizeSearchParams(searchParams, acceptNonStandardSearchParameters)
+      dispatchOpts.path = `${path}?${normalizedSearchParams}`
+    }
+
+    return this[kAgent].dispatch(dispatchOpts, handler)
   }
 
   async close () {
@@ -18359,6 +18501,7 @@ module.exports = {
   kMockAgentRegisterCallHistory: Symbol('mock agent register mock call history'),
   kMockAgentAddCallHistoryLog: Symbol('mock agent add call history log'),
   kMockAgentIsCallHistoryEnabled: Symbol('mock agent is call history enabled'),
+  kMockAgentAcceptsNonStandardSearchParameters: Symbol('mock agent accepts non standard search parameters'),
   kMockCallHistoryAddLog: Symbol('mock call history add log')
 }
 
@@ -18463,13 +18606,42 @@ function matchHeaders (mockDispatch, headers) {
   return true
 }
 
+function normalizeSearchParams (query) {
+  if (typeof query !== 'string') {
+    return query
+  }
+
+  const originalQp = new URLSearchParams(query)
+  const normalizedQp = new URLSearchParams()
+
+  for (let [key, value] of originalQp.entries()) {
+    key = key.replace('[]', '')
+
+    const valueRepresentsString = /^(['"]).*\1$/.test(value)
+    if (valueRepresentsString) {
+      normalizedQp.append(key, value)
+      continue
+    }
+
+    if (value.includes(',')) {
+      const values = value.split(',')
+      for (const v of values) {
+        normalizedQp.append(key, v)
+      }
+      continue
+    }
+
+    normalizedQp.append(key, value)
+  }
+
+  return normalizedQp
+}
+
 function safeUrl (path) {
   if (typeof path !== 'string') {
     return path
   }
-
   const pathSegments = path.split('?', 3)
-
   if (pathSegments.length !== 2) {
     return path
   }
@@ -18747,6 +18919,10 @@ function buildAndValidateMockOptions (opts) {
       throw new InvalidArgumentError('options.enableCallHistory must to be a boolean')
     }
 
+    if ('acceptNonStandardSearchParameters' in mockOptions && typeof mockOptions.acceptNonStandardSearchParameters !== 'boolean') {
+      throw new InvalidArgumentError('options.acceptNonStandardSearchParameters must to be a boolean')
+    }
+
     return mockOptions
   }
 }
@@ -18766,7 +18942,8 @@ module.exports = {
   checkNetConnect,
   buildAndValidateMockOptions,
   getHeaderByName,
-  buildHeadersFromArray
+  buildHeadersFromArray,
+  normalizeSearchParams
 }
 
 
@@ -18841,13 +19018,11 @@ function makeCacheKey (opts) {
     throw new Error('opts.origin is undefined')
   }
 
-  const headers = normaliseHeaders(opts)
-
   return {
     origin: opts.origin.toString(),
     method: opts.method,
     path: opts.path,
-    headers
+    headers: opts.headers
   }
 }
 
@@ -19464,6 +19639,46 @@ function parseRfc850Date (date, now = new Date()) {
 module.exports = {
   parseHttpDate
 }
+
+
+/***/ }),
+
+/***/ 6854:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const {
+  kConnected,
+  kPending,
+  kRunning,
+  kSize,
+  kFree,
+  kQueued
+} = __nccwpck_require__(6443)
+
+class ClientStats {
+  constructor (client) {
+    this.connected = client[kConnected]
+    this.pending = client[kPending]
+    this.running = client[kRunning]
+    this.size = client[kSize]
+  }
+}
+
+class PoolStats {
+  constructor (pool) {
+    this.connected = pool[kConnected]
+    this.free = pool[kFree]
+    this.pending = pool[kPending]
+    this.queued = pool[kQueued]
+    this.running = pool[kRunning]
+    this.size = pool[kSize]
+  }
+}
+
+module.exports = { ClientStats, PoolStats }
 
 
 /***/ }),
@@ -36067,7 +36282,7 @@ __webpack_unused_export__ = defaultContentType
 
 /***/ }),
 
-/***/ 2091:
+/***/ 5062:
 /***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __nccwpck_require__) => {
 
 "use strict";
@@ -36871,7 +37086,8 @@ var NON_VARIABLE_OPTIONS = [
   "headers",
   "request",
   "query",
-  "mediaType"
+  "mediaType",
+  "operationName"
 ];
 var FORBIDDEN_VARIABLE_OPTIONS = ["query", "method", "url"];
 var GHES_V3_SUFFIX_REGEX = /\/api\/v3\/?$/;
@@ -37006,7 +37222,7 @@ var createTokenAuth = function createTokenAuth2(token) {
 
 
 ;// CONCATENATED MODULE: ./node_modules/@octokit/core/dist-src/version.js
-const version_VERSION = "6.1.4";
+const version_VERSION = "6.1.5";
 
 
 ;// CONCATENATED MODULE: ./node_modules/@octokit/core/dist-src/index.js
@@ -37143,7 +37359,7 @@ class dist_src_Octokit {
 }
 
 
-;// CONCATENATED MODULE: ./node_modules/@octokit/plugin-paginate-rest/dist-bundle/index.js
+;// CONCATENATED MODULE: ./node_modules/octokit/node_modules/@octokit/plugin-paginate-rest/dist-bundle/index.js
 // pkg/dist-src/version.js
 var plugin_paginate_rest_dist_bundle_VERSION = "0.0.0-development";
 
@@ -37278,8 +37494,10 @@ var paginatingEndpoints = (/* unused pure expression or super */ null && ([
   "GET /notifications",
   "GET /organizations",
   "GET /orgs/{org}/actions/cache/usage-by-repository",
+  "GET /orgs/{org}/actions/hosted-runners",
   "GET /orgs/{org}/actions/permissions/repositories",
   "GET /orgs/{org}/actions/runner-groups",
+  "GET /orgs/{org}/actions/runner-groups/{runner_group_id}/hosted-runners",
   "GET /orgs/{org}/actions/runner-groups/{runner_group_id}/repositories",
   "GET /orgs/{org}/actions/runner-groups/{runner_group_id}/runners",
   "GET /orgs/{org}/actions/runners",
@@ -37289,6 +37507,7 @@ var paginatingEndpoints = (/* unused pure expression or super */ null && ([
   "GET /orgs/{org}/actions/variables/{name}/repositories",
   "GET /orgs/{org}/attestations/{subject_digest}",
   "GET /orgs/{org}/blocks",
+  "GET /orgs/{org}/campaigns",
   "GET /orgs/{org}/code-scanning/alerts",
   "GET /orgs/{org}/code-security/configurations",
   "GET /orgs/{org}/code-security/configurations/{configuration_id}/repositories",
@@ -37297,7 +37516,6 @@ var paginatingEndpoints = (/* unused pure expression or super */ null && ([
   "GET /orgs/{org}/codespaces/secrets/{secret_name}/repositories",
   "GET /orgs/{org}/copilot/billing/seats",
   "GET /orgs/{org}/copilot/metrics",
-  "GET /orgs/{org}/copilot/usage",
   "GET /orgs/{org}/dependabot/alerts",
   "GET /orgs/{org}/dependabot/secrets",
   "GET /orgs/{org}/dependabot/secrets/{secret_name}/repositories",
@@ -37332,10 +37550,11 @@ var paginatingEndpoints = (/* unused pure expression or super */ null && ([
   "GET /orgs/{org}/repos",
   "GET /orgs/{org}/rulesets",
   "GET /orgs/{org}/rulesets/rule-suites",
+  "GET /orgs/{org}/rulesets/{ruleset_id}/history",
   "GET /orgs/{org}/secret-scanning/alerts",
   "GET /orgs/{org}/security-advisories",
+  "GET /orgs/{org}/settings/network-configurations",
   "GET /orgs/{org}/team/{team_slug}/copilot/metrics",
-  "GET /orgs/{org}/team/{team_slug}/copilot/usage",
   "GET /orgs/{org}/teams",
   "GET /orgs/{org}/teams/{team_slug}/discussions",
   "GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/comments",
@@ -37430,6 +37649,7 @@ var paginatingEndpoints = (/* unused pure expression or super */ null && ([
   "GET /repos/{owner}/{repo}/rules/branches/{branch}",
   "GET /repos/{owner}/{repo}/rulesets",
   "GET /repos/{owner}/{repo}/rulesets/rule-suites",
+  "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}/history",
   "GET /repos/{owner}/{repo}/secret-scanning/alerts",
   "GET /repos/{owner}/{repo}/secret-scanning/alerts/{alert_number}/locations",
   "GET /repos/{owner}/{repo}/security-advisories",
@@ -37705,7 +37925,7 @@ function paginateGraphQL(octokit) {
 
 
 ;// CONCATENATED MODULE: ./node_modules/@octokit/plugin-rest-endpoint-methods/dist-src/version.js
-const dist_src_version_VERSION = "13.3.1";
+const dist_src_version_VERSION = "14.0.0";
 
 //# sourceMappingURL=version.js.map
 
@@ -37736,6 +37956,7 @@ const Endpoints = {
     createEnvironmentVariable: [
       "POST /repos/{owner}/{repo}/environments/{environment_name}/variables"
     ],
+    createHostedRunnerForOrg: ["POST /orgs/{org}/actions/hosted-runners"],
     createOrUpdateEnvironmentSecret: [
       "PUT /repos/{owner}/{repo}/environments/{environment_name}/secrets/{secret_name}"
     ],
@@ -37772,6 +37993,9 @@ const Endpoints = {
     ],
     deleteEnvironmentVariable: [
       "DELETE /repos/{owner}/{repo}/environments/{environment_name}/variables/{name}"
+    ],
+    deleteHostedRunnerForOrg: [
+      "DELETE /orgs/{org}/actions/hosted-runners/{hosted_runner_id}"
     ],
     deleteOrgSecret: ["DELETE /orgs/{org}/actions/secrets/{secret_name}"],
     deleteOrgVariable: ["DELETE /orgs/{org}/actions/variables/{name}"],
@@ -37861,6 +38085,24 @@ const Endpoints = {
     getGithubActionsPermissionsRepository: [
       "GET /repos/{owner}/{repo}/actions/permissions"
     ],
+    getHostedRunnerForOrg: [
+      "GET /orgs/{org}/actions/hosted-runners/{hosted_runner_id}"
+    ],
+    getHostedRunnersGithubOwnedImagesForOrg: [
+      "GET /orgs/{org}/actions/hosted-runners/images/github-owned"
+    ],
+    getHostedRunnersLimitsForOrg: [
+      "GET /orgs/{org}/actions/hosted-runners/limits"
+    ],
+    getHostedRunnersMachineSpecsForOrg: [
+      "GET /orgs/{org}/actions/hosted-runners/machine-sizes"
+    ],
+    getHostedRunnersPartnerImagesForOrg: [
+      "GET /orgs/{org}/actions/hosted-runners/images/partner"
+    ],
+    getHostedRunnersPlatformsForOrg: [
+      "GET /orgs/{org}/actions/hosted-runners/platforms"
+    ],
     getJobForWorkflowRun: ["GET /repos/{owner}/{repo}/actions/jobs/{job_id}"],
     getOrgPublicKey: ["GET /orgs/{org}/actions/secrets/public-key"],
     getOrgSecret: ["GET /orgs/{org}/actions/secrets/{secret_name}"],
@@ -37904,6 +38146,10 @@ const Endpoints = {
     listEnvironmentVariables: [
       "GET /repos/{owner}/{repo}/environments/{environment_name}/variables"
     ],
+    listGithubHostedRunnersInGroupForOrg: [
+      "GET /orgs/{org}/actions/runner-groups/{runner_group_id}/hosted-runners"
+    ],
+    listHostedRunnersForOrg: ["GET /orgs/{org}/actions/hosted-runners"],
     listJobsForWorkflowRun: [
       "GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs"
     ],
@@ -38021,6 +38267,9 @@ const Endpoints = {
     ],
     updateEnvironmentVariable: [
       "PATCH /repos/{owner}/{repo}/environments/{environment_name}/variables/{name}"
+    ],
+    updateHostedRunnerForOrg: [
+      "PATCH /orgs/{org}/actions/hosted-runners/{hosted_runner_id}"
     ],
     updateOrgVariable: ["PATCH /orgs/{org}/actions/variables/{name}"],
     updateRepoVariable: [
@@ -38162,6 +38411,13 @@ const Endpoints = {
     getSharedStorageBillingUser: [
       "GET /users/{username}/settings/billing/shared-storage"
     ]
+  },
+  campaigns: {
+    createCampaign: ["POST /orgs/{org}/campaigns"],
+    deleteCampaign: ["DELETE /orgs/{org}/campaigns/{campaign_number}"],
+    getCampaignSummary: ["GET /orgs/{org}/campaigns/{campaign_number}"],
+    listOrgCampaigns: ["GET /orgs/{org}/campaigns"],
+    updateCampaign: ["PATCH /orgs/{org}/campaigns/{campaign_number}"]
   },
   checks: {
     create: ["POST /repos/{owner}/{repo}/check-runs"],
@@ -38441,9 +38697,7 @@ const Endpoints = {
     getCopilotSeatDetailsForUser: [
       "GET /orgs/{org}/members/{username}/copilot"
     ],
-    listCopilotSeats: ["GET /orgs/{org}/copilot/billing/seats"],
-    usageMetricsForOrg: ["GET /orgs/{org}/copilot/usage"],
-    usageMetricsForTeam: ["GET /orgs/{org}/team/{team_slug}/copilot/usage"]
+    listCopilotSeats: ["GET /orgs/{org}/copilot/billing/seats"]
   },
   dependabot: {
     addSelectedRepoToOrgSecret: [
@@ -38538,6 +38792,26 @@ const Endpoints = {
   gitignore: {
     getAllTemplates: ["GET /gitignore/templates"],
     getTemplate: ["GET /gitignore/templates/{name}"]
+  },
+  hostedCompute: {
+    createNetworkConfigurationForOrg: [
+      "POST /orgs/{org}/settings/network-configurations"
+    ],
+    deleteNetworkConfigurationFromOrg: [
+      "DELETE /orgs/{org}/settings/network-configurations/{network_configuration_id}"
+    ],
+    getNetworkConfigurationForOrg: [
+      "GET /orgs/{org}/settings/network-configurations/{network_configuration_id}"
+    ],
+    getNetworkSettingsForOrg: [
+      "GET /orgs/{org}/settings/network-settings/{network_settings_id}"
+    ],
+    listNetworkConfigurationsForOrg: [
+      "GET /orgs/{org}/settings/network-configurations"
+    ],
+    updateNetworkConfigurationForOrg: [
+      "PATCH /orgs/{org}/settings/network-configurations/{network_configuration_id}"
+    ]
   },
   interactions: {
     getRestrictionsForAuthenticatedUser: ["GET /user/interaction-limits"],
@@ -38730,6 +39004,7 @@ const Endpoints = {
       "PUT /orgs/{org}/outside_collaborators/{username}"
     ],
     createInvitation: ["POST /orgs/{org}/invitations"],
+    createIssueType: ["POST /orgs/{org}/issue-types"],
     createOrUpdateCustomProperties: ["PATCH /orgs/{org}/properties/schema"],
     createOrUpdateCustomPropertiesValuesForRepos: [
       "PATCH /orgs/{org}/properties/values"
@@ -38739,6 +39014,7 @@ const Endpoints = {
     ],
     createWebhook: ["POST /orgs/{org}/hooks"],
     delete: ["DELETE /orgs/{org}"],
+    deleteIssueType: ["DELETE /orgs/{org}/issue-types/{issue_type_id}"],
     deleteWebhook: ["DELETE /orgs/{org}/hooks/{hook_id}"],
     enableOrDisableSecurityProductOnAllOrgRepos: [
       "POST /orgs/{org}/{security_product}/{enablement}",
@@ -38755,6 +39031,10 @@ const Endpoints = {
     getMembershipForAuthenticatedUser: ["GET /user/memberships/orgs/{org}"],
     getMembershipForUser: ["GET /orgs/{org}/memberships/{username}"],
     getOrgRole: ["GET /orgs/{org}/organization-roles/{role_id}"],
+    getOrgRulesetHistory: ["GET /orgs/{org}/rulesets/{ruleset_id}/history"],
+    getOrgRulesetVersion: [
+      "GET /orgs/{org}/rulesets/{ruleset_id}/history/{version_id}"
+    ],
     getWebhook: ["GET /orgs/{org}/hooks/{hook_id}"],
     getWebhookConfigForOrg: ["GET /orgs/{org}/hooks/{hook_id}/config"],
     getWebhookDelivery: [
@@ -38769,6 +39049,7 @@ const Endpoints = {
     listForAuthenticatedUser: ["GET /user/orgs"],
     listForUser: ["GET /users/{username}/orgs"],
     listInvitationTeams: ["GET /orgs/{org}/invitations/{invitation_id}/teams"],
+    listIssueTypes: ["GET /orgs/{org}/issue-types"],
     listMembers: ["GET /orgs/{org}/members"],
     listMembershipsForAuthenticatedUser: ["GET /user/memberships/orgs"],
     listOrgRoleTeams: ["GET /orgs/{org}/organization-roles/{role_id}/teams"],
@@ -38843,6 +39124,7 @@ const Endpoints = {
     ],
     unblockUser: ["DELETE /orgs/{org}/blocks/{username}"],
     update: ["PATCH /orgs/{org}"],
+    updateIssueType: ["PUT /orgs/{org}/issue-types/{issue_type_id}"],
     updateMembershipForAuthenticatedUser: [
       "PATCH /user/memberships/orgs/{org}"
     ],
@@ -38954,37 +39236,6 @@ const Endpoints = {
     updateOrgPrivateRegistry: [
       "PATCH /orgs/{org}/private-registries/{secret_name}"
     ]
-  },
-  projects: {
-    addCollaborator: ["PUT /projects/{project_id}/collaborators/{username}"],
-    createCard: ["POST /projects/columns/{column_id}/cards"],
-    createColumn: ["POST /projects/{project_id}/columns"],
-    createForAuthenticatedUser: ["POST /user/projects"],
-    createForOrg: ["POST /orgs/{org}/projects"],
-    createForRepo: ["POST /repos/{owner}/{repo}/projects"],
-    delete: ["DELETE /projects/{project_id}"],
-    deleteCard: ["DELETE /projects/columns/cards/{card_id}"],
-    deleteColumn: ["DELETE /projects/columns/{column_id}"],
-    get: ["GET /projects/{project_id}"],
-    getCard: ["GET /projects/columns/cards/{card_id}"],
-    getColumn: ["GET /projects/columns/{column_id}"],
-    getPermissionForUser: [
-      "GET /projects/{project_id}/collaborators/{username}/permission"
-    ],
-    listCards: ["GET /projects/columns/{column_id}/cards"],
-    listCollaborators: ["GET /projects/{project_id}/collaborators"],
-    listColumns: ["GET /projects/{project_id}/columns"],
-    listForOrg: ["GET /orgs/{org}/projects"],
-    listForRepo: ["GET /repos/{owner}/{repo}/projects"],
-    listForUser: ["GET /users/{username}/projects"],
-    moveCard: ["POST /projects/columns/cards/{card_id}/moves"],
-    moveColumn: ["POST /projects/columns/{column_id}/moves"],
-    removeCollaborator: [
-      "DELETE /projects/{project_id}/collaborators/{username}"
-    ],
-    update: ["PATCH /projects/{project_id}"],
-    updateCard: ["PATCH /projects/columns/cards/{card_id}"],
-    updateColumn: ["PATCH /projects/columns/{column_id}"]
   },
   pulls: {
     checkIfMerged: ["GET /repos/{owner}/{repo}/pulls/{pull_number}/merge"],
@@ -39357,6 +39608,12 @@ const Endpoints = {
     ],
     getRepoRuleSuites: ["GET /repos/{owner}/{repo}/rulesets/rule-suites"],
     getRepoRuleset: ["GET /repos/{owner}/{repo}/rulesets/{ruleset_id}"],
+    getRepoRulesetHistory: [
+      "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}/history"
+    ],
+    getRepoRulesetVersion: [
+      "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}/history/{version_id}"
+    ],
     getRepoRulesets: ["GET /repos/{owner}/{repo}/rulesets"],
     getStatusChecksProtection: [
       "GET /repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks"
@@ -39530,7 +39787,13 @@ const Endpoints = {
   search: {
     code: ["GET /search/code"],
     commits: ["GET /search/commits"],
-    issuesAndPullRequests: ["GET /search/issues"],
+    issuesAndPullRequests: [
+      "GET /search/issues",
+      {},
+      {
+        deprecated: "octokit.rest.search.issuesAndPullRequests() is deprecated, see https://docs.github.com/rest/search/search#search-issues-and-pull-requests"
+      }
+    ],
     labels: ["GET /search/labels"],
     repos: ["GET /search/repositories"],
     topics: ["GET /search/topics"],
@@ -39584,14 +39847,8 @@ const Endpoints = {
     addOrUpdateMembershipForUserInOrg: [
       "PUT /orgs/{org}/teams/{team_slug}/memberships/{username}"
     ],
-    addOrUpdateProjectPermissionsInOrg: [
-      "PUT /orgs/{org}/teams/{team_slug}/projects/{project_id}"
-    ],
     addOrUpdateRepoPermissionsInOrg: [
       "PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}"
-    ],
-    checkPermissionsForProjectInOrg: [
-      "GET /orgs/{org}/teams/{team_slug}/projects/{project_id}"
     ],
     checkPermissionsForRepoInOrg: [
       "GET /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}"
@@ -39629,13 +39886,9 @@ const Endpoints = {
     listPendingInvitationsInOrg: [
       "GET /orgs/{org}/teams/{team_slug}/invitations"
     ],
-    listProjectsInOrg: ["GET /orgs/{org}/teams/{team_slug}/projects"],
     listReposInOrg: ["GET /orgs/{org}/teams/{team_slug}/repos"],
     removeMembershipForUserInOrg: [
       "DELETE /orgs/{org}/teams/{team_slug}/memberships/{username}"
-    ],
-    removeProjectInOrg: [
-      "DELETE /orgs/{org}/teams/{team_slug}/projects/{project_id}"
     ],
     removeRepoInOrg: [
       "DELETE /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}"
@@ -39983,7 +40236,7 @@ function retry(octokit, octokitOptions) {
     {
       enabled: true,
       retryAfterBaseValue: 1e3,
-      doNotRetry: [400, 401, 403, 404, 422, 451],
+      doNotRetry: [400, 401, 403, 404, 410, 422, 451],
       retries: 3
     },
     octokitOptions.retry
@@ -40007,7 +40260,7 @@ function retry(octokit, octokitOptions) {
 retry.VERSION = plugin_retry_dist_bundle_VERSION;
 
 
-;// CONCATENATED MODULE: ./node_modules/@octokit/plugin-throttling/dist-bundle/index.js
+;// CONCATENATED MODULE: ./node_modules/octokit/node_modules/@octokit/plugin-throttling/dist-bundle/index.js
 // pkg/dist-src/index.js
 
 
@@ -40020,8 +40273,9 @@ function dist_bundle_wrapRequest(state, request, options) {
   return state.retryLimiter.schedule(doRequest, state, request, options);
 }
 async function doRequest(state, request, options) {
-  const isWrite = options.method !== "GET" && options.method !== "HEAD";
   const { pathname } = new URL(options.url, "http://github.test");
+  const isAuth = isAuthRequest(options.method, pathname);
+  const isWrite = !isAuth && options.method !== "GET" && options.method !== "HEAD";
   const isSearch = options.method === "GET" && pathname.startsWith("/search/");
   const isGraphQL = pathname.startsWith("/graphql");
   const retryCount = ~~request.retryCount;
@@ -40038,7 +40292,7 @@ async function doRequest(state, request, options) {
   if (isSearch) {
     await state.search.key(state.id).schedule(jobOptions, dist_bundle_noop);
   }
-  const req = state.global.key(state.id).schedule(jobOptions, request, options);
+  const req = (isAuth ? state.auth : state.global).key(state.id).schedule(jobOptions, request, options);
   if (isGraphQL) {
     const res = await req;
     if (res.data.errors != null && res.data.errors.some((error) => error.type === "RATE_LIMITED")) {
@@ -40050,6 +40304,13 @@ async function doRequest(state, request, options) {
     }
   }
   return req;
+}
+function isAuthRequest(method, pathname) {
+  return method === "PATCH" && // https://docs.github.com/en/rest/apps/apps?apiVersion=2022-11-28#create-a-scoped-access-token
+  /^\/applications\/[^/]+\/token\/scoped$/.test(pathname) || method === "POST" && // https://docs.github.com/en/rest/apps/oauth-applications?apiVersion=2022-11-28#reset-a-token
+  (/^\/applications\/[^/]+\/token$/.test(pathname) || // https://docs.github.com/en/rest/apps/apps?apiVersion=2022-11-28#create-an-installation-access-token-for-an-app
+  /^\/app\/installations\/[^/]+\/access_tokens$/.test(pathname) || // https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps
+  pathname === "/login/oauth/access_token");
 }
 
 // pkg/dist-src/generated/triggers-notification-paths.js
@@ -40092,6 +40353,11 @@ var createGroups = function(Bottleneck, common) {
   groups.global = new Bottleneck.Group({
     id: "octokit-global",
     maxConcurrent: 10,
+    ...common
+  });
+  groups.auth = new Bottleneck.Group({
+    id: "octokit-auth",
+    maxConcurrent: 1,
     ...common
   });
   groups.search = new Bottleneck.Group({
@@ -40643,7 +40909,7 @@ async function waitForAccessToken(request, clientId, clientType, verification) {
       return waitForAccessToken(request, clientId, clientType, verification);
     }
     if (errorType === "slow_down") {
-      await wait(verification.interval + 5);
+      await wait(verification.interval + 7);
       return waitForAccessToken(request, clientId, clientType, verification);
     }
     throw error;
@@ -42229,15 +42495,30 @@ async function getInstallationAuthentication(state, options, customRequest) {
     };
     return factory(factoryAuthOptions);
   }
-  const optionsWithInstallationTokenFromState = Object.assign(
-    { installationId },
-    options
+  const request = customRequest || state.request;
+  return getInstallationAuthenticationConcurrently(
+    state,
+    { ...options, installationId },
+    request
   );
+}
+var pendingPromises = /* @__PURE__ */ new Map();
+function getInstallationAuthenticationConcurrently(state, options, request) {
+  const cacheKey = optionsToCacheKey(options);
+  if (pendingPromises.has(cacheKey)) {
+    return pendingPromises.get(cacheKey);
+  }
+  const promise = getInstallationAuthenticationImpl(
+    state,
+    options,
+    request
+  ).finally(() => pendingPromises.delete(cacheKey));
+  pendingPromises.set(cacheKey, promise);
+  return promise;
+}
+async function getInstallationAuthenticationImpl(state, options, request) {
   if (!options.refresh) {
-    const result = await dist_node_get(
-      state.cache,
-      optionsWithInstallationTokenFromState
-    );
+    const result = await dist_node_get(state.cache, options);
     if (result) {
       const {
         token: token2,
@@ -42250,7 +42531,7 @@ async function getInstallationAuthentication(state, options, customRequest) {
         repositorySelection: repositorySelection2
       } = result;
       return toTokenAuthentication({
-        installationId,
+        installationId: options.installationId,
         token: token2,
         createdAt: createdAt2,
         expiresAt: expiresAt2,
@@ -42263,9 +42544,8 @@ async function getInstallationAuthentication(state, options, customRequest) {
     }
   }
   const appAuthentication = await getAppAuthentication(state);
-  const request = customRequest || state.request;
   const payload = {
-    installation_id: installationId,
+    installation_id: options.installationId,
     mediaType: {
       previews: ["machine-man"]
     },
@@ -42314,9 +42594,9 @@ async function getInstallationAuthentication(state, options, customRequest) {
   if (singleFileName) {
     Object.assign(payload, { singleFileName });
   }
-  await dist_node_set(state.cache, optionsWithInstallationTokenFromState, cacheOptions);
+  await dist_node_set(state.cache, options, cacheOptions);
   const cacheData = {
-    installationId,
+    installationId: options.installationId,
     token,
     createdAt,
     expiresAt,
@@ -42479,7 +42759,7 @@ async function sendRequestWithRetries(state, request, options, createdAt, retrie
 }
 
 // pkg/dist-src/version.js
-var dist_node_VERSION = "7.1.5";
+var dist_node_VERSION = "7.2.1";
 
 // pkg/dist-src/index.js
 
@@ -43493,6 +43773,7 @@ var emitterEventNames = [
   "custom_property",
   "custom_property.created",
   "custom_property.deleted",
+  "custom_property.promote_to_enterprise",
   "custom_property.updated",
   "custom_property_values",
   "custom_property_values.updated",
@@ -43570,10 +43851,12 @@ var emitterEventNames = [
   "issues.pinned",
   "issues.reopened",
   "issues.transferred",
+  "issues.typed",
   "issues.unassigned",
   "issues.unlabeled",
   "issues.unlocked",
   "issues.unpinned",
+  "issues.untyped",
   "label",
   "label.created",
   "label.deleted",
@@ -44106,6 +44389,146 @@ function dist_bundle_createNodeMiddleware(webhooks, {
   });
 }
 
+// pkg/dist-src/middleware/web/get-missing-headers.js
+var WEBHOOK_HEADERS2 = (/* unused pure expression or super */ null && ([
+  "x-github-event",
+  "x-hub-signature-256",
+  "x-github-delivery"
+]));
+function getMissingHeaders2(request) {
+  return WEBHOOK_HEADERS2.filter((header) => !request.headers.has(header));
+}
+
+// pkg/dist-src/middleware/web/get-payload.js
+function getPayload2(request) {
+  return request.text();
+}
+
+// pkg/dist-src/middleware/web/on-unhandled-request-default.js
+function onUnhandledRequestDefault2(request) {
+  return new Response(
+    JSON.stringify({
+      error: `Unknown route: ${request.method} ${request.url}`
+    }),
+    {
+      status: 404,
+      headers: {
+        "content-type": "application/json"
+      }
+    }
+  );
+}
+
+// pkg/dist-src/middleware/web/middleware.js
+async function middleware2(webhooks, options, request) {
+  let pathname;
+  try {
+    pathname = new URL(request.url, "http://localhost").pathname;
+  } catch (error) {
+    return new Response(
+      JSON.stringify({
+        error: `Request URL could not be parsed: ${request.url}`
+      }),
+      {
+        status: 422,
+        headers: {
+          "content-type": "application/json"
+        }
+      }
+    );
+  }
+  if (pathname !== options.path || request.method !== "POST") {
+    return onUnhandledRequestDefault2(request);
+  }
+  if (typeof request.headers.get("content-type") !== "string" || !request.headers.get("content-type").startsWith("application/json")) {
+    return new Response(
+      JSON.stringify({
+        error: `Unsupported "Content-Type" header value. Must be "application/json"`
+      }),
+      {
+        status: 415,
+        headers: {
+          "content-type": "application/json"
+        }
+      }
+    );
+  }
+  const missingHeaders = getMissingHeaders2(request).join(", ");
+  if (missingHeaders) {
+    return new Response(
+      JSON.stringify({
+        error: `Required headers missing: ${missingHeaders}`
+      }),
+      {
+        status: 422,
+        headers: {
+          "content-type": "application/json"
+        }
+      }
+    );
+  }
+  const eventName = request.headers.get("x-github-event");
+  const signatureSHA256 = request.headers.get("x-hub-signature-256");
+  const id = request.headers.get("x-github-delivery");
+  options.log.debug(`${eventName} event received (id: ${id})`);
+  let didTimeout = false;
+  let timeout;
+  const timeoutPromise = new Promise((resolve) => {
+    timeout = setTimeout(() => {
+      didTimeout = true;
+      resolve(
+        new Response("still processing\n", {
+          status: 202,
+          headers: { "Content-Type": "text/plain" }
+        })
+      );
+    }, 9e3).unref();
+  });
+  const processWebhook = async () => {
+    try {
+      const payload = await getPayload2(request);
+      await webhooks.verifyAndReceive({
+        id,
+        name: eventName,
+        payload,
+        signature: signatureSHA256
+      });
+      clearTimeout(timeout);
+      if (didTimeout) return new Response(null);
+      return new Response("ok\n");
+    } catch (error) {
+      clearTimeout(timeout);
+      if (didTimeout) return new Response(null);
+      const err = Array.from(error.errors)[0];
+      const errorMessage = err.message ? `${err.name}: ${err.message}` : "Error: An Unspecified error occurred";
+      options.log.error(error);
+      return new Response(
+        JSON.stringify({
+          error: errorMessage
+        }),
+        {
+          status: typeof err.status !== "undefined" ? err.status : 500,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      );
+    }
+  };
+  return await Promise.race([timeoutPromise, processWebhook()]);
+}
+
+// pkg/dist-src/middleware/web/index.js
+function createWebMiddleware(webhooks, {
+  path = "/api/github/webhooks",
+  log = createLogger()
+} = {}) {
+  return middleware2.bind(null, webhooks, {
+    path,
+    log
+  });
+}
+
 // pkg/dist-src/index.js
 var Webhooks = class {
   sign;
@@ -44139,6 +44562,391 @@ var Webhooks = class {
 };
 
 
+;// CONCATENATED MODULE: ./node_modules/@octokit/app/node_modules/@octokit/plugin-paginate-rest/dist-bundle/index.js
+// pkg/dist-src/version.js
+var _octokit_plugin_paginate_rest_dist_bundle_VERSION = "0.0.0-development";
+
+// pkg/dist-src/normalize-paginated-list-response.js
+function dist_bundle_normalizePaginatedListResponse(response) {
+  if (!response.data) {
+    return {
+      ...response,
+      data: []
+    };
+  }
+  const responseNeedsNormalization = "total_count" in response.data && !("url" in response.data);
+  if (!responseNeedsNormalization) return response;
+  const incompleteResults = response.data.incomplete_results;
+  const repositorySelection = response.data.repository_selection;
+  const totalCount = response.data.total_count;
+  delete response.data.incomplete_results;
+  delete response.data.repository_selection;
+  delete response.data.total_count;
+  const namespaceKey = Object.keys(response.data)[0];
+  const data = response.data[namespaceKey];
+  response.data = data;
+  if (typeof incompleteResults !== "undefined") {
+    response.data.incomplete_results = incompleteResults;
+  }
+  if (typeof repositorySelection !== "undefined") {
+    response.data.repository_selection = repositorySelection;
+  }
+  response.data.total_count = totalCount;
+  return response;
+}
+
+// pkg/dist-src/iterator.js
+function dist_bundle_iterator(octokit, route, parameters) {
+  const options = typeof route === "function" ? route.endpoint(parameters) : octokit.request.endpoint(route, parameters);
+  const requestMethod = typeof route === "function" ? route : octokit.request;
+  const method = options.method;
+  const headers = options.headers;
+  let url = options.url;
+  return {
+    [Symbol.asyncIterator]: () => ({
+      async next() {
+        if (!url) return { done: true };
+        try {
+          const response = await requestMethod({ method, url, headers });
+          const normalizedResponse = dist_bundle_normalizePaginatedListResponse(response);
+          url = ((normalizedResponse.headers.link || "").match(
+            /<([^<>]+)>;\s*rel="next"/
+          ) || [])[1];
+          return { value: normalizedResponse };
+        } catch (error) {
+          if (error.status !== 409) throw error;
+          url = "";
+          return {
+            value: {
+              status: 200,
+              headers: {},
+              data: []
+            }
+          };
+        }
+      }
+    })
+  };
+}
+
+// pkg/dist-src/paginate.js
+function dist_bundle_paginate(octokit, route, parameters, mapFn) {
+  if (typeof parameters === "function") {
+    mapFn = parameters;
+    parameters = void 0;
+  }
+  return dist_bundle_gather(
+    octokit,
+    [],
+    dist_bundle_iterator(octokit, route, parameters)[Symbol.asyncIterator](),
+    mapFn
+  );
+}
+function dist_bundle_gather(octokit, results, iterator2, mapFn) {
+  return iterator2.next().then((result) => {
+    if (result.done) {
+      return results;
+    }
+    let earlyExit = false;
+    function done() {
+      earlyExit = true;
+    }
+    results = results.concat(
+      mapFn ? mapFn(result.value, done) : result.value.data
+    );
+    if (earlyExit) {
+      return results;
+    }
+    return dist_bundle_gather(octokit, results, iterator2, mapFn);
+  });
+}
+
+// pkg/dist-src/compose-paginate.js
+var dist_bundle_composePaginateRest = Object.assign(dist_bundle_paginate, {
+  iterator: dist_bundle_iterator
+});
+
+// pkg/dist-src/generated/paginating-endpoints.js
+var dist_bundle_paginatingEndpoints = (/* unused pure expression or super */ null && ([
+  "GET /advisories",
+  "GET /app/hook/deliveries",
+  "GET /app/installation-requests",
+  "GET /app/installations",
+  "GET /assignments/{assignment_id}/accepted_assignments",
+  "GET /classrooms",
+  "GET /classrooms/{classroom_id}/assignments",
+  "GET /enterprises/{enterprise}/code-security/configurations",
+  "GET /enterprises/{enterprise}/code-security/configurations/{configuration_id}/repositories",
+  "GET /enterprises/{enterprise}/dependabot/alerts",
+  "GET /enterprises/{enterprise}/secret-scanning/alerts",
+  "GET /events",
+  "GET /gists",
+  "GET /gists/public",
+  "GET /gists/starred",
+  "GET /gists/{gist_id}/comments",
+  "GET /gists/{gist_id}/commits",
+  "GET /gists/{gist_id}/forks",
+  "GET /installation/repositories",
+  "GET /issues",
+  "GET /licenses",
+  "GET /marketplace_listing/plans",
+  "GET /marketplace_listing/plans/{plan_id}/accounts",
+  "GET /marketplace_listing/stubbed/plans",
+  "GET /marketplace_listing/stubbed/plans/{plan_id}/accounts",
+  "GET /networks/{owner}/{repo}/events",
+  "GET /notifications",
+  "GET /organizations",
+  "GET /orgs/{org}/actions/cache/usage-by-repository",
+  "GET /orgs/{org}/actions/hosted-runners",
+  "GET /orgs/{org}/actions/permissions/repositories",
+  "GET /orgs/{org}/actions/runner-groups",
+  "GET /orgs/{org}/actions/runner-groups/{runner_group_id}/hosted-runners",
+  "GET /orgs/{org}/actions/runner-groups/{runner_group_id}/repositories",
+  "GET /orgs/{org}/actions/runner-groups/{runner_group_id}/runners",
+  "GET /orgs/{org}/actions/runners",
+  "GET /orgs/{org}/actions/secrets",
+  "GET /orgs/{org}/actions/secrets/{secret_name}/repositories",
+  "GET /orgs/{org}/actions/variables",
+  "GET /orgs/{org}/actions/variables/{name}/repositories",
+  "GET /orgs/{org}/attestations/{subject_digest}",
+  "GET /orgs/{org}/blocks",
+  "GET /orgs/{org}/campaigns",
+  "GET /orgs/{org}/code-scanning/alerts",
+  "GET /orgs/{org}/code-security/configurations",
+  "GET /orgs/{org}/code-security/configurations/{configuration_id}/repositories",
+  "GET /orgs/{org}/codespaces",
+  "GET /orgs/{org}/codespaces/secrets",
+  "GET /orgs/{org}/codespaces/secrets/{secret_name}/repositories",
+  "GET /orgs/{org}/copilot/billing/seats",
+  "GET /orgs/{org}/copilot/metrics",
+  "GET /orgs/{org}/dependabot/alerts",
+  "GET /orgs/{org}/dependabot/secrets",
+  "GET /orgs/{org}/dependabot/secrets/{secret_name}/repositories",
+  "GET /orgs/{org}/events",
+  "GET /orgs/{org}/failed_invitations",
+  "GET /orgs/{org}/hooks",
+  "GET /orgs/{org}/hooks/{hook_id}/deliveries",
+  "GET /orgs/{org}/insights/api/route-stats/{actor_type}/{actor_id}",
+  "GET /orgs/{org}/insights/api/subject-stats",
+  "GET /orgs/{org}/insights/api/user-stats/{user_id}",
+  "GET /orgs/{org}/installations",
+  "GET /orgs/{org}/invitations",
+  "GET /orgs/{org}/invitations/{invitation_id}/teams",
+  "GET /orgs/{org}/issues",
+  "GET /orgs/{org}/members",
+  "GET /orgs/{org}/members/{username}/codespaces",
+  "GET /orgs/{org}/migrations",
+  "GET /orgs/{org}/migrations/{migration_id}/repositories",
+  "GET /orgs/{org}/organization-roles/{role_id}/teams",
+  "GET /orgs/{org}/organization-roles/{role_id}/users",
+  "GET /orgs/{org}/outside_collaborators",
+  "GET /orgs/{org}/packages",
+  "GET /orgs/{org}/packages/{package_type}/{package_name}/versions",
+  "GET /orgs/{org}/personal-access-token-requests",
+  "GET /orgs/{org}/personal-access-token-requests/{pat_request_id}/repositories",
+  "GET /orgs/{org}/personal-access-tokens",
+  "GET /orgs/{org}/personal-access-tokens/{pat_id}/repositories",
+  "GET /orgs/{org}/private-registries",
+  "GET /orgs/{org}/projects",
+  "GET /orgs/{org}/properties/values",
+  "GET /orgs/{org}/public_members",
+  "GET /orgs/{org}/repos",
+  "GET /orgs/{org}/rulesets",
+  "GET /orgs/{org}/rulesets/rule-suites",
+  "GET /orgs/{org}/rulesets/{ruleset_id}/history",
+  "GET /orgs/{org}/secret-scanning/alerts",
+  "GET /orgs/{org}/security-advisories",
+  "GET /orgs/{org}/settings/network-configurations",
+  "GET /orgs/{org}/team/{team_slug}/copilot/metrics",
+  "GET /orgs/{org}/teams",
+  "GET /orgs/{org}/teams/{team_slug}/discussions",
+  "GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/comments",
+  "GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/comments/{comment_number}/reactions",
+  "GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/reactions",
+  "GET /orgs/{org}/teams/{team_slug}/invitations",
+  "GET /orgs/{org}/teams/{team_slug}/members",
+  "GET /orgs/{org}/teams/{team_slug}/projects",
+  "GET /orgs/{org}/teams/{team_slug}/repos",
+  "GET /orgs/{org}/teams/{team_slug}/teams",
+  "GET /projects/columns/{column_id}/cards",
+  "GET /projects/{project_id}/collaborators",
+  "GET /projects/{project_id}/columns",
+  "GET /repos/{owner}/{repo}/actions/artifacts",
+  "GET /repos/{owner}/{repo}/actions/caches",
+  "GET /repos/{owner}/{repo}/actions/organization-secrets",
+  "GET /repos/{owner}/{repo}/actions/organization-variables",
+  "GET /repos/{owner}/{repo}/actions/runners",
+  "GET /repos/{owner}/{repo}/actions/runs",
+  "GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts",
+  "GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}/jobs",
+  "GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs",
+  "GET /repos/{owner}/{repo}/actions/secrets",
+  "GET /repos/{owner}/{repo}/actions/variables",
+  "GET /repos/{owner}/{repo}/actions/workflows",
+  "GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs",
+  "GET /repos/{owner}/{repo}/activity",
+  "GET /repos/{owner}/{repo}/assignees",
+  "GET /repos/{owner}/{repo}/attestations/{subject_digest}",
+  "GET /repos/{owner}/{repo}/branches",
+  "GET /repos/{owner}/{repo}/check-runs/{check_run_id}/annotations",
+  "GET /repos/{owner}/{repo}/check-suites/{check_suite_id}/check-runs",
+  "GET /repos/{owner}/{repo}/code-scanning/alerts",
+  "GET /repos/{owner}/{repo}/code-scanning/alerts/{alert_number}/instances",
+  "GET /repos/{owner}/{repo}/code-scanning/analyses",
+  "GET /repos/{owner}/{repo}/codespaces",
+  "GET /repos/{owner}/{repo}/codespaces/devcontainers",
+  "GET /repos/{owner}/{repo}/codespaces/secrets",
+  "GET /repos/{owner}/{repo}/collaborators",
+  "GET /repos/{owner}/{repo}/comments",
+  "GET /repos/{owner}/{repo}/comments/{comment_id}/reactions",
+  "GET /repos/{owner}/{repo}/commits",
+  "GET /repos/{owner}/{repo}/commits/{commit_sha}/comments",
+  "GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls",
+  "GET /repos/{owner}/{repo}/commits/{ref}/check-runs",
+  "GET /repos/{owner}/{repo}/commits/{ref}/check-suites",
+  "GET /repos/{owner}/{repo}/commits/{ref}/status",
+  "GET /repos/{owner}/{repo}/commits/{ref}/statuses",
+  "GET /repos/{owner}/{repo}/contributors",
+  "GET /repos/{owner}/{repo}/dependabot/alerts",
+  "GET /repos/{owner}/{repo}/dependabot/secrets",
+  "GET /repos/{owner}/{repo}/deployments",
+  "GET /repos/{owner}/{repo}/deployments/{deployment_id}/statuses",
+  "GET /repos/{owner}/{repo}/environments",
+  "GET /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies",
+  "GET /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules/apps",
+  "GET /repos/{owner}/{repo}/environments/{environment_name}/secrets",
+  "GET /repos/{owner}/{repo}/environments/{environment_name}/variables",
+  "GET /repos/{owner}/{repo}/events",
+  "GET /repos/{owner}/{repo}/forks",
+  "GET /repos/{owner}/{repo}/hooks",
+  "GET /repos/{owner}/{repo}/hooks/{hook_id}/deliveries",
+  "GET /repos/{owner}/{repo}/invitations",
+  "GET /repos/{owner}/{repo}/issues",
+  "GET /repos/{owner}/{repo}/issues/comments",
+  "GET /repos/{owner}/{repo}/issues/comments/{comment_id}/reactions",
+  "GET /repos/{owner}/{repo}/issues/events",
+  "GET /repos/{owner}/{repo}/issues/{issue_number}/comments",
+  "GET /repos/{owner}/{repo}/issues/{issue_number}/events",
+  "GET /repos/{owner}/{repo}/issues/{issue_number}/labels",
+  "GET /repos/{owner}/{repo}/issues/{issue_number}/reactions",
+  "GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues",
+  "GET /repos/{owner}/{repo}/issues/{issue_number}/timeline",
+  "GET /repos/{owner}/{repo}/keys",
+  "GET /repos/{owner}/{repo}/labels",
+  "GET /repos/{owner}/{repo}/milestones",
+  "GET /repos/{owner}/{repo}/milestones/{milestone_number}/labels",
+  "GET /repos/{owner}/{repo}/notifications",
+  "GET /repos/{owner}/{repo}/pages/builds",
+  "GET /repos/{owner}/{repo}/projects",
+  "GET /repos/{owner}/{repo}/pulls",
+  "GET /repos/{owner}/{repo}/pulls/comments",
+  "GET /repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions",
+  "GET /repos/{owner}/{repo}/pulls/{pull_number}/comments",
+  "GET /repos/{owner}/{repo}/pulls/{pull_number}/commits",
+  "GET /repos/{owner}/{repo}/pulls/{pull_number}/files",
+  "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
+  "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/comments",
+  "GET /repos/{owner}/{repo}/releases",
+  "GET /repos/{owner}/{repo}/releases/{release_id}/assets",
+  "GET /repos/{owner}/{repo}/releases/{release_id}/reactions",
+  "GET /repos/{owner}/{repo}/rules/branches/{branch}",
+  "GET /repos/{owner}/{repo}/rulesets",
+  "GET /repos/{owner}/{repo}/rulesets/rule-suites",
+  "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}/history",
+  "GET /repos/{owner}/{repo}/secret-scanning/alerts",
+  "GET /repos/{owner}/{repo}/secret-scanning/alerts/{alert_number}/locations",
+  "GET /repos/{owner}/{repo}/security-advisories",
+  "GET /repos/{owner}/{repo}/stargazers",
+  "GET /repos/{owner}/{repo}/subscribers",
+  "GET /repos/{owner}/{repo}/tags",
+  "GET /repos/{owner}/{repo}/teams",
+  "GET /repos/{owner}/{repo}/topics",
+  "GET /repositories",
+  "GET /search/code",
+  "GET /search/commits",
+  "GET /search/issues",
+  "GET /search/labels",
+  "GET /search/repositories",
+  "GET /search/topics",
+  "GET /search/users",
+  "GET /teams/{team_id}/discussions",
+  "GET /teams/{team_id}/discussions/{discussion_number}/comments",
+  "GET /teams/{team_id}/discussions/{discussion_number}/comments/{comment_number}/reactions",
+  "GET /teams/{team_id}/discussions/{discussion_number}/reactions",
+  "GET /teams/{team_id}/invitations",
+  "GET /teams/{team_id}/members",
+  "GET /teams/{team_id}/projects",
+  "GET /teams/{team_id}/repos",
+  "GET /teams/{team_id}/teams",
+  "GET /user/blocks",
+  "GET /user/codespaces",
+  "GET /user/codespaces/secrets",
+  "GET /user/emails",
+  "GET /user/followers",
+  "GET /user/following",
+  "GET /user/gpg_keys",
+  "GET /user/installations",
+  "GET /user/installations/{installation_id}/repositories",
+  "GET /user/issues",
+  "GET /user/keys",
+  "GET /user/marketplace_purchases",
+  "GET /user/marketplace_purchases/stubbed",
+  "GET /user/memberships/orgs",
+  "GET /user/migrations",
+  "GET /user/migrations/{migration_id}/repositories",
+  "GET /user/orgs",
+  "GET /user/packages",
+  "GET /user/packages/{package_type}/{package_name}/versions",
+  "GET /user/public_emails",
+  "GET /user/repos",
+  "GET /user/repository_invitations",
+  "GET /user/social_accounts",
+  "GET /user/ssh_signing_keys",
+  "GET /user/starred",
+  "GET /user/subscriptions",
+  "GET /user/teams",
+  "GET /users",
+  "GET /users/{username}/attestations/{subject_digest}",
+  "GET /users/{username}/events",
+  "GET /users/{username}/events/orgs/{org}",
+  "GET /users/{username}/events/public",
+  "GET /users/{username}/followers",
+  "GET /users/{username}/following",
+  "GET /users/{username}/gists",
+  "GET /users/{username}/gpg_keys",
+  "GET /users/{username}/keys",
+  "GET /users/{username}/orgs",
+  "GET /users/{username}/packages",
+  "GET /users/{username}/projects",
+  "GET /users/{username}/received_events",
+  "GET /users/{username}/received_events/public",
+  "GET /users/{username}/repos",
+  "GET /users/{username}/social_accounts",
+  "GET /users/{username}/ssh_signing_keys",
+  "GET /users/{username}/starred",
+  "GET /users/{username}/subscriptions"
+]));
+
+// pkg/dist-src/paginating-endpoints.js
+function dist_bundle_isPaginatingEndpoint(arg) {
+  if (typeof arg === "string") {
+    return dist_bundle_paginatingEndpoints.includes(arg);
+  } else {
+    return false;
+  }
+}
+
+// pkg/dist-src/index.js
+function dist_bundle_paginateRest(octokit) {
+  return {
+    paginate: Object.assign(dist_bundle_paginate.bind(null, octokit), {
+      iterator: dist_bundle_iterator.bind(null, octokit)
+    })
+  };
+}
+dist_bundle_paginateRest.VERSION = _octokit_plugin_paginate_rest_dist_bundle_VERSION;
+
+
 ;// CONCATENATED MODULE: ./node_modules/@octokit/app/dist-node/index.js
 // pkg/dist-src/index.js
 
@@ -44146,7 +44954,7 @@ var Webhooks = class {
 
 
 // pkg/dist-src/version.js
-var app_dist_node_VERSION = "15.1.4";
+var app_dist_node_VERSION = "15.1.6";
 
 // pkg/dist-src/webhooks.js
 
@@ -44233,7 +45041,7 @@ async function eachInstallation(app, callback) {
 function eachInstallationIterator(app) {
   return {
     async *[Symbol.asyncIterator]() {
-      const iterator = composePaginateRest.iterator(
+      const iterator = dist_bundle_composePaginateRest.iterator(
         app.octokit,
         "GET /app/installations"
       );
@@ -44286,7 +45094,7 @@ function eachRepositoryIterator(app, query) {
     async *[Symbol.asyncIterator]() {
       const iterator = query ? singleInstallationIterator(app, query.installationId) : app.eachInstallation.iterator();
       for await (const { octokit } of iterator) {
-        const repositoriesIterator = composePaginateRest.iterator(
+        const repositoriesIterator = dist_bundle_composePaginateRest.iterator(
           octokit,
           "GET /installation/repositories"
         );
@@ -44614,7 +45422,7 @@ var __webpack_exports__ = {};
 const { inspect } = __nccwpck_require__(9023);
 
 const core = __nccwpck_require__(7484);
-const { App, Octokit } = __nccwpck_require__(2091);
+const { App, Octokit } = __nccwpck_require__(5062);
 const { fetch } = __nccwpck_require__(6752);
 
 const eventPayload = require(process.env.TEST_GITHUB_EVENT_PATH ||
