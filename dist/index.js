@@ -14221,7 +14221,6 @@ module.exports = Pool
 
 
 const { kProxy, kClose, kDestroy, kDispatch } = __nccwpck_require__(6443)
-const { URL } = __nccwpck_require__(3136)
 const Agent = __nccwpck_require__(7405)
 const Pool = __nccwpck_require__(628)
 const DispatcherBase = __nccwpck_require__(1841)
@@ -14428,7 +14427,7 @@ class ProxyAgent extends DispatcherBase {
   }
 
   /**
-   * @param {import('../types/proxy-agent').ProxyAgent.Options | string | URL} opts
+   * @param {import('../../types/proxy-agent').ProxyAgent.Options | string | URL} opts
    * @returns {URL}
    */
   #getUrl (opts) {
@@ -14596,6 +14595,15 @@ function noop () {}
 // Status codes that we can use some heuristics on to cache
 const HEURISTICALLY_CACHEABLE_STATUS_CODES = [
   200, 203, 204, 206, 300, 301, 308, 404, 405, 410, 414, 501
+]
+
+// Status codes which semantic is not handled by the cache
+// https://datatracker.ietf.org/doc/html/rfc9111#section-3
+// This list should not grow beyond 206 and 304 unless the RFC is updated
+// by a newer one including more. Please introduce another list if
+// implementing caching of responses with the 'must-understand' directive.
+const NOT_UNDERSTOOD_STATUS_CODES = [
+  206, 304
 ]
 
 const MAX_RESPONSE_AGE = 2147483647000
@@ -14824,10 +14832,19 @@ class CacheHandler {
  * @param {import('../../types/cache-interceptor.d.ts').default.CacheControlDirectives} cacheControlDirectives
  */
 function canCacheResponse (cacheType, statusCode, resHeaders, cacheControlDirectives) {
-  // Allow caching for status codes 200 and 307 (original behavior)
-  // Also allow caching for other status codes that are heuristically cacheable
-  // when they have explicit cache directives
-  if (statusCode !== 200 && statusCode !== 307 && !HEURISTICALLY_CACHEABLE_STATUS_CODES.includes(statusCode)) {
+  // Status code must be final and understood.
+  if (statusCode < 200 || NOT_UNDERSTOOD_STATUS_CODES.includes(statusCode)) {
+    return false
+  }
+  // Responses with neither status codes that are heuristically cacheable, nor "explicit enough" caching
+  // directives, are not cacheable. "Explicit enough": see https://www.rfc-editor.org/rfc/rfc9111.html#section-3
+  if (!HEURISTICALLY_CACHEABLE_STATUS_CODES.includes(statusCode) && !resHeaders['expires'] &&
+    !cacheControlDirectives.public &&
+    cacheControlDirectives['max-age'] === undefined &&
+    // RFC 9111: a private response directive, if the cache is not shared
+    !(cacheControlDirectives.private && cacheType === 'private') &&
+    !(cacheControlDirectives['s-maxage'] !== undefined && cacheType === 'shared')
+  ) {
     return false
   }
 
@@ -16111,7 +16128,7 @@ const util = __nccwpck_require__(3440)
 const CacheHandler = __nccwpck_require__(9976)
 const MemoryCacheStore = __nccwpck_require__(4889)
 const CacheRevalidationHandler = __nccwpck_require__(7133)
-const { assertCacheStore, assertCacheMethods, makeCacheKey, normaliseHeaders, parseCacheControlHeader } = __nccwpck_require__(7659)
+const { assertCacheStore, assertCacheMethods, makeCacheKey, normalizeHeaders, parseCacheControlHeader } = __nccwpck_require__(7659)
 const { AbortError } = __nccwpck_require__(8707)
 
 /**
@@ -16431,7 +16448,7 @@ module.exports = (opts = {}) => {
 
       opts = {
         ...opts,
-        headers: normaliseHeaders(opts)
+        headers: normalizeHeaders(opts)
       }
 
       const reqCacheControl = opts.headers?.['cache-control']
@@ -19205,6 +19222,7 @@ const MockAgent = __nccwpck_require__(7501)
 const { SnapshotRecorder } = __nccwpck_require__(3766)
 const WrapHandler = __nccwpck_require__(9510)
 const { InvalidArgumentError, UndiciError } = __nccwpck_require__(8707)
+const { validateSnapshotMode } = __nccwpck_require__(9683)
 
 const kSnapshotRecorder = Symbol('kSnapshotRecorder')
 const kSnapshotMode = Symbol('kSnapshotMode')
@@ -19212,7 +19230,7 @@ const kSnapshotPath = Symbol('kSnapshotPath')
 const kSnapshotLoaded = Symbol('kSnapshotLoaded')
 const kRealAgent = Symbol('kRealAgent')
 
-// Static flag to ensure warning is only emitted once
+// Static flag to ensure warning is only emitted once per process
 let warningEmitted = false
 
 class SnapshotAgent extends MockAgent {
@@ -19226,26 +19244,24 @@ class SnapshotAgent extends MockAgent {
       warningEmitted = true
     }
 
-    const mockOptions = { ...opts }
-    delete mockOptions.mode
-    delete mockOptions.snapshotPath
+    const {
+      mode = 'record',
+      snapshotPath = null,
+      ...mockAgentOpts
+    } = opts
 
-    super(mockOptions)
+    super(mockAgentOpts)
 
-    // Validate mode option
-    const validModes = ['record', 'playback', 'update']
-    const mode = opts.mode || 'record'
-    if (!validModes.includes(mode)) {
-      throw new InvalidArgumentError(`Invalid snapshot mode: ${mode}. Must be one of: ${validModes.join(', ')}`)
-    }
+    validateSnapshotMode(mode)
 
     // Validate snapshotPath is provided when required
-    if ((mode === 'playback' || mode === 'update') && !opts.snapshotPath) {
+    if ((mode === 'playback' || mode === 'update') && !snapshotPath) {
       throw new InvalidArgumentError(`snapshotPath is required when mode is '${mode}'`)
     }
 
     this[kSnapshotMode] = mode
-    this[kSnapshotPath] = opts.snapshotPath
+    this[kSnapshotPath] = snapshotPath
+
     this[kSnapshotRecorder] = new SnapshotRecorder({
       snapshotPath: this[kSnapshotPath],
       mode: this[kSnapshotMode],
@@ -19285,7 +19301,7 @@ class SnapshotAgent extends MockAgent {
       // Ensure snapshots are loaded
       if (!this[kSnapshotLoaded]) {
         // Need to load asynchronously, delegate to async version
-        return this._asyncDispatch(opts, handler)
+        return this.#asyncDispatch(opts, handler)
       }
 
       // Try to find existing snapshot (synchronous)
@@ -19293,10 +19309,10 @@ class SnapshotAgent extends MockAgent {
 
       if (snapshot) {
         // Use recorded response (synchronous)
-        return this._replaySnapshot(snapshot, handler)
+        return this.#replaySnapshot(snapshot, handler)
       } else if (mode === 'update') {
         // Make real request and record it (async required)
-        return this._recordAndReplay(opts, handler)
+        return this.#recordAndReplay(opts, handler)
       } else {
         // Playback mode but no snapshot found
         const error = new UndiciError(`No snapshot found for ${opts.method || 'GET'} ${opts.path}`)
@@ -19308,16 +19324,14 @@ class SnapshotAgent extends MockAgent {
       }
     } else if (mode === 'record') {
       // Record mode - make real request and save response (async required)
-      return this._recordAndReplay(opts, handler)
-    } else {
-      throw new InvalidArgumentError(`Invalid snapshot mode: ${mode}. Must be 'record', 'playback', or 'update'`)
+      return this.#recordAndReplay(opts, handler)
     }
   }
 
   /**
    * Async version of dispatch for when we need to load snapshots first
    */
-  async _asyncDispatch (opts, handler) {
+  async #asyncDispatch (opts, handler) {
     await this.loadSnapshots()
     return this.dispatch(opts, handler)
   }
@@ -19325,7 +19339,7 @@ class SnapshotAgent extends MockAgent {
   /**
    * Records a real request and replays the response
    */
-  _recordAndReplay (opts, handler) {
+  #recordAndReplay (opts, handler) {
     const responseData = {
       statusCode: null,
       headers: {},
@@ -19380,45 +19394,46 @@ class SnapshotAgent extends MockAgent {
 
   /**
    * Replays a recorded response
+   *
+   * @param {Object} snapshot - The recorded snapshot to replay.
+   * @param {Object} handler - The handler to call with the response data.
+   * @returns {void}
    */
-  _replaySnapshot (snapshot, handler) {
-    return new Promise((resolve) => {
-      // Simulate the response
-      setImmediate(() => {
-        try {
-          const { response } = snapshot
+  #replaySnapshot (snapshot, handler) {
+    try {
+      const { response } = snapshot
 
-          const controller = {
-            pause () {},
-            resume () {},
-            abort (reason) {
-              this.aborted = true
-              this.reason = reason
-            },
+      const controller = {
+        pause () { },
+        resume () { },
+        abort (reason) {
+          this.aborted = true
+          this.reason = reason
+        },
 
-            aborted: false,
-            paused: false
-          }
+        aborted: false,
+        paused: false
+      }
 
-          handler.onRequestStart(controller)
+      handler.onRequestStart(controller)
 
-          handler.onResponseStart(controller, response.statusCode, response.headers)
+      handler.onResponseStart(controller, response.statusCode, response.headers)
 
-          // Body is always stored as base64 string
-          const body = Buffer.from(response.body, 'base64')
-          handler.onResponseData(controller, body)
+      // Body is always stored as base64 string
+      const body = Buffer.from(response.body, 'base64')
+      handler.onResponseData(controller, body)
 
-          handler.onResponseEnd(controller, response.trailers)
-          resolve()
-        } catch (error) {
-          handler.onError?.(error)
-        }
-      })
-    })
+      handler.onResponseEnd(controller, response.trailers)
+    } catch (error) {
+      handler.onError?.(error)
+    }
   }
 
   /**
    * Loads snapshots from file
+   *
+   * @param {string} [filePath] - Optional file path to load snapshots from.
+   * @returns {Promise<void>} - Resolves when snapshots are loaded.
    */
   async loadSnapshots (filePath) {
     await this[kSnapshotRecorder].loadSnapshots(filePath || this[kSnapshotPath])
@@ -19426,12 +19441,15 @@ class SnapshotAgent extends MockAgent {
 
     // In playback mode, set up MockAgent interceptors for all snapshots
     if (this[kSnapshotMode] === 'playback') {
-      this._setupMockInterceptors()
+      this.#setupMockInterceptors()
     }
   }
 
   /**
    * Saves snapshots to file
+   *
+   * @param {string} [filePath] - Optional file path to save snapshots to.
+   * @returns {Promise<void>} - Resolves when snapshots are saved.
    */
   async saveSnapshots (filePath) {
     return this[kSnapshotRecorder].saveSnapshots(filePath || this[kSnapshotPath])
@@ -19448,9 +19466,9 @@ class SnapshotAgent extends MockAgent {
    *
    * Called automatically when loading snapshots in playback mode.
    *
-   * @private
+   * @returns {void}
    */
-  _setupMockInterceptors () {
+  #setupMockInterceptors () {
     for (const snapshot of this[kSnapshotRecorder].getSnapshots()) {
       const { request, responses, response } = snapshot
       const url = new URL(request.url)
@@ -19475,6 +19493,7 @@ class SnapshotAgent extends MockAgent {
 
   /**
    * Gets the snapshot recorder
+   * @return {SnapshotRecorder} - The snapshot recorder instance
    */
   getRecorder () {
     return this[kSnapshotRecorder]
@@ -19482,6 +19501,7 @@ class SnapshotAgent extends MockAgent {
 
   /**
    * Gets the current mode
+   * @return {import('./snapshot-utils').SnapshotMode} - The current snapshot mode
    */
   getMode () {
     return this[kSnapshotMode]
@@ -19489,6 +19509,7 @@ class SnapshotAgent extends MockAgent {
 
   /**
    * Clears all snapshots
+   * @returns {void}
    */
   clearSnapshots () {
     this[kSnapshotRecorder].clear()
@@ -19496,6 +19517,7 @@ class SnapshotAgent extends MockAgent {
 
   /**
    * Resets call counts for all snapshots (useful for test cleanup)
+   * @returns {void}
    */
   resetCallCounts () {
     this[kSnapshotRecorder].resetCallCounts()
@@ -19503,6 +19525,8 @@ class SnapshotAgent extends MockAgent {
 
   /**
    * Deletes a specific snapshot by request options
+   * @param {import('./snapshot-recorder').SnapshotRequestOptions} requestOpts - Request options to identify the snapshot
+   * @return {Promise<boolean>} - Returns true if the snapshot was deleted, false if not found
    */
   deleteSnapshot (requestOpts) {
     return this[kSnapshotRecorder].deleteSnapshot(requestOpts)
@@ -19510,6 +19534,7 @@ class SnapshotAgent extends MockAgent {
 
   /**
    * Gets information about a specific snapshot
+   * @returns {import('./snapshot-recorder').SnapshotInfo|null} - Snapshot information or null if not found
    */
   getSnapshotInfo (requestOpts) {
     return this[kSnapshotRecorder].getSnapshotInfo(requestOpts)
@@ -19517,13 +19542,19 @@ class SnapshotAgent extends MockAgent {
 
   /**
    * Replaces all snapshots with new data (full replacement)
+   * @param {Array<{hash: string; snapshot: import('./snapshot-recorder').SnapshotEntryshotEntry}>|Record<string, import('./snapshot-recorder').SnapshotEntry>} snapshotData - New snapshot data to replace existing snapshots
+   * @returns {void}
    */
   replaceSnapshots (snapshotData) {
     this[kSnapshotRecorder].replaceSnapshots(snapshotData)
   }
 
+  /**
+   * Closes the agent, saving snapshots and cleaning up resources.
+   *
+   * @returns {Promise<void>}
+   */
   async close () {
-    // Close recorder (saves snapshots and cleans up timers)
     await this[kSnapshotRecorder].close()
     await this[kRealAgent]?.close()
     await super.close()
@@ -19543,13 +19574,93 @@ module.exports = SnapshotAgent
 
 const { writeFile, readFile, mkdir } = __nccwpck_require__(1455)
 const { dirname, resolve } = __nccwpck_require__(6760)
+const { setTimeout, clearTimeout } = __nccwpck_require__(7997)
 const { InvalidArgumentError, UndiciError } = __nccwpck_require__(8707)
+const { hashId, isUrlExcludedFactory, normalizeHeaders, createHeaderFilters } = __nccwpck_require__(9683)
+
+/**
+ * @typedef {Object} SnapshotRequestOptions
+ * @property {string} method - HTTP method (e.g. 'GET', 'POST', etc.)
+ * @property {string} path - Request path
+ * @property {string} origin - Request origin (base URL)
+ * @property {import('./snapshot-utils').Headers|import('./snapshot-utils').UndiciHeaders} headers - Request headers
+ * @property {import('./snapshot-utils').NormalizedHeaders} _normalizedHeaders - Request headers as a lowercase object
+ * @property {string|Buffer} [body] - Request body (optional)
+ */
+
+/**
+ * @typedef {Object} SnapshotEntryRequest
+ * @property {string} method - HTTP method (e.g. 'GET', 'POST', etc.)
+ * @property {string} url - Full URL of the request
+ * @property {import('./snapshot-utils').NormalizedHeaders} headers - Normalized headers as a lowercase object
+ * @property {string|Buffer} [body] - Request body (optional)
+ */
+
+/**
+ * @typedef {Object} SnapshotEntryResponse
+ * @property {number} statusCode - HTTP status code of the response
+ * @property {import('./snapshot-utils').NormalizedHeaders} headers - Normalized response headers as a lowercase object
+ * @property {string} body - Response body as a base64url encoded string
+ * @property {Object} [trailers] - Optional response trailers
+ */
+
+/**
+ * @typedef {Object} SnapshotEntry
+ * @property {SnapshotEntryRequest} request - The request object
+ * @property {Array<SnapshotEntryResponse>} responses - Array of response objects
+ * @property {number} callCount - Number of times this snapshot has been called
+ * @property {string} timestamp - ISO timestamp of when the snapshot was created
+ */
+
+/**
+ * @typedef {Object} SnapshotRecorderMatchOptions
+ * @property {Array<string>} [matchHeaders=[]] - Headers to match (empty array means match all headers)
+ * @property {Array<string>} [ignoreHeaders=[]] - Headers to ignore for matching
+ * @property {Array<string>} [excludeHeaders=[]] - Headers to exclude from matching
+ * @property {boolean} [matchBody=true] - Whether to match request body
+ * @property {boolean} [matchQuery=true] - Whether to match query properties
+ * @property {boolean} [caseSensitive=false] - Whether header matching is case-sensitive
+ */
+
+/**
+ * @typedef {Object} SnapshotRecorderOptions
+ * @property {string} [snapshotPath] - Path to save/load snapshots
+ * @property {import('./snapshot-utils').SnapshotMode} [mode='record'] - Mode: 'record' or 'playback'
+ * @property {number} [maxSnapshots=Infinity] - Maximum number of snapshots to keep
+ * @property {boolean} [autoFlush=false] - Whether to automatically flush snapshots to disk
+ * @property {number} [flushInterval=30000] - Auto-flush interval in milliseconds (default: 30 seconds)
+ * @property {Array<string|RegExp>} [excludeUrls=[]] - URLs to exclude from recording
+ * @property {function} [shouldRecord=null] - Function to filter requests for recording
+ * @property {function} [shouldPlayback=null] - Function to filter requests
+ */
+
+/**
+ * @typedef {Object} SnapshotFormattedRequest
+ * @property {string} method - HTTP method (e.g. 'GET', 'POST', etc.)
+ * @property {string} url - Full URL of the request (with query parameters if matchQuery is true)
+ * @property {import('./snapshot-utils').NormalizedHeaders} headers - Normalized headers as a lowercase object
+ * @property {string} body - Request body (optional, only if matchBody is true)
+ */
+
+/**
+ * @typedef {Object} SnapshotInfo
+ * @property {string} hash - Hash key for the snapshot
+ * @property {SnapshotEntryRequest} request - The request object
+ * @property {number} responseCount - Number of responses recorded for this request
+ * @property {number} callCount - Number of times this snapshot has been called
+ * @property {string} timestamp - ISO timestamp of when the snapshot was created
+ */
 
 /**
  * Formats a request for consistent snapshot storage
  * Caches normalized headers to avoid repeated processing
+ *
+ * @param {SnapshotRequestOptions} opts - Request options
+ * @param {import('./snapshot-utils').HeaderFilters} headerFilters - Cached header sets for performance
+ * @param {SnapshotRecorderMatchOptions} [matchOptions] - Matching options for headers and body
+ * @returns {SnapshotFormattedRequest} - Formatted request object
  */
-function formatRequestKey (opts, cachedSets, matchOptions = {}) {
+function formatRequestKey (opts, headerFilters, matchOptions = {}) {
   const url = new URL(opts.path, opts.origin)
 
   // Cache normalized headers if not already done
@@ -19561,37 +19672,40 @@ function formatRequestKey (opts, cachedSets, matchOptions = {}) {
   return {
     method: opts.method || 'GET',
     url: matchOptions.matchQuery !== false ? url.toString() : `${url.origin}${url.pathname}`,
-    headers: filterHeadersForMatching(normalized, cachedSets, matchOptions),
-    body: matchOptions.matchBody !== false && opts.body ? String(opts.body) : undefined
+    headers: filterHeadersForMatching(normalized, headerFilters, matchOptions),
+    body: matchOptions.matchBody !== false && opts.body ? String(opts.body) : ''
   }
 }
 
 /**
  * Filters headers based on matching configuration
+ *
+ * @param {import('./snapshot-utils').Headers} headers - Headers to filter
+ * @param {import('./snapshot-utils').HeaderFilters} headerFilters - Cached sets for ignore, exclude, and match headers
+ * @param {SnapshotRecorderMatchOptions} [matchOptions] - Matching options for headers
  */
-function filterHeadersForMatching (headers, cachedSets, matchOptions = {}) {
+function filterHeadersForMatching (headers, headerFilters, matchOptions = {}) {
   if (!headers || typeof headers !== 'object') return {}
 
   const {
-    matchHeaders = null,
     caseSensitive = false
   } = matchOptions
 
   const filtered = {}
-  const { ignoreSet, excludeSet, matchSet } = cachedSets
+  const { ignore, exclude, match } = headerFilters
 
   for (const [key, value] of Object.entries(headers)) {
     const headerKey = caseSensitive ? key : key.toLowerCase()
 
     // Skip if in exclude list (for security)
-    if (excludeSet.has(headerKey)) continue
+    if (exclude.has(headerKey)) continue
 
     // Skip if in ignore list (for matching)
-    if (ignoreSet.has(headerKey)) continue
+    if (ignore.has(headerKey)) continue
 
     // If matchHeaders is specified, only include those headers
-    if (matchHeaders && Array.isArray(matchHeaders)) {
-      if (!matchSet.has(headerKey)) continue
+    if (match.size !== 0) {
+      if (!match.has(headerKey)) continue
     }
 
     filtered[headerKey] = value
@@ -19602,17 +19716,20 @@ function filterHeadersForMatching (headers, cachedSets, matchOptions = {}) {
 
 /**
  * Filters headers for storage (only excludes sensitive headers)
+ *
+ * @param {import('./snapshot-utils').Headers} headers - Headers to filter
+ * @param {import('./snapshot-utils').HeaderFilters} headerFilters - Cached sets for ignore, exclude, and match headers
+ * @param {SnapshotRecorderMatchOptions} [matchOptions] - Matching options for headers
  */
-function filterHeadersForStorage (headers, matchOptions = {}) {
+function filterHeadersForStorage (headers, headerFilters, matchOptions = {}) {
   if (!headers || typeof headers !== 'object') return {}
 
   const {
-    excludeHeaders = [],
     caseSensitive = false
   } = matchOptions
 
   const filtered = {}
-  const excludeSet = new Set(excludeHeaders.map(h => caseSensitive ? h : h.toLowerCase()))
+  const { exclude: excludeSet } = headerFilters
 
   for (const [key, value] of Object.entries(headers)) {
     const headerKey = caseSensitive ? key : key.toLowerCase()
@@ -19627,106 +19744,81 @@ function filterHeadersForStorage (headers, matchOptions = {}) {
 }
 
 /**
- * Creates cached header sets for performance
- */
-function createHeaderSetsCache (matchOptions = {}) {
-  const { ignoreHeaders = [], excludeHeaders = [], matchHeaders = null, caseSensitive = false } = matchOptions
-
-  return {
-    ignoreSet: new Set(ignoreHeaders.map(h => caseSensitive ? h : h.toLowerCase())),
-    excludeSet: new Set(excludeHeaders.map(h => caseSensitive ? h : h.toLowerCase())),
-    matchSet: matchHeaders && Array.isArray(matchHeaders)
-      ? new Set(matchHeaders.map(h => caseSensitive ? h : h.toLowerCase()))
-      : null
-  }
-}
-
-/**
- * Normalizes headers for consistent comparison
- */
-function normalizeHeaders (headers) {
-  if (!headers) return {}
-
-  const normalized = {}
-
-  // Handle array format (undici internal format: [name, value, name, value, ...])
-  if (Array.isArray(headers)) {
-    for (let i = 0; i < headers.length; i += 2) {
-      const key = headers[i]
-      const value = headers[i + 1]
-      if (key && value !== undefined) {
-        // Convert Buffers to strings if needed
-        const keyStr = Buffer.isBuffer(key) ? key.toString() : String(key)
-        const valueStr = Buffer.isBuffer(value) ? value.toString() : String(value)
-        normalized[keyStr.toLowerCase()] = valueStr
-      }
-    }
-    return normalized
-  }
-
-  // Handle object format
-  if (headers && typeof headers === 'object') {
-    for (const [key, value] of Object.entries(headers)) {
-      if (key && typeof key === 'string') {
-        normalized[key.toLowerCase()] = Array.isArray(value) ? value.join(', ') : String(value)
-      }
-    }
-  }
-
-  return normalized
-}
-
-/**
  * Creates a hash key for request matching
+ * Properly orders headers to avoid conflicts and uses crypto hashing when available
+ *
+ * @param {SnapshotFormattedRequest} formattedRequest - Request object
+ * @returns {string} - Base64url encoded hash of the request
  */
-function createRequestHash (request) {
+function createRequestHash (formattedRequest) {
   const parts = [
-    request.method,
-    request.url,
-    JSON.stringify(request.headers, Object.keys(request.headers).sort()),
-    request.body || ''
+    formattedRequest.method,
+    formattedRequest.url
   ]
-  return Buffer.from(parts.join('|')).toString('base64url')
-}
 
-/**
- * Checks if a URL matches any of the exclude patterns
- */
-function isUrlExcluded (url, excludePatterns = []) {
-  if (!excludePatterns.length) return false
+  // Process headers in a deterministic way to avoid conflicts
+  if (formattedRequest.headers && typeof formattedRequest.headers === 'object') {
+    const headerKeys = Object.keys(formattedRequest.headers).sort()
+    for (const key of headerKeys) {
+      const values = Array.isArray(formattedRequest.headers[key])
+        ? formattedRequest.headers[key]
+        : [formattedRequest.headers[key]]
 
-  for (const pattern of excludePatterns) {
-    if (typeof pattern === 'string') {
-      // Simple string match (case-insensitive)
-      if (url.toLowerCase().includes(pattern.toLowerCase())) {
-        return true
-      }
-    } else if (pattern instanceof RegExp) {
-      // Regex pattern match
-      if (pattern.test(url)) {
-        return true
+      // Add header name
+      parts.push(key)
+
+      // Add all values for this header, sorted for consistency
+      for (const value of values.sort()) {
+        parts.push(String(value))
       }
     }
   }
 
-  return false
+  // Add body
+  parts.push(formattedRequest.body)
+
+  const content = parts.join('|')
+
+  return hashId(content)
 }
 
 class SnapshotRecorder {
+  /** @type {NodeJS.Timeout | null} */
+  #flushTimeout
+
+  /** @type {import('./snapshot-utils').IsUrlExcluded} */
+  #isUrlExcluded
+
+  /** @type {Map<string, SnapshotEntry>} */
+  #snapshots = new Map()
+
+  /** @type {string|undefined} */
+  #snapshotPath
+
+  /** @type {number} */
+  #maxSnapshots = Infinity
+
+  /** @type {boolean} */
+  #autoFlush = false
+
+  /** @type {import('./snapshot-utils').HeaderFilters} */
+  #headerFilters
+
+  /**
+   * Creates a new SnapshotRecorder instance
+   * @param {SnapshotRecorderOptions&SnapshotRecorderMatchOptions} [options={}] - Configuration options for the recorder
+   */
   constructor (options = {}) {
-    this.snapshots = new Map()
-    this.snapshotPath = options.snapshotPath
-    this.mode = options.mode || 'record'
-    this.loaded = false
-    this.maxSnapshots = options.maxSnapshots || Infinity
-    this.autoFlush = options.autoFlush || false
+    this.#snapshotPath = options.snapshotPath
+    this.#maxSnapshots = options.maxSnapshots || Infinity
+    this.#autoFlush = options.autoFlush || false
     this.flushInterval = options.flushInterval || 30000 // 30 seconds default
     this._flushTimer = null
-    this._flushTimeout = null
 
     // Matching configuration
+    /** @type {Required<SnapshotRecorderMatchOptions>} */
     this.matchOptions = {
-      matchHeaders: options.matchHeaders || null, // null means match all headers
+      matchHeaders: options.matchHeaders || [], // empty means match all headers
       ignoreHeaders: options.ignoreHeaders || [],
       excludeHeaders: options.excludeHeaders || [],
       matchBody: options.matchBody !== false, // default: true
@@ -19735,46 +19827,49 @@ class SnapshotRecorder {
     }
 
     // Cache processed header sets to avoid recreating them on every request
-    this._headerSetsCache = createHeaderSetsCache(this.matchOptions)
+    this.#headerFilters = createHeaderFilters(this.matchOptions)
 
     // Request filtering callbacks
-    this.shouldRecord = options.shouldRecord || null // function(requestOpts) -> boolean
-    this.shouldPlayback = options.shouldPlayback || null // function(requestOpts) -> boolean
+    this.shouldRecord = options.shouldRecord || (() => true) // function(requestOpts) -> boolean
+    this.shouldPlayback = options.shouldPlayback || (() => true) // function(requestOpts) -> boolean
 
     // URL pattern filtering
-    this.excludeUrls = options.excludeUrls || [] // Array of regex patterns or strings
+    this.#isUrlExcluded = isUrlExcludedFactory(options.excludeUrls) // Array of regex patterns or strings
 
     // Start auto-flush timer if enabled
-    if (this.autoFlush && this.snapshotPath) {
-      this._startAutoFlush()
+    if (this.#autoFlush && this.#snapshotPath) {
+      this.#startAutoFlush()
     }
   }
 
   /**
    * Records a request-response interaction
+   * @param {SnapshotRequestOptions} requestOpts - Request options
+   * @param {SnapshotEntryResponse} response - Response data to record
+   * @return {Promise<void>} - Resolves when the recording is complete
    */
   async record (requestOpts, response) {
     // Check if recording should be filtered out
-    if (this.shouldRecord && typeof this.shouldRecord === 'function') {
-      if (!this.shouldRecord(requestOpts)) {
-        return // Skip recording
-      }
+    if (!this.shouldRecord(requestOpts)) {
+      return // Skip recording
     }
 
     // Check URL exclusion patterns
     const url = new URL(requestOpts.path, requestOpts.origin).toString()
-    if (isUrlExcluded(url, this.excludeUrls)) {
+    if (this.#isUrlExcluded(url)) {
       return // Skip recording
     }
 
-    const request = formatRequestKey(requestOpts, this._headerSetsCache, this.matchOptions)
+    const request = formatRequestKey(requestOpts, this.#headerFilters, this.matchOptions)
     const hash = createRequestHash(request)
 
     // Extract response data - always store body as base64
     const normalizedHeaders = normalizeHeaders(response.headers)
+
+    /** @type {SnapshotEntryResponse} */
     const responseData = {
       statusCode: response.statusCode,
-      headers: filterHeadersForStorage(normalizedHeaders, this.matchOptions),
+      headers: filterHeadersForStorage(normalizedHeaders, this.#headerFilters, this.matchOptions),
       body: Buffer.isBuffer(response.body)
         ? response.body.toString('base64')
         : Buffer.from(String(response.body || '')).toString('base64'),
@@ -19782,18 +19877,18 @@ class SnapshotRecorder {
     }
 
     // Remove oldest snapshot if we exceed maxSnapshots limit
-    if (this.snapshots.size >= this.maxSnapshots && !this.snapshots.has(hash)) {
-      const oldestKey = this.snapshots.keys().next().value
-      this.snapshots.delete(oldestKey)
+    if (this.#snapshots.size >= this.#maxSnapshots && !this.#snapshots.has(hash)) {
+      const oldestKey = this.#snapshots.keys().next().value
+      this.#snapshots.delete(oldestKey)
     }
 
     // Support sequential responses - if snapshot exists, add to responses array
-    const existingSnapshot = this.snapshots.get(hash)
+    const existingSnapshot = this.#snapshots.get(hash)
     if (existingSnapshot && existingSnapshot.responses) {
       existingSnapshot.responses.push(responseData)
       existingSnapshot.timestamp = new Date().toISOString()
     } else {
-      this.snapshots.set(hash, {
+      this.#snapshots.set(hash, {
         request,
         responses: [responseData], // Always store as array for consistency
         callCount: 0,
@@ -19802,67 +19897,54 @@ class SnapshotRecorder {
     }
 
     // Auto-flush if enabled
-    if (this.autoFlush && this.snapshotPath) {
-      this._scheduleFlush()
+    if (this.#autoFlush && this.#snapshotPath) {
+      this.#scheduleFlush()
     }
   }
 
   /**
    * Finds a matching snapshot for the given request
    * Returns the appropriate response based on call count for sequential responses
+   *
+   * @param {SnapshotRequestOptions} requestOpts - Request options to match
+   * @returns {SnapshotEntry&Record<'response', SnapshotEntryResponse>|undefined} - Matching snapshot response or undefined if not found
    */
   findSnapshot (requestOpts) {
     // Check if playback should be filtered out
-    if (this.shouldPlayback && typeof this.shouldPlayback === 'function') {
-      if (!this.shouldPlayback(requestOpts)) {
-        return undefined // Skip playback
-      }
+    if (!this.shouldPlayback(requestOpts)) {
+      return undefined // Skip playback
     }
 
     // Check URL exclusion patterns
     const url = new URL(requestOpts.path, requestOpts.origin).toString()
-    if (isUrlExcluded(url, this.excludeUrls)) {
+    if (this.#isUrlExcluded(url)) {
       return undefined // Skip playback
     }
 
-    const request = formatRequestKey(requestOpts, this._headerSetsCache, this.matchOptions)
+    const request = formatRequestKey(requestOpts, this.#headerFilters, this.matchOptions)
     const hash = createRequestHash(request)
-    const snapshot = this.snapshots.get(hash)
+    const snapshot = this.#snapshots.get(hash)
 
     if (!snapshot) return undefined
 
     // Handle sequential responses
-    if (snapshot.responses && Array.isArray(snapshot.responses)) {
-      const currentCallCount = snapshot.callCount || 0
-      const responseIndex = Math.min(currentCallCount, snapshot.responses.length - 1)
-      snapshot.callCount = currentCallCount + 1
+    const currentCallCount = snapshot.callCount || 0
+    const responseIndex = Math.min(currentCallCount, snapshot.responses.length - 1)
+    snapshot.callCount = currentCallCount + 1
 
-      return {
-        ...snapshot,
-        response: snapshot.responses[responseIndex]
-      }
+    return {
+      ...snapshot,
+      response: snapshot.responses[responseIndex]
     }
-
-    // Legacy format compatibility - convert single response to array format
-    if (snapshot.response && !snapshot.responses) {
-      snapshot.responses = [snapshot.response]
-      snapshot.callCount = 1
-      delete snapshot.response
-
-      return {
-        ...snapshot,
-        response: snapshot.responses[0]
-      }
-    }
-
-    return snapshot
   }
 
   /**
    * Loads snapshots from file
+   * @param {string} [filePath] - Optional file path to load snapshots from
+   * @return {Promise<void>} - Resolves when snapshots are loaded
    */
   async loadSnapshots (filePath) {
-    const path = filePath || this.snapshotPath
+    const path = filePath || this.#snapshotPath
     if (!path) {
       throw new InvalidArgumentError('Snapshot path is required')
     }
@@ -19873,21 +19955,18 @@ class SnapshotRecorder {
 
       // Convert array format back to Map
       if (Array.isArray(parsed)) {
-        this.snapshots.clear()
+        this.#snapshots.clear()
         for (const { hash, snapshot } of parsed) {
-          this.snapshots.set(hash, snapshot)
+          this.#snapshots.set(hash, snapshot)
         }
       } else {
         // Legacy object format
-        this.snapshots = new Map(Object.entries(parsed))
+        this.#snapshots = new Map(Object.entries(parsed))
       }
-
-      this.loaded = true
     } catch (error) {
       if (error.code === 'ENOENT') {
         // File doesn't exist yet - that's ok for recording mode
-        this.snapshots.clear()
-        this.loaded = true
+        this.#snapshots.clear()
       } else {
         throw new UndiciError(`Failed to load snapshots from ${path}`, { cause: error })
       }
@@ -19896,9 +19975,12 @@ class SnapshotRecorder {
 
   /**
    * Saves snapshots to file
+   *
+   * @param {string} [filePath] - Optional file path to save snapshots
+   * @returns {Promise<void>} - Resolves when snapshots are saved
    */
   async saveSnapshots (filePath) {
-    const path = filePath || this.snapshotPath
+    const path = filePath || this.#snapshotPath
     if (!path) {
       throw new InvalidArgumentError('Snapshot path is required')
     }
@@ -19909,67 +19991,75 @@ class SnapshotRecorder {
     await mkdir(dirname(resolvedPath), { recursive: true })
 
     // Convert Map to serializable format
-    const data = Array.from(this.snapshots.entries()).map(([hash, snapshot]) => ({
+    const data = Array.from(this.#snapshots.entries()).map(([hash, snapshot]) => ({
       hash,
       snapshot
     }))
 
-    await writeFile(resolvedPath, JSON.stringify(data, null, 2), 'utf8', { flush: true })
+    await writeFile(resolvedPath, JSON.stringify(data, null, 2), { flush: true })
   }
 
   /**
    * Clears all recorded snapshots
+   * @returns {void}
    */
   clear () {
-    this.snapshots.clear()
+    this.#snapshots.clear()
   }
 
   /**
    * Gets all recorded snapshots
+   * @return {Array<SnapshotEntry>} - Array of all recorded snapshots
    */
   getSnapshots () {
-    return Array.from(this.snapshots.values())
+    return Array.from(this.#snapshots.values())
   }
 
   /**
    * Gets snapshot count
+   * @return {number} - Number of recorded snapshots
    */
   size () {
-    return this.snapshots.size
+    return this.#snapshots.size
   }
 
   /**
    * Resets call counts for all snapshots (useful for test cleanup)
+   * @returns {void}
    */
   resetCallCounts () {
-    for (const snapshot of this.snapshots.values()) {
+    for (const snapshot of this.#snapshots.values()) {
       snapshot.callCount = 0
     }
   }
 
   /**
    * Deletes a specific snapshot by request options
+   * @param {SnapshotRequestOptions} requestOpts - Request options to match
+   * @returns {boolean} - True if snapshot was deleted, false if not found
    */
   deleteSnapshot (requestOpts) {
-    const request = formatRequestKey(requestOpts, this._headerSetsCache, this.matchOptions)
+    const request = formatRequestKey(requestOpts, this.#headerFilters, this.matchOptions)
     const hash = createRequestHash(request)
-    return this.snapshots.delete(hash)
+    return this.#snapshots.delete(hash)
   }
 
   /**
    * Gets information about a specific snapshot
+   * @param {SnapshotRequestOptions} requestOpts - Request options to match
+   * @returns {SnapshotInfo|null} - Snapshot information or null if not found
    */
   getSnapshotInfo (requestOpts) {
-    const request = formatRequestKey(requestOpts, this._headerSetsCache, this.matchOptions)
+    const request = formatRequestKey(requestOpts, this.#headerFilters, this.matchOptions)
     const hash = createRequestHash(request)
-    const snapshot = this.snapshots.get(hash)
+    const snapshot = this.#snapshots.get(hash)
 
     if (!snapshot) return null
 
     return {
       hash,
       request: snapshot.request,
-      responseCount: snapshot.responses ? snapshot.responses.length : (snapshot.response ? 1 : 0),
+      responseCount: snapshot.responses ? snapshot.responses.length : (snapshot.response ? 1 : 0), // .response for legacy snapshots
       callCount: snapshot.callCount || 0,
       timestamp: snapshot.timestamp
     }
@@ -19977,76 +20067,80 @@ class SnapshotRecorder {
 
   /**
    * Replaces all snapshots with new data (full replacement)
+   * @param {Array<{hash: string; snapshot: SnapshotEntry}>|Record<string, SnapshotEntry>} snapshotData - New snapshot data to replace existing ones
+   * @returns {void}
    */
   replaceSnapshots (snapshotData) {
-    this.snapshots.clear()
+    this.#snapshots.clear()
 
     if (Array.isArray(snapshotData)) {
       for (const { hash, snapshot } of snapshotData) {
-        this.snapshots.set(hash, snapshot)
+        this.#snapshots.set(hash, snapshot)
       }
     } else if (snapshotData && typeof snapshotData === 'object') {
       // Legacy object format
-      this.snapshots = new Map(Object.entries(snapshotData))
+      this.#snapshots = new Map(Object.entries(snapshotData))
     }
   }
 
   /**
    * Starts the auto-flush timer
+   * @returns {void}
    */
-  _startAutoFlush () {
-    if (!this._flushTimer) {
-      this._flushTimer = setInterval(() => {
-        this.saveSnapshots().catch(() => {
-          // Ignore flush errors - they shouldn't interrupt normal operation
-        })
-      }, this.flushInterval)
-    }
+  #startAutoFlush () {
+    return this.#scheduleFlush()
   }
 
   /**
    * Stops the auto-flush timer
+   * @returns {void}
    */
-  _stopAutoFlush () {
-    if (this._flushTimer) {
-      clearInterval(this._flushTimer)
-      this._flushTimer = null
+  #stopAutoFlush () {
+    if (this.#flushTimeout) {
+      clearTimeout(this.#flushTimeout)
+      // Ensure any pending flush is completed
+      this.saveSnapshots().catch(() => {
+      // Ignore flush errors
+      })
+      this.#flushTimeout = null
     }
   }
 
   /**
    * Schedules a flush (debounced to avoid excessive writes)
    */
-  _scheduleFlush () {
-    // Simple debouncing - clear existing timeout and set new one
-    if (this._flushTimeout) {
-      clearTimeout(this._flushTimeout)
-    }
-    this._flushTimeout = setTimeout(() => {
+  #scheduleFlush () {
+    this.#flushTimeout = setTimeout(() => {
       this.saveSnapshots().catch(() => {
         // Ignore flush errors
       })
-      this._flushTimeout = null
+      if (this.#autoFlush) {
+        this.#flushTimeout?.refresh()
+      } else {
+        this.#flushTimeout = null
+      }
     }, 1000) // 1 second debounce
   }
 
   /**
    * Cleanup method to stop timers
+   * @returns {void}
    */
   destroy () {
-    this._stopAutoFlush()
-    if (this._flushTimeout) {
-      clearTimeout(this._flushTimeout)
-      this._flushTimeout = null
+    this.#stopAutoFlush()
+    if (this.#flushTimeout) {
+      clearTimeout(this.#flushTimeout)
+      this.#flushTimeout = null
     }
   }
 
   /**
    * Async close method that saves all recordings and performs cleanup
+   * @returns {Promise<void>}
    */
   async close () {
     // Save any pending recordings if we have a snapshot path
-    if (this.snapshotPath && this.snapshots.size > 0) {
+    if (this.#snapshotPath && this.#snapshots.size !== 0) {
       await this.saveSnapshots()
     }
 
@@ -20055,7 +20149,173 @@ class SnapshotRecorder {
   }
 }
 
-module.exports = { SnapshotRecorder, formatRequestKey, createRequestHash, filterHeadersForMatching, filterHeadersForStorage, isUrlExcluded, createHeaderSetsCache }
+module.exports = { SnapshotRecorder, formatRequestKey, createRequestHash, filterHeadersForMatching, filterHeadersForStorage, createHeaderFilters }
+
+
+/***/ }),
+
+/***/ 9683:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const { InvalidArgumentError } = __nccwpck_require__(8707)
+
+/**
+ * @typedef {Object} HeaderFilters
+ * @property {Set<string>} ignore - Set of headers to ignore for matching
+ * @property {Set<string>} exclude - Set of headers to exclude from matching
+ * @property {Set<string>} match - Set of headers to match (empty means match
+ */
+
+/**
+ * Creates cached header sets for performance
+ *
+ * @param {import('./snapshot-recorder').SnapshotRecorderMatchOptions} matchOptions - Matching options for headers
+ * @returns {HeaderFilters} - Cached sets for ignore, exclude, and match headers
+ */
+function createHeaderFilters (matchOptions = {}) {
+  const { ignoreHeaders = [], excludeHeaders = [], matchHeaders = [], caseSensitive = false } = matchOptions
+
+  return {
+    ignore: new Set(ignoreHeaders.map(header => caseSensitive ? header : header.toLowerCase())),
+    exclude: new Set(excludeHeaders.map(header => caseSensitive ? header : header.toLowerCase())),
+    match: new Set(matchHeaders.map(header => caseSensitive ? header : header.toLowerCase()))
+  }
+}
+
+let crypto
+try {
+  crypto = __nccwpck_require__(7598)
+} catch { /* Fallback if crypto is not available */ }
+
+/**
+ * @callback HashIdFunction
+ * @param {string} value - The value to hash
+ * @returns {string} - The base64url encoded hash of the value
+ */
+
+/**
+ * Generates a hash for a given value
+ * @type {HashIdFunction}
+ */
+const hashId = crypto?.hash
+  ? (value) => crypto.hash('sha256', value, 'base64url')
+  : (value) => Buffer.from(value).toString('base64url')
+
+/**
+ * @typedef {(url: string) => boolean} IsUrlExcluded Checks if a URL matches any of the exclude patterns
+ */
+
+/** @typedef {{[key: Lowercase<string>]: string}} NormalizedHeaders */
+/** @typedef {Array<string>} UndiciHeaders */
+/** @typedef {Record<string, string|string[]>} Headers */
+
+/**
+ * @param {*} headers
+ * @returns {headers is UndiciHeaders}
+ */
+function isUndiciHeaders (headers) {
+  return Array.isArray(headers) && (headers.length & 1) === 0
+}
+
+/**
+ * Factory function to create a URL exclusion checker
+ * @param {Array<string| RegExp>} [excludePatterns=[]] - Array of patterns to exclude
+ * @returns {IsUrlExcluded} - A function that checks if a URL matches any of the exclude patterns
+ */
+function isUrlExcludedFactory (excludePatterns = []) {
+  if (excludePatterns.length === 0) {
+    return () => false
+  }
+
+  return function isUrlExcluded (url) {
+    let urlLowerCased
+
+    for (const pattern of excludePatterns) {
+      if (typeof pattern === 'string') {
+        if (!urlLowerCased) {
+          // Convert URL to lowercase only once
+          urlLowerCased = url.toLowerCase()
+        }
+        // Simple string match (case-insensitive)
+        if (urlLowerCased.includes(pattern.toLowerCase())) {
+          return true
+        }
+      } else if (pattern instanceof RegExp) {
+        // Regex pattern match
+        if (pattern.test(url)) {
+          return true
+        }
+      }
+    }
+
+    return false
+  }
+}
+
+/**
+ * Normalizes headers for consistent comparison
+ *
+ * @param {Object|UndiciHeaders} headers - Headers to normalize
+ * @returns {NormalizedHeaders} - Normalized headers as a lowercase object
+ */
+function normalizeHeaders (headers) {
+  /** @type {NormalizedHeaders} */
+  const normalizedHeaders = {}
+
+  if (!headers) return normalizedHeaders
+
+  // Handle array format (undici internal format: [name, value, name, value, ...])
+  if (isUndiciHeaders(headers)) {
+    for (let i = 0; i < headers.length; i += 2) {
+      const key = headers[i]
+      const value = headers[i + 1]
+      if (key && value !== undefined) {
+        // Convert Buffers to strings if needed
+        const keyStr = Buffer.isBuffer(key) ? key.toString() : key
+        const valueStr = Buffer.isBuffer(value) ? value.toString() : value
+        normalizedHeaders[keyStr.toLowerCase()] = valueStr
+      }
+    }
+    return normalizedHeaders
+  }
+
+  // Handle object format
+  if (headers && typeof headers === 'object') {
+    for (const [key, value] of Object.entries(headers)) {
+      if (key && typeof key === 'string') {
+        normalizedHeaders[key.toLowerCase()] = Array.isArray(value) ? value.join(', ') : String(value)
+      }
+    }
+  }
+
+  return normalizedHeaders
+}
+
+const validSnapshotModes = /** @type {const} */ (['record', 'playback', 'update'])
+
+/** @typedef {typeof validSnapshotModes[number]} SnapshotMode */
+
+/**
+ * @param {*} mode - The snapshot mode to validate
+ * @returns {asserts mode is SnapshotMode}
+ */
+function validateSnapshotMode (mode) {
+  if (!validSnapshotModes.includes(mode)) {
+    throw new InvalidArgumentError(`Invalid snapshot mode: ${mode}. Must be one of: ${validSnapshotModes.join(', ')}`)
+  }
+}
+
+module.exports = {
+  createHeaderFilters,
+  hashId,
+  isUndiciHeaders,
+  normalizeHeaders,
+  isUrlExcludedFactory,
+  validateSnapshotMode
+}
 
 
 /***/ }),
@@ -20100,7 +20360,7 @@ function makeCacheKey (opts) {
  * @param {Record<string, string[] | string>}
  * @returns {Record<string, string[] | string>}
  */
-function normaliseHeaders (opts) {
+function normalizeHeaders (opts) {
   let headers
   if (opts.headers == null) {
     headers = {}
@@ -20300,7 +20560,7 @@ function parseCacheControlHeader (header) {
               }
             }
           } else {
-            // Something like `no-cache=some-header`
+            // Something like `no-cache="some-header"`
             if (key in output) {
               output[key] = output[key].concat(value)
             } else {
@@ -20433,7 +20693,7 @@ function assertCacheMethods (methods, name = 'CacheMethods') {
 
 module.exports = {
   makeCacheKey,
-  normaliseHeaders,
+  normalizeHeaders,
   assertCacheKey,
   assertCacheValue,
   parseCacheControlHeader,
@@ -21246,7 +21506,7 @@ const { createDeferredPromise } = __nccwpck_require__(6436)
  * @property {'delete' | 'put'} type
  * @property {any} request
  * @property {any} response
- * @property {import('../../types/cache').CacheQueryOptions} options
+ * @property {import('../../../types/cache').CacheQueryOptions} options
  */
 
 /**
@@ -21680,7 +21940,7 @@ class Cache {
   /**
    * @see https://w3c.github.io/ServiceWorker/#dom-cache-keys
    * @param {any} request
-   * @param {import('../../types/cache').CacheQueryOptions} options
+   * @param {import('../../../types/cache').CacheQueryOptions} options
    * @returns {Promise<readonly Request[]>}
    */
   async keys (request = undefined, options = {}) {
@@ -21898,7 +22158,7 @@ class Cache {
   /**
    * @see https://w3c.github.io/ServiceWorker/#query-cache
    * @param {any} requestQuery
-   * @param {import('../../types/cache').CacheQueryOptions} options
+   * @param {import('../../../types/cache').CacheQueryOptions} options
    * @param {requestResponseList} targetStorage
    * @returns {requestResponseList}
    */
@@ -21923,7 +22183,7 @@ class Cache {
    * @param {any} requestQuery
    * @param {any} request
    * @param {any | null} response
-   * @param {import('../../types/cache').CacheQueryOptions | undefined} options
+   * @param {import('../../../types/cache').CacheQueryOptions | undefined} options
    * @returns {boolean}
    */
   #requestMatchesCachedItem (requestQuery, request, response = null, options) {
@@ -23691,10 +23951,10 @@ class EventSource extends EventTarget {
     url = webidl.converters.USVString(url)
     eventSourceInitDict = webidl.converters.EventSourceInitDict(eventSourceInitDict, prefix, 'eventSourceInitDict')
 
-    this.#dispatcher = eventSourceInitDict.dispatcher
+    this.#dispatcher = eventSourceInitDict.node.dispatcher || eventSourceInitDict.dispatcher
     this.#state = {
       lastEventId: '',
-      reconnectionTime: defaultReconnectionTime
+      reconnectionTime: eventSourceInitDict.node.reconnectionTime
     }
 
     // 2. Let settings be ev's relevant settings object.
@@ -24039,6 +24299,21 @@ webidl.converters.EventSourceInitDict = webidl.dictionaryConverter([
   {
     key: 'dispatcher', // undici only
     converter: webidl.converters.any
+  },
+  {
+    key: 'node', // undici only
+    converter: webidl.dictionaryConverter([
+      {
+        key: 'reconnectionTime',
+        converter: webidl.converters['unsigned long'],
+        defaultValue: () => defaultReconnectionTime
+      },
+      {
+        key: 'dispatcher',
+        converter: webidl.converters.any
+      }
+    ]),
+    defaultValue: () => ({})
   }
 ])
 
@@ -26058,7 +26333,7 @@ const nodeUtil = __nccwpck_require__(7975)
 class FormData {
   #state = []
 
-  constructor (form) {
+  constructor (form = undefined) {
     webidl.util.markAsUncloneable(this)
 
     if (form !== undefined) {
@@ -30496,7 +30771,8 @@ const { webidl } = __nccwpck_require__(7879)
 const { URLSerializer } = __nccwpck_require__(1900)
 const { kConstruct } = __nccwpck_require__(6443)
 const assert = __nccwpck_require__(4589)
-const { types } = __nccwpck_require__(7975)
+
+const { isArrayBuffer } = nodeUtil.types
 
 const textEncoder = new TextEncoder('utf-8')
 
@@ -30717,6 +30993,11 @@ class Response {
     // 2. Let clonedResponse be the result of cloning this’s response.
     const clonedResponse = cloneResponse(this.#state)
 
+    // Note: To re-register because of a new stream.
+    if (this.#state.body?.stream) {
+      streamRegistry.register(this, new WeakRef(this.#state.body.stream))
+    }
+
     // 3. Return the result of creating a Response object, given
     // clonedResponse, this’s headers’s guard, and this’s relevant Realm.
     return fromInnerResponse(clonedResponse, getHeadersGuard(this.#headers))
@@ -30827,8 +31108,6 @@ function cloneResponse (response) {
   // result of cloning response’s body.
   if (response.body != null) {
     newResponse.body = cloneBody(response.body)
-
-    streamRegistry.register(newResponse, new WeakRef(response.body.stream))
   }
 
   // 4. Return newResponse.
@@ -31050,7 +31329,7 @@ webidl.converters.XMLHttpRequestBodyInit = function (V, prefix, name) {
     return V
   }
 
-  if (ArrayBuffer.isView(V) || types.isArrayBuffer(V)) {
+  if (ArrayBuffer.isView(V) || isArrayBuffer(V)) {
     return V
   }
 
@@ -35393,7 +35672,7 @@ const { states, opcodes, sentCloseFrameState } = __nccwpck_require__(736)
 const { webidl } = __nccwpck_require__(7879)
 const { getURLRecord, isValidSubprotocol, isEstablished, utf8Decode } = __nccwpck_require__(8625)
 const { establishWebSocketConnection, failWebsocketConnection, closeWebSocketConnection } = __nccwpck_require__(6897)
-const { types } = __nccwpck_require__(7975)
+const { isArrayBuffer } = __nccwpck_require__(3429)
 const { channels } = __nccwpck_require__(2414)
 const { WebsocketFrameSend } = __nccwpck_require__(3264)
 const { ByteParser } = __nccwpck_require__(1652)
@@ -35597,7 +35876,7 @@ class WebSocketStream {
     let opcode = null
 
     // 4. If chunk is a BufferSource ,
-    if (ArrayBuffer.isView(chunk) || types.isArrayBuffer(chunk)) {
+    if (ArrayBuffer.isView(chunk) || isArrayBuffer(chunk)) {
       // 4.1. Set data to a copy of the bytes given chunk .
       data = new Uint8Array(ArrayBuffer.isView(chunk) ? new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength) : chunk)
 
@@ -36229,6 +36508,7 @@ module.exports = {
 "use strict";
 
 
+const { isArrayBuffer } = __nccwpck_require__(3429)
 const { webidl } = __nccwpck_require__(7879)
 const { URLSerializer } = __nccwpck_require__(1900)
 const { environmentSettingsObject } = __nccwpck_require__(3168)
@@ -36248,7 +36528,6 @@ const { establishWebSocketConnection, closeWebSocketConnection, failWebsocketCon
 const { ByteParser } = __nccwpck_require__(1652)
 const { kEnumerableProperty } = __nccwpck_require__(3440)
 const { getGlobalDispatcher } = __nccwpck_require__(2581)
-const { types } = __nccwpck_require__(7975)
 const { ErrorEvent, CloseEvent, createFastMessageEvent } = __nccwpck_require__(5188)
 const { SendQueue } = __nccwpck_require__(3900)
 const { WebsocketFrameSend } = __nccwpck_require__(3264)
@@ -36486,7 +36765,7 @@ class WebSocket extends EventTarget {
       this.#sendQueue.add(buffer, () => {
         this.#bufferedAmount -= buffer.byteLength
       }, sendHints.text)
-    } else if (types.isArrayBuffer(data)) {
+    } else if (isArrayBuffer(data)) {
       // If the WebSocket connection is established, and the WebSocket
       // closing handshake has not yet started, then the user agent must
       // send a WebSocket Message comprised of data using a binary frame
@@ -36711,11 +36990,18 @@ class WebSocket extends EventTarget {
     fireEvent('open', this)
 
     if (channels.open.hasSubscribers) {
+      // Convert headers to a plain object for the event
+      const headers = response.headersList.entries
       channels.open.publish({
         address: response.socket.address(),
         protocol: this.#protocol,
         extensions: this.#extensions,
-        websocket: this
+        websocket: this,
+        handshakeResponse: {
+          status: response.status,
+          statusText: response.statusText,
+          headers
+        }
       })
     }
   }
@@ -36957,7 +37243,7 @@ webidl.converters.WebSocketSendData = function (V) {
       return V
     }
 
-    if (ArrayBuffer.isView(V) || types.isArrayBuffer(V)) {
+    if (ArrayBuffer.isView(V) || isArrayBuffer(V)) {
       return V
     }
   }
@@ -37173,19 +37459,19 @@ module.exports = require("node:stream");
 
 /***/ }),
 
+/***/ 7997:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("node:timers");
+
+/***/ }),
+
 /***/ 1692:
 /***/ ((module) => {
 
 "use strict";
 module.exports = require("node:tls");
-
-/***/ }),
-
-/***/ 3136:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("node:url");
 
 /***/ }),
 
