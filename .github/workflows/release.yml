@@ -1,31 +1,39 @@
 name: release
-"on":
+
+on:
   push:
     branches:
+      - "*.x"
       - main
+      - beta
+
+permissions:
+  contents: read
+
 jobs:
   release:
     name: release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # build local version to create token
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
       - uses: actions/setup-node@v4
         with:
-          node-version: lts/*
+          node-version-file: package.json
+          cache: "npm"
+
       - run: npm ci
       - run: npm run build
-      - run: npm install @semantic-release/git
-      - uses: actions/create-github-app-token@v1
+      - uses: actions/create-github-app-token@v2
         id: app-token
         with:
           app-id: 474182
           private-key: ${{ secrets.GR2M_SEMANTIC_RELEASE_PRIVATE_KEY }}
-      - run: npx semantic-release
+      # install release dependencies and release
+      - run: npm install --no-save @semantic-release/git semantic-release-plugin-github-breaking-version-tag
+      - run: npx semantic-release --debug
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
-      - run: >-
-          git push
-          https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git
-          HEAD:refs/heads/v1.x
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

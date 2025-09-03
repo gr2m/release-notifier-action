@@ -3,10 +3,10 @@
   "private": true,
   "version": "1.0.0",
   "description": "GitHub Action to notify repositories about the repository's releases using a GitHub App",
-  "main": "index.js",
+  "type": "module",
   "scripts": {
-    "build": "ncc build index.js -o dist",
-    "test": "tap test/*/test.js"
+    "build": "esbuild main.js --bundle --outdir=dist --out-extension:.js=.cjs --platform=node --packages=bundle",
+    "test": "ava test/*/test.js --timeout=1m"
   },
   "repository": "github:gr2m/release-notifier-action",
   "keywords": [
@@ -20,28 +20,36 @@
   },
   "release": {
     "branches": [
-      "main"
+      "+([0-9]).x",
+      "main",
+      {
+        "name": "beta",
+        "prerelease": true
+      }
     ],
     "plugins": [
       "@semantic-release/commit-analyzer",
       "@semantic-release/release-notes-generator",
+      "@semantic-release/github",
+      "@semantic-release/npm",
       [
         "@semantic-release/git",
         {
           "assets": [
-            "dist/index.js"
+            "package.json",
+            "package-lock.json",
+            "dist/*"
           ],
-          "message": "build(release): compiled action for ${nextRelease.version}\n\n[skip ci]"
+          "message": "build(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
         }
       ],
-      "@semantic-release/github"
+      "semantic-release-plugin-github-breaking-version-tag"
     ]
   },
   "devDependencies": {
-    "@semantic-release/git": "^10.0.1",
     "@vercel/ncc": "^0.38.3",
-    "nock": "^14.0.2",
-    "semantic-release": "^24.2.3",
-    "tap": "^21.1.0"
+    "ava": "^6.4.1",
+    "esbuild": "^0.25.9",
+    "undici": "^7.15.0"
   }
 }

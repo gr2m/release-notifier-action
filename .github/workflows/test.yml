@@ -31,4 +31,3 @@ jobs:
           private_key: ${{ secrets.APP_PRIVATE_KEY }}
         env:
           TEST_GITHUB_EVENT_PATH: ${{ github.workspace }}/test/new-release/event.json
-      - run: "echo latest release: ${{ steps.get_latest_release.outputs.data }}"

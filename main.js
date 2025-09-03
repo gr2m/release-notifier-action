@@ -1,12 +1,17 @@
-const { inspect } = require("util");
+import { inspect } from "util";
+import * as core from "@actions/core";
+import { App, Octokit } from "octokit";
+import { readFileSync } from "fs";
 
-const core = require("@actions/core");
-const { App, Octokit } = require("octokit");
+const eventPayload = JSON.parse(
+  readFileSync(
+    process.env.TEST_GITHUB_EVENT_PATH || process.env.GITHUB_EVENT_PATH,
+    "utf8",
+  ),
+);
 
-const eventPayload = require(process.env.TEST_GITHUB_EVENT_PATH ||
-  process.env.GITHUB_EVENT_PATH);
-
-main();
+// export for testing
+export default main();
 
 async function main() {
   try {
