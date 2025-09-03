@@ -37,7 +37,7 @@ jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
-      - uses: gr2m/release-notifier-action@v1
+      - uses: gr2m/release-notifier-action@v2
         with:
           app_id: ${{ secrets.APP_ID }}
           private_key: ${{ secrets.APP_PRIVATE_KEY }}
@@ -53,7 +53,7 @@ jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
-      - uses: gr2m/release-notifier-action@v1
+      - uses: gr2m/release-notifier-action@v2
         with:
           app_id: ${{ secrets.APP_ID }}
           private_key: ${{ secrets.APP_PRIVATE_KEY }}
@@ -72,7 +72,7 @@ jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
-      - uses: gr2m/release-notifier-action@v1
+      - uses: gr2m/release-notifier-action@v2
         with:
           app_id: ${{ secrets.APP_ID }}
           private_key: ${{ secrets.APP_PRIVATE_KEY }}
