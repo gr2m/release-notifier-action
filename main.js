@@ -1,13 +1,17 @@
-const { inspect } = require("util");
+import { inspect } from "util";
+import * as core from "@actions/core";
+import { App, Octokit } from "octokit";
+import { readFileSync } from "fs";
 
-const core = require("@actions/core");
-const { App, Octokit } = require("octokit");
-const { fetch } = require("undici");
+const eventPayload = JSON.parse(
+  readFileSync(
+    process.env.TEST_GITHUB_EVENT_PATH || process.env.GITHUB_EVENT_PATH,
+    "utf8",
+  ),
+);
 
-const eventPayload = require(process.env.TEST_GITHUB_EVENT_PATH ||
-  process.env.GITHUB_EVENT_PATH);
-
-main();
+// export for testing
+export default main();
 
 async function main() {
   try {
@@ -16,7 +20,6 @@ async function main() {
       privateKey: core.getInput("private_key"),
       Octokit: Octokit.defaults({
         userAgent: "gr2m/release-notifier-action",
-        request: { fetch },
       }),
     });
     const eventType =
@@ -25,7 +28,7 @@ async function main() {
 
     core.info(`ℹ️  Repository dispatch event type: "${eventType}"`);
     core.debug(
-      `ℹ️  event client payload: ${inspect(eventPayload, { depth: Infinity })}`
+      `ℹ️  event client payload: ${inspect(eventPayload, { depth: Infinity })}`,
     );
 
     await app.eachRepository(async ({ octokit, repository }) => {
@@ -44,11 +47,11 @@ async function main() {
         });
 
         core.info(
-          `✅  Event dispatched successfully for ${repoUrl} (id: ${repository.id})`
+          `✅  Event dispatched successfully for ${repoUrl} (id: ${repository.id})`,
         );
       } catch (error) {
         core.warning(
-          `⚠️  Dispatch error: ${inspect(error, { depth: Infinity })}`
+          `⚠️  Dispatch error: ${inspect(error, { depth: Infinity })}`,
         );
       }
     });

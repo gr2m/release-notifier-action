@@ -1,19 +1,31 @@
 /**
- * This test checks the happy path of pull request adding a new *.tweet file
+ * This test checks the error case when GitHub API returns an error
  */
 
-const tap = require("tap");
-const nock = require("nock");
+import test from "ava";
+import { MockAgent, setGlobalDispatcher } from "undici";
 
-nock.disableNetConnect();
+test("release notification dispatch error", async (t) => {
+  // Setup MockAgent for undici
+  const mockAgent = new MockAgent();
+  setGlobalDispatcher(mockAgent);
 
-// SETUP
-process.env.GITHUB_ACTION = "twitter-together";
-process.env.GITHUB_EVENT_PATH = require.resolve("./event.json");
-process.env.GITHUB_REPOSITORY = "gr2m/Release-Notifier-Action";
+  // Disable net connect
+  mockAgent.disableNetConnect();
 
-process.env.INPUT_APP_ID = 1;
-process.env.INPUT_PRIVATE_KEY = `-----BEGIN RSA PRIVATE KEY-----
+  // Get the mock pool for GitHub API
+  const mockPool = mockAgent.get("https://api.github.com");
+
+  // SETUP
+  process.env.GITHUB_ACTION = "twitter-together";
+  process.env.GITHUB_EVENT_PATH = new URL(
+    "./event.json",
+    import.meta.url,
+  ).pathname;
+  process.env.GITHUB_REPOSITORY = "gr2m/Release-Notifier-Action";
+
+  process.env.INPUT_APP_ID = 1;
+  process.env.INPUT_PRIVATE_KEY = `-----BEGIN RSA PRIVATE KEY-----
 MIIEpAIBAAKCAQEA1c7+9z5Pad7OejecsQ0bu3aozN3tihPmljnnudb9G3HECdnH
 lWu2/a1gB9JW5TBQ+AVpum9Okx7KfqkfBKL9mcHgSL0yWMdjMfNOqNtrQqKlN4kE
 p6RD++7sGbzbfZ9arwrlD/HSDAWGdGGJTSOBM6pHehyLmSC3DJoR/CTu0vTGTWXQ
@@ -40,23 +52,35 @@ ZcJjRIt8w8g/s4X6MhKasBYm9s3owALzCuJjGzUKcDHiO2DKu1xXAb0SzRcTzUCn
 9/49J6WTD++EajN7FhktUSYxukdWaCocAQJTDNYP0K88G4rtC2IYy5JFn9SWz5oh
 x//0u+zd/R/QRUzLOw4N72/Hu+UG6MNt5iDZFCtapRaKt6OvSBwy8w==
 -----END RSA PRIVATE KEY-----`;
-process.env.INPUT_DISPATCH_EVENT_TYPE = "test-release";
+  process.env.INPUT_DISPATCH_EVENT_TYPE = "test-release";
 
-// set other env variables so action-toolkit is happy
-process.env.GITHUB_REF = "";
-process.env.GITHUB_WORKSPACE = "";
-process.env.GITHUB_WORKFLOW = "";
-process.env.GITHUB_ACTOR = "";
-process.env.GITHUB_SHA = "";
+  // set other env variables so action-toolkit is happy
+  process.env.GITHUB_REF = "";
+  process.env.GITHUB_WORKSPACE = "";
+  process.env.GITHUB_WORKFLOW = "";
+  process.env.GITHUB_ACTOR = "";
+  process.env.GITHUB_SHA = "";
 
-nock("https://api.github.com:443").get("/app/installations").reply(500);
+  // Mock GitHub API to return an error
+  mockPool
+    .intercept({
+      path: "/app/installations",
+      method: "GET",
+    })
+    .reply(500)
+    .persist();
 
-require("../../");
-
-process.on("exit", (code) => {
-  tap.equal(code, 1);
-  tap.deepEqual(nock.pendingMocks(), []);
-
+  const { default: promise } = await import("../../main.js");
+  await promise;
+  t.is(process.exitCode, 1);
   process.exitCode = 0;
-  process.exit(0);
+
+  // Verify all interceptors were called
+  t.true(
+    mockAgent.pendingInterceptors().length === 0,
+    "All HTTP interceptors should be called",
+  );
+
+  // Clean up
+  await mockAgent.close();
 });
