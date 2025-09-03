@@ -10,19 +10,19 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
         with:
-          node-version: 16 # starting with Node 18, `nock` no longer intercepts requests.
+          node-version-file: package.json
       - run: npm ci
       - run: npm test
   readmeExample:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
         with:
-          node-version: lts/*
+          node-version-file: package.json
       - run: npm ci
       - run: npm run build
       - uses: ./
