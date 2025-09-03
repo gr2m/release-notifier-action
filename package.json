@@ -48,15 +48,8 @@
     ]
   },
   "devDependencies": {
-    "@vercel/ncc": "^0.38.3",
-<<<<<<< HEAD
     "ava": "^6.4.1",
     "esbuild": "^0.25.9",
     "undici": "^7.15.0"
-=======
-    "nock": "^14.0.10",
-    "semantic-release": "^24.2.7",
-    "tap": "^21.1.0"
->>>>>>> @{-1}
   }
 }
