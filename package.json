@@ -49,7 +49,7 @@
   },
   "devDependencies": {
     "ava": "^6.4.1",
-    "esbuild": "^0.27.0",
+    "esbuild": "^0.27.1",
     "undici": "^7.16.0"
   },
   "engines": {
