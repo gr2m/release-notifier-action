@@ -17,7 +17,7 @@
   "dependencies": {
     "@actions/core": "^2.0.3",
     "octokit": "^5.0.5",
-    "undici": "^7.20.0"
+    "undici": "^7.21.0"
   },
   "release": {
     "branches": [
@@ -50,7 +50,7 @@
   "devDependencies": {
     "ava": "^6.4.1",
     "esbuild": "^0.27.3",
-    "undici": "^7.20.0"
+    "undici": "^7.21.0"
   },
   "engines": {
     "node": ">=24"
