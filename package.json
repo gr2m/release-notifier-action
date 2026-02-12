@@ -1,7 +1,7 @@
 {
   "name": "release-notifier-action",
   "private": true,
-  "version": "2.0.7",
+  "version": "2.0.8",
   "description": "GitHub Action to notify repositories about the repository's releases using a GitHub App",
   "type": "module",
   "scripts": {
